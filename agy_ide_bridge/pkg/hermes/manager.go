@@ -200,9 +200,16 @@ func (m *Manager) handleStream(w http.ResponseWriter, r *http.Request, sess *Ses
 	s := &sub{conn: conn, ch: make(chan []byte, 512), done: make(chan struct{})}
 	sess.mu.Lock()
 	sess.subs[s] = struct{}{}
+	replay := make([][]byte, len(sess.recent))
+	copy(replay, sess.recent)
 	sess.mu.Unlock()
 
 	go s.writeLoop()
+	// catch the new subscriber up with everything it missed; live events
+	// broadcast after the lock above was released queue behind the replay
+	for _, b := range replay {
+		s.send(b)
+	}
 	defer func() {
 		sess.mu.Lock()
 		delete(sess.subs, s)
@@ -239,7 +246,12 @@ type Session struct {
 	homeDir        string
 	// resume flag: the Hermes session id reported by --pass-session-id
 	hermesSessionID string
+	// recent events, replayed to subscribers that join mid-turn
+	recent [][]byte
 }
+
+// maxReplayEvents bounds the per-session replay buffer.
+const maxReplayEvents = 512
 
 func (s *Session) broadcast(b []byte) {
 	s.mu.Lock()
@@ -251,6 +263,13 @@ func (s *Session) broadcast(b []byte) {
 
 func (s *Session) emit(v interface{}) {
 	b, _ := json.Marshal(v)
+	// remember the event so a subscriber that connects later can catch up
+	s.mu.Lock()
+	s.recent = append(s.recent, b)
+	if len(s.recent) > maxReplayEvents {
+		s.recent = s.recent[len(s.recent)-maxReplayEvents:]
+	}
+	s.mu.Unlock()
 	s.broadcast(b)
 }
 

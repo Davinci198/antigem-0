@@ -11,15 +11,19 @@ import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.Conversation
 import com.example.gemini.domain.model.MessageRole
 import com.example.gemini.domain.model.TokenUsage
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -27,8 +31,15 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 private const val TAG = "HermesChatBackend"
+
+/** How many times a dropped stream socket is reconnected before surfacing an error. */
+private const val MAX_WS_RETRIES = 3
+
+/** How long sendMessage waits for the stream socket to open before sending anyway. */
+private const val WS_OPEN_TIMEOUT_MS = 5_000L
 
 /**
  * Chat backend for Hermes Agent.
@@ -72,7 +83,23 @@ class HermesChatBackend(
 
     private var activeSession: String? = null
     private var activeWs: WebSocket? = null
-    private var streamingJob: Job? = null
+    private var wsRetryJob: Job? = null
+    private var wsFailures = 0
+
+    /** Completes once the current stream socket is open (true) or failed (false). */
+    private var wsOpened = CompletableDeferred<Boolean>()
+
+    /**
+     * Long-lived stream socket. The shared [AgyBridgeService.wsClient] pings every
+     * second, which kills a proot-hosted bridge stream on the first late pong;
+     * Hermes turns run for minutes, so relax the heartbeat here.
+     */
+    private val streamClient: OkHttpClient by lazy {
+        bridge.client.newBuilder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .pingInterval(30, TimeUnit.SECONDS)
+            .build()
+    }
 
     // ── AgentChatBackend ──────────────────────────────────────────────────────
 
@@ -188,6 +215,8 @@ class HermesChatBackend(
             reconnectWs(newSid)
             newSid
         }
+        // give the stream socket a moment to open so the first events are not missed
+        runCatching { withTimeout(WS_OPEN_TIMEOUT_MS) { wsOpened.await() } }
         _startupStatus.value = null
 
         // send the message payload to the running session
@@ -228,16 +257,28 @@ class HermesChatBackend(
     }
 
     private fun reconnectWs(sid: String) {
-        streamingJob?.cancel()
+        wsRetryJob?.cancel()
         activeWs?.cancel()
+        val opened = CompletableDeferred<Boolean>()
+        wsOpened = opened
         val wsUrl = url("/sessions/$sid/stream").replaceFirst("http", "ws")
         val req = Request.Builder().url(wsUrl).build()
-        activeWs = bridge.wsClient.newWebSocket(req, HermesWsListener(sid))
+        activeWs = streamClient.newWebSocket(req, HermesWsListener(sid, opened))
         Log.d(TAG, "WS connecting to $wsUrl")
     }
 
+    /** Retries the stream socket a few times; the bridge replays missed events. */
+    private fun scheduleStreamRetry(sid: String) {
+        if (activeSession != sid) return
+        wsRetryJob?.cancel()
+        wsRetryJob = backendScope.launch {
+            delay(2000)
+            if (activeSession == sid) reconnectWs(sid)
+        }
+    }
+
     private fun disconnectWs() {
-        streamingJob?.cancel()
+        wsRetryJob?.cancel()
         activeWs?.cancel()
         activeWs = null
         activeSession = null
@@ -267,13 +308,18 @@ class HermesChatBackend(
 
     // ── WebSocket listener ────────────────────────────────────────────────────
 
-    private inner class HermesWsListener(private val sid: String) : WebSocketListener() {
+    private inner class HermesWsListener(
+        private val sid: String,
+        private val opened: CompletableDeferred<Boolean>
+    ) : WebSocketListener() {
 
         /** Accumulate streamed text for the current assistant bubble. */
         private var assistantMsgId: String? = null
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             Log.d(TAG, "WS open sid=$sid")
+            wsFailures = 0
+            opened.complete(true)
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -284,13 +330,22 @@ class HermesChatBackend(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             Log.d(TAG, "WS closed $code $reason")
+            wsFailures = 0
             finaliseStreaming()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             Log.w(TAG, "WS failure", t)
+            opened.complete(false)
+            // a deliberate disconnectWs() already dropped the session — nothing to recover
+            if (activeSession != sid) return
             finaliseStreaming()
-            _conversationError.value = "Connection lost: ${t.message}"
+            // the bridge replays missed events, so a short retry usually recovers
+            if (++wsFailures <= MAX_WS_RETRIES) {
+                scheduleStreamRetry(sid)
+            } else {
+                _conversationError.value = "Connection lost: ${t.message}"
+            }
         }
 
         private fun handleLine(line: String) {
