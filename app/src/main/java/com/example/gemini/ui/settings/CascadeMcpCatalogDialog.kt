@@ -33,6 +33,8 @@ import com.example.gemini.ui.components.MarkdownContent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -348,6 +350,85 @@ private fun CascadePluginCard(
     }
 }
 
+private const val MAX_README_BYTES = 2 * 1024 * 1024
+private const val MAX_README_REDIRECTS = 3
+
+/**
+ * README links come from remote catalog data, so only plain https targets on
+ * public hosts are accepted before the app opens a connection.
+ */
+private fun isSafeReadmeUrl(raw: String): Boolean {
+    return try {
+        val url = URL(raw)
+        if (url.protocol != "https") return false
+        val host = url.host.lowercase()
+        if (host.isBlank() || host == "localhost" || host.endsWith(".localhost")) return false
+        InetAddress.getAllByName(host).none { it.isBlockedHostAddress() }
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun InetAddress.isBlockedHostAddress(): Boolean {
+    if (isAnyLocalAddress || isLoopbackAddress || isLinkLocalAddress ||
+        isSiteLocalAddress || isMulticastAddress
+    ) {
+        return true
+    }
+    return when (address.size) {
+        4 -> {
+            val first = address[0].toInt() and 0xff
+            val second = address[1].toInt() and 0xff
+            first == 0 || (first == 100 && second in 64..127) // this-network and CGNAT ranges
+        }
+        16 -> (address[0].toInt() and 0xfe) == 0xfc // IPv6 unique-local fc00::/7
+        else -> false
+    }
+}
+
+/**
+ * Fetches the README over https only, validating every redirect hop so a
+ * catalog entry cannot bounce the request at internal or local resources.
+ */
+private fun fetchReadmeText(rawUrl: String): String {
+    var current = URL(rawUrl)
+    var redirects = 0
+    while (true) {
+        if (!isSafeReadmeUrl(current.toString())) {
+            error("Blocked README URL")
+        }
+        val conn = current.openConnection() as HttpURLConnection
+        conn.instanceFollowRedirects = false
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        try {
+            val code = conn.responseCode
+            if (code in 300..399) {
+                if (++redirects > MAX_README_REDIRECTS) error("Too many redirects")
+                val location = conn.getHeaderField("Location") ?: error("Redirect without Location")
+                current = URL(current, location)
+                continue
+            }
+            if (code !in 200..299) error("HTTP $code")
+            return conn.inputStream.bufferedReader().use { reader ->
+                val out = StringBuilder()
+                val buffer = CharArray(8192)
+                var total = 0
+                while (true) {
+                    val read = reader.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_README_BYTES) error("README is too large")
+                    out.append(buffer, 0, read)
+                }
+                out.toString()
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+}
+
 @Composable
 fun ReadmePreviewDialog(
     title: String,
@@ -365,12 +446,7 @@ fun ReadmePreviewDialog(
             isLoading = true
             error = null
             try {
-                val text = withContext(Dispatchers.IO) {
-                    val conn = URL(readmeUrl).openConnection()
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 8000
-                    conn.getInputStream().bufferedReader().use { it.readText() }
-                }
+                val text = withContext(Dispatchers.IO) { fetchReadmeText(readmeUrl) }
                 content = text
             } catch (e: Exception) {
                 error = "Failed to load README: ${e.message}"
