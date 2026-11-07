@@ -619,6 +619,16 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Restores come from untrusted callers, so cap the upload and how many
+	// bytes an archive may expand into before anything is written to disk.
+	const (
+		maxRestoreUploadBytes    = 256 << 20
+		maxRestoreEntryBytes     = 256 << 20
+		maxRestoreExtractedBytes = 1 << 30
+		maxRestoreEntries        = 10000
+	)
+	r.Body = http.MaxBytesReader(w, r.Body, maxRestoreUploadBytes)
+
 	tempDir := filepath.Join(getSafeTempDir(), fmt.Sprintf("agy_restore_%d", time.Now().UnixNano()))
 	_ = os.MkdirAll(tempDir, 0755)
 	defer os.RemoveAll(tempDir)
@@ -645,10 +655,14 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create temp zip: " + err.Error()})
 			return
 		}
-		n, err := io.Copy(out, file)
+		n, err := io.Copy(out, io.LimitReader(file, maxRestoreUploadBytes+1))
 		out.Close()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save temp zip: " + err.Error()})
+			return
+		}
+		if n > maxRestoreUploadBytes {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Archive exceeds the upload size limit"})
 			return
 		}
 		f, err := os.Open(tempZip)
@@ -666,10 +680,14 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create temp zip: " + err.Error()})
 			return
 		}
-		n, err := io.Copy(out, r.Body)
+		n, err := io.Copy(out, io.LimitReader(r.Body, maxRestoreUploadBytes+1))
 		out.Close()
 		if err != nil || n == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Empty or invalid archive stream"})
+			return
+		}
+		if n > maxRestoreUploadBytes {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Archive exceeds the upload size limit"})
 			return
 		}
 		f, err := os.Open(tempZip)
@@ -687,6 +705,10 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid zip/.antigem format: " + err.Error()})
 		return
 	}
+	if len(zipReader.File) > maxRestoreEntries {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Archive contains too many entries"})
+		return
+	}
 
 	targetBaseDir := h.Cfg.AppDataDir
 	targetConvsDir := filepath.Join(targetBaseDir, "conversations")
@@ -699,6 +721,7 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 
 	var detectedConvID string
 	var manifestTitle string
+	var extractedBytes int64
 
 	// Unpack files safely
 	for _, file := range zipReader.File {
@@ -714,7 +737,7 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 					ConversationID string `json:"conversation_id"`
 					Title          string `json:"title"`
 				}
-				_ = json.NewDecoder(rc).Decode(&mf)
+				_ = json.NewDecoder(io.LimitReader(rc, 1<<20)).Decode(&mf)
 				rc.Close()
 				if mf.ConversationID != "" {
 					detectedConvID = mf.ConversationID
@@ -757,6 +780,16 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 			continue
 		}
 
+		remaining := int64(maxRestoreExtractedBytes) - extractedBytes
+		entryLimit := int64(maxRestoreEntryBytes)
+		if remaining < entryLimit {
+			entryLimit = remaining
+		}
+		if entryLimit <= 0 || file.UncompressedSize64 > uint64(maxRestoreEntryBytes) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Archive exceeds the extraction size limit"})
+			return
+		}
+
 		_ = os.MkdirAll(filepath.Dir(destPath), 0755)
 		rc, err := file.Open()
 		if err != nil {
@@ -769,8 +802,15 @@ func (h *Handler) RestoreConversationHandler(w http.ResponseWriter, r *http.Requ
 		}
 		outFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 		if err == nil {
-			_, _ = io.Copy(outFile, rc)
+			written, copyErr := io.Copy(outFile, io.LimitReader(rc, entryLimit+1))
 			outFile.Close()
+			if copyErr != nil || written > entryLimit {
+				_ = os.Remove(destPath)
+				rc.Close()
+				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Archive exceeds the extraction size limit"})
+				return
+			}
+			extractedBytes += written
 		}
 		rc.Close()
 	}
