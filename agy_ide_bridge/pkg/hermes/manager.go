@@ -205,6 +205,13 @@ func (m *Manager) handleStream(w http.ResponseWriter, r *http.Request, sess *Ses
 	sess.mu.Unlock()
 
 	go s.writeLoop()
+	// tell the subscriber where the session's event counter stands: a seq
+	// below the client's last-seen seq means the session was recreated
+	// (bridge restart) and the client must drop its dedupe cursor
+	sess.mu.Lock()
+	hello, _ := json.Marshal(obj{"type": "hello", "seq": sess.seq})
+	sess.mu.Unlock()
+	s.send(hello)
 	// catch the new subscriber up with everything it missed; live events
 	// broadcast after the lock above was released queue behind the replay
 	for _, b := range replay {
@@ -248,6 +255,8 @@ type Session struct {
 	hermesSessionID string
 	// recent events, replayed to subscribers that join mid-turn
 	recent [][]byte
+	// seq tags every emitted event so clients can skip already-seen replays
+	seq int
 }
 
 // maxReplayEvents bounds the per-session replay buffer.
@@ -262,9 +271,15 @@ func (s *Session) broadcast(b []byte) {
 }
 
 func (s *Session) emit(v interface{}) {
+	// tag every event with a per-session sequence number so a client that
+	// reconnects mid-turn can skip the events it has already processed
+	s.mu.Lock()
+	s.seq++
+	if m, ok := v.(obj); ok {
+		m["seq"] = s.seq
+	}
 	b, _ := json.Marshal(v)
 	// remember the event so a subscriber that connects later can catch up
-	s.mu.Lock()
 	s.recent = append(s.recent, b)
 	if len(s.recent) > maxReplayEvents {
 		s.recent = s.recent[len(s.recent)-maxReplayEvents:]
@@ -543,7 +558,16 @@ func (s *sub) send(b []byte) {
 func (s *sub) close() {
 	s.once.Do(func() {
 		close(s.done)
-		_ = s.conn.Close()
+		// say goodbye properly: the close frame turns every server-side
+		// close into a clean closure for the client. WriteControl may run
+		// next to a data write and happens off the session lock so a slow
+		// socket cannot stall the broadcaster.
+		go func() {
+			_ = s.conn.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+				time.Now().Add(2*time.Second))
+			_ = s.conn.Close()
+		}()
 	})
 }
 

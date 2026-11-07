@@ -82,9 +82,18 @@ class HermesChatBackend(
     val startupStatus: StateFlow<String?> = _startupStatus.asStateFlow()
 
     private var activeSession: String? = null
-    private var activeWs: WebSocket? = null
+    @Volatile private var activeWs: WebSocket? = null
     private var wsRetryJob: Job? = null
     private var wsFailures = 0
+
+    /** Highest event seq processed for the active session; a replay after a
+     * reconnect re-delivers older seqs and must be skipped so the same text
+     * is not shown twice. */
+    @Volatile private var lastSeq = -1
+
+    /** Id of the assistant bubble currently being streamed. Lives on the
+     * backend so a reconnecting listener keeps filling the same bubble. */
+    @Volatile private var streamingMsgId: String? = null
 
     /** Completes once the current stream socket is open (true) or failed (false). */
     private var wsOpened = CompletableDeferred<Boolean>()
@@ -153,6 +162,7 @@ class HermesChatBackend(
             }
             _isStreaming.value = false
             _startupStatus.value = null
+            streamingMsgId = null
             // mark last assistant message done
             _messages.value = _messages.value.map {
                 if (it.isStreaming) it.copy(isStreaming = false) else it
@@ -192,6 +202,8 @@ class HermesChatBackend(
 
     private suspend fun doSend(conv: Conversation, text: String) {
         _conversationError.value = null
+        // a new turn starts a fresh assistant bubble
+        streamingMsgId = null
 
         // append the user bubble immediately
         appendMessage(
@@ -210,6 +222,8 @@ class HermesChatBackend(
                 _conversationError.value = "Could not start Hermes: ${it.message}"
                 return
             }
+            // fresh bridge session: its event counter starts over
+            lastSeq = -1
             activeSession = newSid
             updateConversation(conv.copy(title = conv.title))
             reconnectWs(newSid)
@@ -282,6 +296,7 @@ class HermesChatBackend(
         activeWs?.cancel()
         activeWs = null
         activeSession = null
+        streamingMsgId = null
         _isStreaming.value = false
         _startupStatus.value = null
     }
@@ -313,9 +328,6 @@ class HermesChatBackend(
         private val opened: CompletableDeferred<Boolean>
     ) : WebSocketListener() {
 
-        /** Accumulate streamed text for the current assistant bubble. */
-        private var assistantMsgId: String? = null
-
         override fun onOpen(webSocket: WebSocket, response: Response) {
             Log.d(TAG, "WS open sid=$sid")
             wsFailures = 0
@@ -330,13 +342,27 @@ class HermesChatBackend(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             Log.d(TAG, "WS closed $code $reason")
-            wsFailures = 0
-            finaliseStreaming()
+            // late callbacks from a replaced socket are irrelevant
+            if (webSocket !== activeWs) return
+            // a deliberate disconnectWs() already dropped the session
+            if (activeSession != sid) return
+            // the bridge closes cleanly when it cannot keep up with a slow
+            // client; the replay makes a reconnect lossless, so retry
+            if (++wsFailures <= MAX_WS_RETRIES) {
+                scheduleStreamRetry(sid)
+            } else {
+                _conversationError.value = "Connection lost (code $code)"
+                finaliseStreaming()
+            }
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             Log.w(TAG, "WS failure", t)
             opened.complete(false)
+            // late callbacks from a replaced socket are irrelevant; without
+            // this guard a cancelled socket schedules a retry that kills the
+            // healthy replacement, and the two keep trading places
+            if (webSocket !== activeWs) return
             // a deliberate disconnectWs() already dropped the session — nothing to recover
             if (activeSession != sid) return
             finaliseStreaming()
@@ -353,32 +379,55 @@ class HermesChatBackend(
             val obj = JSONObject(line)
             val conv = store.currentConversation.value ?: return
 
+            if (obj.optString("type") == "hello") {
+                // the bridge reports its event counter on every connect; a
+                // counter below our cursor means the session was recreated
+                // (bridge restart) — drop the dedupe cursor
+                val seq = obj.optInt("seq", -1)
+                if (seq in 0 until lastSeq) {
+                    lastSeq = -1
+                    streamingMsgId = null
+                }
+                return
+            }
+
+            // the bridge tags every event with a per-session seq; a replay
+            // after a reconnect re-delivers older events — skip those
+            val seq = obj.optInt("seq", -1)
+            if (seq >= 0) {
+                if (seq <= lastSeq) return
+                lastSeq = seq
+            }
+
             when (obj.optString("type")) {
                 "assistant_start" -> {
                     _isStreaming.value = true
-                    val id = UUID.randomUUID().toString()
-                    assistantMsgId = id
-                    appendMessage(
-                        ChatMessage(
-                            id = id,
-                            conversationId = conv.id,
-                            role = MessageRole.ASSISTANT,
-                            content = "",
-                            isStreaming = true
+                    // reuse the bubble a previous listener already opened for
+                    // this turn (replay after reconnect) instead of duplicating it
+                    val id = streamingMsgId ?: UUID.randomUUID().toString().also { streamingMsgId = it }
+                    if (_messages.value.none { it.id == id }) {
+                        appendMessage(
+                            ChatMessage(
+                                id = id,
+                                conversationId = conv.id,
+                                role = MessageRole.ASSISTANT,
+                                content = "",
+                                isStreaming = true
+                            )
                         )
-                    )
+                    }
                 }
 
                 "assistant_delta" -> {
                     val delta = obj.optString("delta")
-                    val id = assistantMsgId ?: return
+                    val id = streamingMsgId ?: return
                     _messages.value = _messages.value.map { m ->
                         if (m.id == id) m.copy(content = m.content + delta) else m
                     }
                 }
 
                 "assistant_done" -> {
-                    val id = assistantMsgId
+                    val id = streamingMsgId
                     val usage = obj.optJSONObject("usage")
                     _messages.value = _messages.value.map { m ->
                         if (m.id == id) m.copy(
@@ -392,7 +441,7 @@ class HermesChatBackend(
                             }
                         ) else m
                     }
-                    assistantMsgId = null
+                    streamingMsgId = null
                     finaliseStreaming()
                     // refresh conversation title if the bridge sends one
                     obj.optString("title").takeIf { it.isNotBlank() }?.let { title ->
