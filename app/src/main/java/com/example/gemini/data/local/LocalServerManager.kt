@@ -330,6 +330,10 @@ object LocalServerManager {
         LocalEnvironmentManager.ensureClaudeWrapper(appContext)
         // a fresh container has no agent CLIs: install whatever is missing without blocking startup
         AgentProvisioner.provisionInBackground(appContext)
+        // A hermes unit left by a manual `hermes gateway install`/`hermes setup` inside the container
+        // makes the next chat turn fail (the client picks the systemd backend, which has no manager
+        // there). Clear it on every start, even when every agent is already installed.
+        AgentProvisioner.removeContainerGatewayUnits(appContext) { Log.d(TAG, it) }
 
         val command = resolveServerCommand(appContext)
         if (command == null) {
