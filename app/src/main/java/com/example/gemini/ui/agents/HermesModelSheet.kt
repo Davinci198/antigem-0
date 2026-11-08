@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -40,6 +41,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import com.example.gemini.data.agent.hermes.HermesChatBackend
 import com.example.gemini.data.agent.hermes.HermesModelEntry
 import com.example.gemini.data.agent.hermes.HermesModelHealth
@@ -82,6 +85,11 @@ fun HermesModelSheet(
     val progress by backend.scanProgress.collectAsState()
     val accent = AgentKind.HERMES.accent()
     val cardColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+    // Closing a modal sheet has two halves: the animation, and the state flip
+    // the caller owns. Doing both here means a drag, a scrim tap and the close
+    // button all leave the same clean state — a sheet half-dismissed with the
+    // panel still mounted is what made the chat behind it refuse to scroll.
+    val scope = rememberCoroutineScope()
 
     var search by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(HealthFilter.ALL) }
@@ -113,8 +121,13 @@ fun HermesModelSheet(
         skipPartiallyExpanded = true,
         confirmValueChange = { it != SheetValue.Hidden }
     )
+    fun closeSheet() {
+        scope.launch { sheetState.hide() }.invokeOnCompletion {
+            if (!sheetState.isVisible) onDismiss()
+        }
+    }
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { closeSheet() },
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.background,
         tonalElevation = 0.dp,
@@ -130,6 +143,21 @@ fun HermesModelSheet(
                 .padding(bottom = 22.dp)
                 .navigationBarsPadding()
         ) {
+            // An explicit close target: the gesture area above the header is
+            // small on a tall phone, and the sheet's own scrim tap is easy to
+            // miss when the list is long.
+            Box(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    IconButton(onClick = { closeSheet() }) {
+                        Icon(
+                            Icons.Default.Close,
+                            "Închide",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
             AgentSheetHeader(
                 AgentKind.HERMES,
                 "Modele disponibile",
