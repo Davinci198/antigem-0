@@ -15,6 +15,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -406,13 +407,37 @@ func loadAppProviders(homeDir string) []appProvider {
 	}
 	out := make([]appProvider, 0, len(file.Providers))
 	for _, p := range file.Providers {
-		ap := appProvider{ID: p.ID, Name: p.Name, BaseURL: p.BaseURL, APIKey: p.APIKey}
+		ap := appProvider{ID: p.ID, Name: p.Name, BaseURL: normalizeBaseURL(p.BaseURL), APIKey: p.APIKey}
 		for _, mm := range p.Models {
 			ap.Models = append(ap.Models, appProviderModel{ID: mm.ID, Name: mm.Name})
 		}
 		out = append(out, ap)
 	}
 	return out
+}
+
+// normalizeBaseURL gives an OpenAI-compatible API root, the form both
+// session.create and the health probe need.
+//
+// A provider saved as "https://integrate.api.nvidia.com" (no /v1) worked for
+// the health probe, which appends /v1 itself, but reached Hermes verbatim: it
+// requested /chat/completions on the host root and every real turn died with
+// "HTTP 404". Normalizing here keeps every caller on the same URL.
+func normalizeBaseURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return ""
+	}
+	if strings.HasSuffix(base, "/chat/completions") {
+		base = strings.TrimSuffix(base, "/chat/completions")
+	}
+	// Only add /v1 when the URL carries no path of its own.
+	if u, err := url.Parse(base); err == nil {
+		if u.Path == "" || u.Path == "/" {
+			base += "/v1"
+		}
+	}
+	return base
 }
 
 // findAppProvider returns the provider with this id, or nil.
