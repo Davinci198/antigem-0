@@ -247,7 +247,6 @@ fun ClaudeModelSheet(
     backend: ClaudeChatBackend,
     account: ClaudeAccountManager,
     onDismiss: () -> Unit,
-    /** Verdicts of every "Check latency" run, hoisted so a scan survives leaving this sheet. */
     store: ModelScanStore = remember { ModelScanStore() },
 ) {
     // The provider whose models are being scanned, if any: the scan sheet is a

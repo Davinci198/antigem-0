@@ -2130,7 +2130,11 @@ fun ChatScreen(
     if (showModelSelector && isHermesChat) {
         com.example.gemini.ui.agents.HermesModelSheet(hermesBackend) { showModelSelector = false }
     } else if (showModelSelector && isClaudeChat) {
-        com.example.gemini.ui.claude.ClaudeModelSheet(claudeBackend, viewModel.claudeAccount) { showModelSelector = false }
+        com.example.gemini.ui.claude.ClaudeModelSheet(
+            backend = claudeBackend,
+            account = viewModel.claudeAccount,
+            onDismiss = { showModelSelector = false }
+        )
     } else if (showModelSelector) {
         ModelSelectorBottomSheet(
             selectedModelId = selectedModelId,
