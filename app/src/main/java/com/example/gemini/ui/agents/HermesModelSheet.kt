@@ -8,9 +8,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -114,6 +114,9 @@ fun HermesModelSheet(
         Column(
             Modifier
                 .fillMaxWidth()
+                // the sheet must span nearly the whole screen so the search
+                // box, filters and the model list breathe together
+                .fillMaxHeight(0.94f)
                 .padding(horizontal = 18.dp)
                 .padding(bottom = 22.dp)
                 .navigationBarsPadding()
@@ -228,7 +231,7 @@ fun HermesModelSheet(
                 LazyColumn(
                     Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 420.dp)
+                        .weight(1f)
                         .padding(top = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {

@@ -69,6 +69,14 @@ func NewManager(homeDir, hermesBin string) *Manager {
 		},
 	}
 	m.gw = newGateway(m)
+	// Prewarm: connect to the gateway (starting it when cold) right away so
+	// the user's first turn skips the 60–100 s boot. The persistent client
+	// also keeps the gateway from idle-exiting while the app is open.
+	go func() {
+		if err := m.gw.ensure(); err != nil {
+			log.Printf("[hermes] prewarm: %v", err)
+		}
+	}()
 	return m
 }
 
@@ -426,8 +434,19 @@ func (s *Session) runTurnGateway(content string) bool {
 	s.turnContent = content
 	s.mu.Unlock()
 	if err := g.submit(gwID, content); err != nil {
-		s.emit(obj{"type": "error", "message": err.Error()})
-		s.gwFinish(nil, "")
+		// The gateway may have restarted since createSession (idle exit, crash)
+		// and taken this session id with it. Re-create once before giving up.
+		s.emit(obj{"type": "status", "message": "Gateway session stale; reconnecting…"})
+		if cerr := g.createSession(s); cerr == nil {
+			s.mu.Lock()
+			gwID = s.gwID
+			s.mu.Unlock()
+			err = g.submit(gwID, content)
+		}
+		if err != nil {
+			s.emit(obj{"type": "error", "message": err.Error()})
+			s.gwFinish(nil, "")
+		}
 	}
 	return true
 }
