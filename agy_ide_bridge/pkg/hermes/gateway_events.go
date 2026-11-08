@@ -8,8 +8,11 @@
 package hermes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -45,6 +48,29 @@ func (m *Manager) routeGatewayEvent(params map[string]interface{}) {
 	sess := m.gw.owners[gwID]
 	m.mu.Unlock()
 	if sess == nil {
+		// health-scan probe sessions have no bridge session: complete the
+		// waiter instead of dropping the event
+		if ch := m.gw.probeWaiter(gwID); ch != nil {
+			switch evType {
+			case "message.complete":
+				select {
+				case ch <- "ok":
+				default:
+				}
+			case "error":
+				msg, _ := payload["text"].(string)
+				if msg == "" {
+					msg, _ = payload["message"].(string)
+				}
+				if msg == "" {
+					msg = "hermes error"
+				}
+				select {
+				case ch <- msg:
+				default:
+				}
+			}
+		}
 		return
 	}
 
@@ -436,4 +462,82 @@ func (m *Manager) handleGatewayStatus(w http.ResponseWriter) {
 		payload["cli_status_error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// handleModelScan answers POST /sessions/{id}/models/scan
+// {model, provider_id} with one health probe: {ok, latency_ms, error?}.
+// Custom providers are probed directly (the bridge holds their endpoint and
+// key); preset models ride a scratch gateway session so Hermes' own
+// credentials apply. The app fans these out concurrently for the scan.
+func (m *Manager) handleModelScan(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Model      string `json:"model"`
+		ProviderID string `json:"provider_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model == "" {
+		writeJSON(w, http.StatusBadRequest, obj{"error": "missing model"})
+		return
+	}
+	const probeTimeout = 30 * time.Second
+	if p := findAppProvider(m.homeDir, body.ProviderID); p != nil && p.BaseURL != "" {
+		latency, errMsg := probeOpenAICompatible(p.BaseURL, p.APIKey, body.Model, probeTimeout)
+		writeJSON(w, http.StatusOK, scanResult(latency, errMsg))
+		return
+	}
+	latency, errMsg, err := m.gw.probeModel(body.Model, body.ProviderID, "", "", probeTimeout)
+	if err != nil {
+		writeJSON(w, http.StatusOK, scanResult(0, err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, scanResult(latency, errMsg))
+}
+
+func scanResult(latency int64, errMsg string) obj {
+	res := obj{"ok": errMsg == "", "latency_ms": latency}
+	if errMsg != "" {
+		res["error"] = errMsg
+	}
+	return res
+}
+
+// probeOpenAICompatible pings one model on a plain OpenAI-compatible endpoint
+// with the same tiny completion the app-side scanners use.
+func probeOpenAICompatible(baseURL, apiKey, model string, timeout time.Duration) (int64, string) {
+	base := strings.TrimRight(baseURL, "/")
+	if !strings.HasSuffix(base, "/chat/completions") {
+		if strings.HasSuffix(base, "/v1") {
+			base += "/chat/completions"
+		} else {
+			base += "/v1/chat/completions"
+		}
+	}
+	payload, _ := json.Marshal(obj{
+		"model":      model,
+		"max_tokens": 16,
+		"messages":   []obj{{"role": "user", "content": "Reply OK"}},
+	})
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, base, bytes.NewReader(payload))
+	if err != nil {
+		return 0, err.Error()
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	client := &http.Client{Timeout: timeout}
+	started := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer resp.Body.Close()
+	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return time.Since(started).Milliseconds(), ""
+	}
+	msg := fmt.Sprintf("HTTP %d", resp.StatusCode)
+	if s := strings.TrimSpace(string(snippet)); s != "" {
+		msg += ": " + s
+	}
+	return time.Since(started).Milliseconds(), msg
 }

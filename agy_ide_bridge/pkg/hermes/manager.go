@@ -159,6 +159,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case sub == "models" && r.Method == http.MethodGet:
 			// read-only: never materialise a session just to list models
 			m.handleModels(w, m.peek(id))
+		case sub == "models/scan" && r.Method == http.MethodPost:
+			m.handleModelScan(w, r)
 		case sub == "model" && r.Method == http.MethodPost:
 			sess := m.peek(id)
 			if sess == nil {

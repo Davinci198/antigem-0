@@ -78,6 +78,9 @@ type gateway struct {
 
 	// gateway session id → the bridge session that owns it
 	owners map[string]*Session
+	// health-scan waiters: gateway session id → channel that receives
+	// "ok" or the error text when the probe turn ends
+	probes map[string]chan string
 	// gateway session id → the view this connection holds (generation,
 	// epoch, subscription) for fencing and interrupts
 	views map[string]*gwView
@@ -148,6 +151,7 @@ func (g *gateway) ensure() error {
 	g.nextID = 0
 	g.pending = make(map[int64]chan map[string]interface{})
 	g.views = make(map[string]*gwView) // subscriptions are per connection
+	g.probes = make(map[string]chan string)
 	g.healthy = true
 	g.lastErr = ""
 	g.mu.Unlock()
@@ -593,4 +597,73 @@ func shortID(id string) string {
 		return id[:12] + "…"
 	}
 	return id
+}
+
+// probeWaiter returns (and keeps) the health-scan channel for a gateway
+// session, or nil when the session is not a probe.
+func (g *gateway) probeWaiter(gwID string) chan string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.probes[gwID]
+}
+
+// probeModel answers one health-scan probe: create a scratch gateway session
+// pinned to the model/provider, submit a one-word prompt, wait for the reply
+// or the error, then drop the session. The latency covers the whole turn —
+// the number the model picker shows. Hermes' own provider credentials ride
+// along, so preset models are probed with the same keys a real chat uses.
+func (g *gateway) probeModel(model, provider, baseURL, apiKey string, timeout time.Duration) (int64, string, error) {
+	if err := g.ensure(); err != nil {
+		return 0, "", err
+	}
+	params := obj{
+		"cwd":        g.mgr.homeDir,
+		"yolo":       true,
+		"source":     "tui",
+		"request_id": uuid.New().String(),
+	}
+	if model != "" {
+		params["model"] = model
+	}
+	if provider != "" {
+		params["provider"] = provider
+	}
+	if baseURL != "" {
+		params["base_url"] = baseURL
+	}
+	if apiKey != "" {
+		params["api_key"] = apiKey
+	}
+	res, err := g.call("session.create", params, createTimeout)
+	if err != nil {
+		return 0, "", err
+	}
+	gwID, _ := res["session_id"].(string)
+	if gwID == "" {
+		return 0, "", fmt.Errorf("session.create returned no session id")
+	}
+	g.noteView(gwID, res, true)
+	ch := make(chan string, 1)
+	g.mu.Lock()
+	g.probes[gwID] = ch
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		delete(g.probes, gwID)
+		g.mu.Unlock()
+		g.detach(gwID)
+	}()
+	started := time.Now()
+	if err := g.submit(gwID, "Reply with exactly: OK"); err != nil {
+		return 0, "", err
+	}
+	select {
+	case verdict := <-ch:
+		if verdict == "ok" {
+			return time.Since(started).Milliseconds(), "", nil
+		}
+		return 0, verdict, nil
+	case <-time.After(timeout):
+		return 0, "", fmt.Errorf("no answer in %s", timeout)
+	}
 }

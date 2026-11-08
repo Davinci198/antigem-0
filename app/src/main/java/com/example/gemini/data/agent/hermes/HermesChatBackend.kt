@@ -15,11 +15,15 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
@@ -67,6 +71,25 @@ data class HermesModels(
     /** The model id currently selected in the picker, or "" for Hermes' default. */
     fun findPresetModel(id: String): String? = presets.firstOrNull { id in it.models }?.let { id }
 }
+
+/** One row of the model scan sheet: a probeable model and where it lives. */
+data class HermesModelEntry(
+    val modelId: String,
+    val label: String,
+    val providerId: String,
+    val providerLabel: String,
+    val isCustom: Boolean,
+) {
+    /** Stable key for health results and list items. */
+    val key: String get() = "$providerId|$modelId"
+}
+
+/** One probe's verdict, from POST /models/scan. */
+data class HermesModelHealth(
+    val ok: Boolean,
+    val latencyMs: Long,
+    val error: String? = null,
+)
 
 /**
  * Chat backend for Hermes Agent.
@@ -145,6 +168,83 @@ class HermesChatBackend(
     private val _modelMessage = MutableStateFlow<String?>(null)
     /** A note from the bridge about a model switch (deferred / refused). */
     val modelMessage: StateFlow<String?> = _modelMessage.asStateFlow()
+
+    /** Health verdicts from the last scan, keyed by "providerId|modelId". */
+    private val _modelHealth = MutableStateFlow<Map<String, HermesModelHealth>>(emptyMap())
+    val modelHealth: StateFlow<Map<String, HermesModelHealth>> = _modelHealth.asStateFlow()
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    /** Scan progress: models verified so far to total. */
+    private val _scanProgress = MutableStateFlow(0 to 0)
+    val scanProgress: StateFlow<Pair<Int, Int>> = _scanProgress.asStateFlow()
+
+    /** One entry per probeable model, flattened from the picker payload. */
+    fun modelEntries(): List<HermesModelEntry> {
+        val data = _models.value ?: return emptyList()
+        val entries = mutableListOf<HermesModelEntry>()
+        data.presets.forEach { p ->
+            p.models.forEach { id ->
+                entries += HermesModelEntry(
+                    modelId = id,
+                    label = id.substringAfterLast('/', id),
+                    providerId = p.slug,
+                    providerLabel = p.name.ifBlank { p.slug },
+                    isCustom = false,
+                )
+            }
+        }
+        data.custom.forEach { p ->
+            p.models.forEach { m ->
+                entries += HermesModelEntry(
+                    modelId = m.id,
+                    label = m.name.takeIf { it.isNotBlank() } ?: m.id.substringAfterLast('/', m.id),
+                    providerId = p.id,
+                    providerLabel = p.name.ifBlank { p.id },
+                    isCustom = true,
+                )
+            }
+        }
+        return entries.distinctBy { it.key }
+    }
+
+    /** Probes every model with a one-word turn and records ok/latency live. */
+    fun scanModels() {
+        if (_isScanning.value) return
+        val targets = modelEntries()
+        if (targets.isEmpty()) return
+        backendScope.launch {
+            _isScanning.value = true
+            _scanProgress.value = 0 to targets.size
+            val semaphore = kotlinx.coroutines.sync.Semaphore(4)
+            val done = java.util.concurrent.atomic.AtomicInteger(0)
+            val sid = activeSession ?: "default"
+            coroutineScope {
+                targets.map { entry ->
+                    async {
+                        semaphore.withPermit {
+                            val body = JSONObject()
+                                .put("model", entry.modelId)
+                                .put("provider_id", entry.providerId)
+                                .toString()
+                            val json = runCatching {
+                                JSONObject(postBridge("/sessions/$sid/models/scan", body))
+                            }.getOrNull() ?: return@withPermit
+                            val verdict = HermesModelHealth(
+                                ok = json.optBoolean("ok", false),
+                                latencyMs = json.optLong("latency_ms", 0L),
+                                error = json.optString("error").takeIf { it.isNotBlank() },
+                            )
+                            _modelHealth.value = _modelHealth.value + (entry.key to verdict)
+                            _scanProgress.value = done.incrementAndGet() to targets.size
+                        }
+                    }
+                }.awaitAll()
+            }
+            _isScanning.value = false
+        }
+    }
 
     /** Fetches the model picker payload. Works before the first turn too:
      * the bridge answers with the profile defaults when no session is live. */
