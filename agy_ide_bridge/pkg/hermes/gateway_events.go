@@ -460,7 +460,59 @@ func findAppProvider(homeDir, id string) *appProvider {
 			return &p
 		}
 	}
+	// A Hermes config custom_providers entry ("custom:omniroute") has no app
+	// record; its endpoint lives in config.yaml. Probing it directly beats
+	// spinning one gateway session per model.
+	if strings.HasPrefix(id, "custom:") {
+		if p := hermesCustomProvider(homeDir, strings.TrimPrefix(id, "custom:")); p != nil {
+			return p
+		}
+	}
 	return nil
+}
+
+// hermesCustomProvider reads one custom_providers entry out of the profile's
+// config.yaml: name, base_url and api_key for that block.
+func hermesCustomProvider(homeDir, name string) *appProvider {
+	cfg, err := os.ReadFile(filepath.Join(homeDir, ".hermes", "config.yaml"))
+	if err != nil {
+		return nil
+	}
+	base, key := "", ""
+	inBlock, inCustom := false, false
+	wantName := ""
+	for _, line := range strings.Split(string(cfg), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "custom_providers:") {
+			inCustom = true
+			continue
+		}
+		if !inCustom {
+			continue
+		}
+		// A top-level key ends the section.
+		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "-") {
+			break
+		}
+		if strings.HasPrefix(trimmed, "- name:") {
+			wantName = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- name:")), `"'`)
+			inBlock = strings.EqualFold(wantName, name)
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		if v, ok := strings.CutPrefix(trimmed, "base_url:"); ok {
+			base = strings.Trim(strings.TrimSpace(v), `"'`)
+		}
+		if v, ok := strings.CutPrefix(trimmed, "api_key:"); ok {
+			key = strings.Trim(strings.TrimSpace(v), `"'`)
+		}
+	}
+	if base == "" {
+		return nil
+	}
+	return &appProvider{ID: "custom:" + name, Name: name, BaseURL: normalizeBaseURL(base), APIKey: key}
 }
 
 // appProvidersForUI is the provider list the app may see: keys replaced by a
