@@ -154,6 +154,7 @@ fun HermesModelSheet(
             }
 
             // ── Testează + progress ──
+            val unscanned = allEntries.count { health[it.key] == null }
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -169,7 +170,6 @@ fun HermesModelSheet(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                     modifier = Modifier.weight(1f)
                 )
-                val unscanned = allEntries.count { health[it.key] == null }
                 TextButton(
                     onClick = { backend.scanModels() },
                     enabled = !scanning && allEntries.isNotEmpty(),
