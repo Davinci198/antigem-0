@@ -3,28 +3,26 @@ package com.example.gemini.ui.claude
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import com.example.gemini.data.agent.claude.ClaudeProvider
-import com.example.gemini.data.agent.claude.ClaudeProviderModel
 import com.example.gemini.data.agent.claude.contextLabel
-import com.example.gemini.domain.model.AgentKind
-import com.example.gemini.ui.components.ModelScanSheet
-import com.example.gemini.ui.components.ScanFilter
+import com.example.gemini.ui.components.ModelScanPage
 import com.example.gemini.ui.components.ScanRowModel
 import com.example.gemini.ui.components.ScanVerdict
 
 /**
  * A Claude provider's models, scanned. Thin wrapper over the shared
- * [ModelScanSheet], so a Claude scan and a Hermes scan are the same screen:
+ * [ModelScanPage], so a Claude scan and a Hermes scan are the same screen:
  * both agents read the same provider store and probe through the same bridge.
  */
 @Composable
-fun ProviderModelScanSheet(
+fun ProviderModelScanPage(
     provider: ClaudeProvider,
     store: ModelScanStore,
     accentColor: Color,
     onScan: (force: Boolean) -> Unit,
-    onPick: (ClaudeProviderModel) -> Unit,
+    onPick: (com.example.gemini.data.agent.claude.ClaudeProviderModel) -> Unit,
     selectedModelId: String?,
-    onDismiss: () -> Unit,
+    onBack: () -> Unit,
+    onClose: () -> Unit,
 ) {
     val rows = provider.models.map { m ->
         ScanRowModel(
@@ -37,41 +35,26 @@ fun ProviderModelScanSheet(
             ).joinToString(" · "),
         )
     }
-    val scanned = store.scannedCount(provider)
 
-    ModelScanSheet(
-        agent = AgentKind.CLAUDE,
+    ModelScanPage(
         title = provider.name.ifBlank { provider.id },
         subtitle = provider.base_url.takeIf { it.isNotBlank() },
         accent = accentColor,
         rows = rows,
         verdictFor = { row ->
-            store.verdicts[store.key(row.providerIdOr(provider.id), row.modelId)]?.let {
+            store.verdicts[store.key(provider.id, row.modelId)]?.let {
                 ScanVerdict(ok = it.ok, latencyMs = it.latency_ms, status = it.status, error = it.error)
             }
         },
-        filter = store.filter(provider).let { f ->
-            when (f) {
-                ScanFilter.ALL -> ScanFilter.ALL
-                ScanFilter.WORKING -> ScanFilter.WORKING
-                ScanFilter.BROKEN -> ScanFilter.BROKEN
-            }
-        },
+        filter = store.filter(provider),
         onFilterChange = { store.setFilter(provider, it) },
         scanning = store.scanning[provider.id] == true,
-        progress = scanned to provider.models.size,
+        progress = store.scannedCount(provider) to provider.models.size,
         selectedValue = selectedModelId?.let { "@${provider.id}/$it" },
         fastestValue = store.fastest[provider.id]?.let { "@${provider.id}/$it" },
-        onScan = { force ->
-            if (force) store.beginScan(provider)
-            onScan(false)
-        },
-        onPick = { row ->
-            provider.models.firstOrNull { it.id == row.modelId }?.let(onPick)
-        },
-        onDismiss = onDismiss,
+        onScan = onScan,
+        onPick = { row -> provider.models.firstOrNull { it.id == row.modelId }?.let(onPick) },
+        onBack = onBack,
+        onClose = onClose,
     )
 }
-
-private fun ScanRowModel.providerIdOr(fallback: String): String =
-    value.removePrefix("@").substringBeforeLast('/').ifBlank { fallback }

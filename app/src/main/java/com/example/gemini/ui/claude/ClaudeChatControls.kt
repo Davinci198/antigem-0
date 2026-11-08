@@ -294,6 +294,34 @@ fun ClaudeModelSheet(
         tonalElevation = 0.dp,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
+        // One sheet, two pages. A second ModalBottomSheet on top of this one did
+        // not stack: it took focus, and dismissing it dismissed the picker too,
+        // so "View scan" threw the user back to the chat.
+        val scanningProvider = scanProvider
+        if (scanningProvider != null) {
+            ProviderModelScanPage(
+                provider = scanningProvider,
+                store = store,
+                accentColor = ClaudeAccent,
+                selectedModelId = selected.removePrefix("@${scanningProvider.id}/")
+                    .takeIf { selected.startsWith("@${scanningProvider.id}/") },
+                onScan = { force ->
+                    if (force) store.beginScan(scanningProvider)
+                    backend.scanProviderLatency(
+                        scanningProvider, scanningProvider.models,
+                        onProgress = { model, res -> store.recordProgress(scanningProvider.id, model, res) },
+                        onFinished = { _, fastest -> store.finishScan(scanningProvider, fastest?.model) }
+                    )
+                },
+                onPick = { m ->
+                    scanProvider = null
+                    backend.selectModel("@${scanningProvider.id}/${m.id}")
+                    onDismiss()
+                },
+                onBack = { scanProvider = null },
+                onClose = { closeSheet() },
+            )
+        } else {
         Column(
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(bottom = 22.dp).navigationBarsPadding()
         ) {
@@ -542,34 +570,9 @@ fun ClaudeModelSheet(
                 }
             }
         }
+        }
     }
 
-    // The scan sheet sits on top of the picker. Its verdicts live in the store,
-    // so closing it never throws away a finished scan.
-    scanProvider?.let { p ->
-        ProviderModelScanSheet(
-            provider = p,
-            store = store,
-            accentColor = ClaudeAccent,
-            selectedModelId = selected.removePrefix("@${p.id}/").takeIf { selected.startsWith("@${p.id}/") },
-            onScan = { force ->
-                if (force) store.beginScan(p)
-                backend.scanProviderLatency(
-                    p, p.models,
-                    onProgress = { model, res -> store.recordProgress(p.id, model, res) },
-                    onFinished = { _, fastest -> store.finishScan(p, fastest?.model) }
-                )
-            },
-            onPick = { m ->
-                // Close first: picking a model in another provider opens a confirmation
-                // dialog, and a sheet still on screen covered it, so the chat looked
-                // frozen behind a window that could not be swiped away.
-                scanProvider = null
-                backend.selectModel("@${p.id}/${m.id}")
-            },
-            onDismiss = { scanProvider = null },
-        )
-    }
 }
 
 /** Context window usage of the open chat (the `/context` command). */
