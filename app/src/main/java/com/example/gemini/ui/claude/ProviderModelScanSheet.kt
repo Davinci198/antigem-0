@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import com.example.gemini.data.agent.claude.ClaudeProvider
 import com.example.gemini.data.agent.claude.ClaudeProviderModel
 import com.example.gemini.data.agent.claude.ClaudeProviderTestResult
+import com.example.gemini.data.agent.claude.contextLabel
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.agents.AgentSheetHeader
 
