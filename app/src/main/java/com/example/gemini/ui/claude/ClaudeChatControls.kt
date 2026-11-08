@@ -53,6 +53,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import com.example.gemini.ui.components.ScanGreen
+import com.example.gemini.ui.components.ScanRed
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -247,7 +250,7 @@ fun ClaudeModelSheet(
     backend: ClaudeChatBackend,
     account: ClaudeAccountManager,
     onDismiss: () -> Unit,
-    store: ModelScanStore = remember { ModelScanStore() },
+    store: ModelScanStore = ModelScanStore.shared(LocalContext.current),
 ) {
     // The provider whose models are being scanned, if any: the scan sheet is a
     // second sheet on top of this one, never a replacement for it.
@@ -401,7 +404,7 @@ fun ClaudeModelSheet(
                                 },
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = if (r.ok) WorkingGreen else BrokenRed
+                                color = if (r.ok) ScanGreen else ScanRed
                             )
                         }
                     }

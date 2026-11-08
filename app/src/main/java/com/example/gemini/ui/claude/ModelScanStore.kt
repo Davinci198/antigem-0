@@ -1,15 +1,12 @@
 package com.example.gemini.ui.claude
 
 import androidx.compose.runtime.mutableStateMapOf
+import android.content.Context
+import android.content.SharedPreferences
 import com.example.gemini.data.agent.claude.ClaudeProvider
 import com.example.gemini.data.agent.claude.ClaudeProviderTestResult
-
-/** Which verdicts a model list shows. */
-enum class ScanFilter(val label: String) {
-    ALL("All"),
-    WORKING("Working"),
-    BROKEN("Broken"),
-}
+import com.example.gemini.ui.components.ScanFilter
+import org.json.JSONObject
 
 /**
  * One model probe of a provider scan: the model id, the provider it belongs to
@@ -29,9 +26,9 @@ data class ScanEntry(
  * visible until the next deliberate scan. A scan now also survives the walk to
  * the chat, which is where the user reads the result.
  */
-class ModelScanStore {
+class ModelScanStore(private val prefs: SharedPreferences? = null) {
     /** One verdict per "providerId@modelId"; the key is what the filter reads. */
-    val verdicts = mutableStateMapOf<String, ClaudeProviderTestResult>()
+    val verdicts = mutableStateMapOf<String, ClaudeProviderTestResult>().apply { restore() }
 
     /** Providers with a scan in flight, keyed by provider id. */
     val scanning = mutableStateMapOf<String, Boolean>()
@@ -94,16 +91,75 @@ class ModelScanStore {
         overrides[provider.id] = null
         fastest.remove(provider.id)
         verdicts.keys.removeAll { it.startsWith("${provider.id}@") }
+        persist()
         scanning[provider.id] = true
     }
 
     fun recordProgress(providerId: String, modelId: String, result: ClaudeProviderTestResult) {
         verdicts[key(providerId, modelId)] = result
+        persist()
     }
 
     fun finishScan(provider: ClaudeProvider, fastestModel: String?) {
         scanning[provider.id] = false
         if (fastestModel != null) fastest[provider.id] = fastestModel
+        persist()
+    }
+
+    // ── persistence ───────────────────────────────────────────────────────
+    // A verdict is only worth showing if it outlives the process: the app was
+    // restarted mid-verification (swiped to background and back) and every
+    // result vanished, so the sheet went back to "not checked yet" even though
+    // the probes had run seconds earlier.
+
+    private fun restore() {
+        val raw = runCatching { prefs?.getString(KEY_VERDICTS, null) }.getOrNull() ?: return
+        runCatching {
+            val json = JSONObject(raw)
+            json.keys().forEach { k ->
+                val o = json.optJSONObject(k) ?: return@forEach
+                verdicts[k] = ClaudeProviderTestResult(
+                    ok = o.optBoolean("ok", false),
+                    status = o.optInt("status", 0),
+                    latency_ms = o.optLong("latency_ms", 0L),
+                    model = o.optString("model"),
+                    error = o.optString("error"),
+                )
+            }
+        }
+    }
+
+    private fun persist() {
+        val target = prefs ?: return
+        runCatching {
+            val json = JSONObject()
+            verdicts.forEach { (k, v) ->
+                json.put(
+                    k,
+                    JSONObject()
+                        .put("ok", v.ok)
+                        .put("status", v.status)
+                        .put("latency_ms", v.latency_ms)
+                        .put("model", v.model)
+                        .put("error", v.error)
+                )
+            }
+            target.edit().putString(KEY_VERDICTS, json.toString()).apply()
+        }
+    }
+
+    companion object {
+        /** Shared with the settings screen, so a scan there shows up in the chat. */
+        const val PREFS_NAME = "model_scan_verdicts"
+        const val KEY_VERDICTS = "verdicts"
+
+        /** The one store both the chat picker and Settings read. */
+        private var singleton: ModelScanStore? = null
+
+        fun shared(context: Context): ModelScanStore =
+            singleton ?: ModelScanStore(
+                context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            ).also { singleton = it }
     }
 }
 
