@@ -182,7 +182,7 @@ fun HermesModelSheet(
             )
         } else {
             Column(
-                Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                Modifier.fillMaxWidth().fillMaxHeight(0.94f)
                     .padding(horizontal = 18.dp).padding(bottom = 22.dp).navigationBarsPadding()
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -221,7 +221,10 @@ fun HermesModelSheet(
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 )
-                LazyColumn(Modifier.fillMaxWidth().height(420.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                LazyColumn(
+                    Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     items(
                         rows.filter { search.isBlank() || it.modelId.contains(search, true) || it.label.contains(search, true) },
                         key = { it.value }

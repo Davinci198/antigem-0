@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -111,7 +112,7 @@ fun ModelScanPage(
         ScanFilter.ALL -> matchingSearch
     }
 
-    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
+    Column(Modifier.fillMaxWidth().fillMaxHeight().padding(horizontal = 18.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = accent, modifier = Modifier.size(20.dp))
@@ -222,7 +223,7 @@ fun ModelScanPage(
         Spacer(Modifier.height(8.dp))
 
         if (visible.isEmpty()) {
-            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Text(
                     when {
                         rows.isEmpty() -> "No models yet. Load them, then scan."
@@ -239,7 +240,7 @@ fun ModelScanPage(
             }
         } else {
             LazyColumn(
-                Modifier.fillMaxWidth().height(320.dp),
+                Modifier.fillMaxWidth().weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(visible, key = { it.value }) { row ->
