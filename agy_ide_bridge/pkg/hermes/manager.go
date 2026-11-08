@@ -169,6 +169,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			m.handleModels(w, m.peek(id))
 		case sub == "models/scan" && r.Method == http.MethodPost:
 			m.handleModelScan(w, r)
+		case sub == "models/scan-batch" && r.Method == http.MethodPost:
+			m.handleModelScanBatch(w, r)
 		case sub == "model" && r.Method == http.MethodPost:
 			sess := m.peek(id)
 			if sess == nil {

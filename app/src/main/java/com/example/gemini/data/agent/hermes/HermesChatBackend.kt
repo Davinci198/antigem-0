@@ -23,7 +23,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
@@ -280,30 +279,37 @@ class HermesChatBackend(
                 _isScanning.value = false
                 return@launch
             }
-            val semaphore = kotlinx.coroutines.sync.Semaphore(4)
+            // One batch per provider: the bridge fans out internally, so this is
+            // a handful of HTTP calls instead of one per model (448 round trips
+            // over loopback, 4 at a time, was minutes of waiting).
+            val pendingByProvider = pending.groupBy { it.providerId }
             val done = java.util.concurrent.atomic.AtomicInteger(targets.size - pending.size)
             val sid = activeSession ?: "default"
             coroutineScope {
-                pending.map { entry ->
+                pendingByProvider.map { (providerId, entries) ->
                     async {
-                        semaphore.withPermit {
-                            val body = JSONObject()
-                                .put("model", entry.modelId)
-                                .put("provider_id", entry.providerId)
-                                .toString()
-                            val json = runCatching {
-                                JSONObject(postBridge("/sessions/$sid/models/scan", body))
-                            }.getOrNull() ?: return@withPermit
+                        val payload = JSONObject()
+                            .put("provider_id", providerId)
+                            .put("timeout_ms", 15000)
+                            .put("models", org.json.JSONArray(entries.map { it.modelId }))
+                            .toString()
+                        val results = runCatching {
+                            JSONObject(postBridge("/sessions/$sid/models/scan-batch", payload))
+                                .optJSONObject("results")
+                        }.getOrNull()
+                        val byModel = entries.associateBy { it.modelId }
+                        results?.keys()?.forEach { modelId ->
+                            val o = results.optJSONObject(modelId) ?: return@forEach
+                            val entry = byModel[modelId] ?: return@forEach
                             val verdict = HermesModelHealth(
-                                ok = json.optBoolean("ok", false),
-                                latencyMs = json.optLong("latency_ms", 0L),
-                                error = json.optString("error").takeIf { it.isNotBlank() },
+                                ok = o.optBoolean("ok", false),
+                                latencyMs = o.optLong("latency_ms", 0L),
+                                error = o.optString("error").takeIf { it.isNotBlank() },
                             )
-                            val merged = _modelHealth.value + (entry.key to verdict)
-                            _modelHealth.value = merged
-                            persistHealth(merged)
+                            _modelHealth.value = _modelHealth.value + (entry.key to verdict)
                             _scanProgress.value = done.incrementAndGet() to targets.size
                         }
+                        persistHealth(_modelHealth.value)
                     }
                 }.awaitAll()
             }

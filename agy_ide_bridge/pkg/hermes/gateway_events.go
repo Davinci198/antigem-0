@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -540,4 +541,67 @@ func probeOpenAICompatible(baseURL, apiKey, model string, timeout time.Duration)
 		msg += ": " + s
 	}
 	return time.Since(started).Milliseconds(), msg
+}
+
+// handleModelScanBatch probes many models at once, server-side, with a short
+// per-model deadline. The app's per-model loop is 448 round trips over the
+// loopback bridge and serialises at 4 in flight; this does the fan-out inside
+// the bridge, where a cold model costs one probe instead of a bridge hop.
+//
+// Request: {"provider_id":"nvidia","models":["a","b",...],"timeout_ms":15000}
+// Response: {"results":{"<model>":{"ok":true,"latency_ms":1234}}}
+func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ProviderID string   `json:"provider_id"`
+		Models     []string `json:"models"`
+		TimeoutMS  int      `json:"timeout_ms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Models) == 0 {
+		writeJSON(w, http.StatusBadRequest, obj{"error": "missing models"})
+		return
+	}
+	timeout := time.Duration(body.TimeoutMS) * time.Millisecond
+	if timeout <= 0 || timeout > 60*time.Second {
+		timeout = 20 * time.Second
+	}
+	provider := findAppProvider(m.homeDir, body.ProviderID)
+	results := make(map[string]obj, len(body.Models))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// A custom app provider is probed directly against its own endpoint, which
+	// costs one HTTP call and no gateway session; presets go through the
+	// gateway (that is where their keys live).
+	direct := provider != nil && provider.BaseURL != ""
+	limit := make(chan struct{}, 12)
+	if direct {
+		limit = make(chan struct{}, 24)
+	}
+	for _, model := range body.Models {
+		if model == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(model string) {
+			defer wg.Done()
+			limit <- struct{}{}
+			defer func() { <-limit }()
+			var latency int64
+			var errMsg string
+			if direct {
+				latency, errMsg = probeOpenAICompatible(provider.BaseURL, provider.APIKey, model, timeout)
+			} else {
+				var err error
+				latency, errMsg, err = m.gw.probeModel(model, body.ProviderID, "", "", timeout)
+				if err != nil {
+					latency, errMsg = 0, err.Error()
+				}
+			}
+			mu.Lock()
+			results[model] = scanResult(latency, errMsg)
+			mu.Unlock()
+		}(model)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, obj{"results": results})
 }
