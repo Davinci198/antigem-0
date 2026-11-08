@@ -34,11 +34,15 @@
 package hermes
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,8 +137,10 @@ func (g *gateway) ensure() error {
 		return err
 	}
 	dialer := websocket.Dialer{
-		Subprotocols:     []string{gatewayProtocol, "hermes-gateway-ticket." + ticket},
-		HandshakeTimeout: 15 * time.Second,
+		Subprotocols: []string{gatewayProtocol, "hermes-gateway-ticket." + ticket},
+		// a gateway that just finished booting can take a while before its API
+		// listener accepts; 15 s cut it too close in the proot container
+		HandshakeTimeout: 30 * time.Second,
 	}
 	conn, _, err := dialer.Dial(url, nil)
 	if err != nil {
@@ -171,7 +177,8 @@ func (g *gateway) ensure() error {
 
 // attach runs `hermes gateway attach` and returns the WS URL and ticket. The
 // command also starts the gateway when it is not running (cold start: tens of
-// seconds on this phone), hence the generous timeout.
+// seconds on this phone), hence the generous timeout. Hermes builds without
+// the attach subcommand fall back to ensure + control-socket ticket.
 func (g *gateway) attach() (string, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), attachTimeout)
 	defer cancel()
@@ -182,6 +189,11 @@ func (g *gateway) attach() (string, string, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		// older Hermes builds have no `gateway attach`; the same handshake is
+		// reachable through `gateway ensure` + the home's control socket
+		if strings.Contains(stderr.String(), "is not a") && strings.Contains(stderr.String(), "gateway") {
+			return g.attachLegacy()
+		}
 		g.mu.Lock()
 		g.lastErr = fmt.Sprintf("hermes gateway attach: %v: %s", err, stderr.String())
 		g.mu.Unlock()
@@ -666,4 +678,85 @@ func (g *gateway) probeModel(model, provider, baseURL, apiKey string, timeout ti
 	case <-time.After(timeout):
 		return 0, "", fmt.Errorf("no answer in %s", timeout)
 	}
+}
+
+// attachLegacy handles Hermes builds without `gateway attach` (the container's
+// copy predates it): `hermes gateway ensure` answers the endpoint JSON, and
+// the ticket is minted over the home's gateway.sock — the same same-user
+// private control verb `hermes chat` itself authenticates with.
+func (g *gateway) attachLegacy() (string, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), attachTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, g.mgr.hermesBin, "gateway", "ensure", "--timeout", "150")
+	cmd.Dir = g.mgr.homeDir
+	var stderr tailBuffer
+	stderr.max = 1024
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		g.mu.Lock()
+		g.lastErr = fmt.Sprintf("hermes gateway ensure: %v: %s", err, stderr.String())
+		g.mu.Unlock()
+		return "", "", fmt.Errorf("hermes gateway ensure: %v: %s", err, stderr.String())
+	}
+	var res struct {
+		State    string `json:"state"`
+		Endpoint *struct {
+			APIOrigin  string `json:"api_origin"`
+			ProfileID  string `json:"profile_id"`
+			InstanceID string `json:"instance_id"`
+		} `json:"endpoint"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		return "", "", fmt.Errorf("hermes gateway ensure: bad JSON: %v", err)
+	}
+	if res.Endpoint == nil || res.Endpoint.APIOrigin == "" {
+		return "", "", fmt.Errorf("hermes gateway ensure: state %q has no endpoint", res.State)
+	}
+	ticket, err := g.controlTicket(res.Endpoint.ProfileID, res.Endpoint.InstanceID)
+	if err != nil {
+		return "", "", err
+	}
+	url := res.Endpoint.APIOrigin
+	url = strings.Replace(url, "https:", "wss:", 1)
+	url = strings.Replace(url, "http:", "ws:", 1)
+	return url + "/api/ws", ticket, nil
+}
+
+// controlTicket mints a session ticket over <home>/.hermes/gateway.sock:
+// one JSON request line in, one JSON answer line out
+// ({"ok":true,"protocol":1,"id":1,"result":{...,"ticket":...}}).
+func (g *gateway) controlTicket(profileID, instanceID string) (string, error) {
+	sock := filepath.Join(g.mgr.homeDir, ".hermes", "gateway.sock")
+	conn, err := net.DialTimeout("unix", sock, 5*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("gateway control socket: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	request := fmt.Sprintf(
+		`{"protocol":1,"id":1,"verb":"session-ticket","params":{"profile_id":%q,"instance_id":%q,"purpose":"interactive"}}`+"\n",
+		profileID, instanceID)
+	if _, err := conn.Write([]byte(request)); err != nil {
+		return "", fmt.Errorf("gateway control write: %v", err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("gateway control read: %v", err)
+	}
+	var response struct {
+		OK       bool `json:"ok"`
+		Protocol int  `json:"protocol"`
+		ID       int  `json:"id"`
+		Result   struct {
+			Ticket string `json:"ticket"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimRight(line, "\n")), &response); err != nil {
+		return "", fmt.Errorf("gateway control answer: bad JSON: %v", err)
+	}
+	if !response.OK || response.Result.Ticket == "" {
+		return "", fmt.Errorf("gateway control refused the ticket")
+	}
+	return response.Result.Ticket, nil
 }
