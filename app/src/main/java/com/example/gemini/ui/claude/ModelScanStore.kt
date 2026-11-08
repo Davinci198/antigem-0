@@ -71,10 +71,16 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
      * The filter a card shows. After a scan the default is "Working" — a list
      * of 300 models is useless with the dead ones mixed in — unless the user
      * picked another chip.
+     *
+     * A scan that broke everything is the exception: "Working" then hides every
+     * row, so the sheet opened on an empty list that read as a frozen window.
+     * Green first, then the broken ones the user needs to see.
      */
-    fun filter(provider: ClaudeProvider): ScanFilter =
-        overrides[provider.id]
-            ?: if (scannedCount(provider) > 0) ScanFilter.WORKING else ScanFilter.ALL
+    fun filter(provider: ClaudeProvider): ScanFilter = overrides[provider.id] ?: when {
+        scannedCount(provider) == 0 -> ScanFilter.ALL
+        provider.models.any { verdict(provider.id, it.id)?.ok == true } -> ScanFilter.WORKING
+        else -> ScanFilter.ALL
+    }
 
     fun setFilter(provider: ClaudeProvider, filter: ScanFilter) {
         overrides[provider.id] = filter

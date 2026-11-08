@@ -560,7 +560,13 @@ fun ClaudeModelSheet(
                     onFinished = { _, fastest -> store.finishScan(p, fastest?.model) }
                 )
             },
-            onPick = { m -> backend.selectModel("@${p.id}/${m.id}") },
+            onPick = { m ->
+                // Close first: picking a model in another provider opens a confirmation
+                // dialog, and a sheet still on screen covered it, so the chat looked
+                // frozen behind a window that could not be swiped away.
+                scanProvider = null
+                backend.selectModel("@${p.id}/${m.id}")
+            },
             onDismiss = { scanProvider = null },
         )
     }

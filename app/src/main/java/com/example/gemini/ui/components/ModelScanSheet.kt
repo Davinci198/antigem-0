@@ -275,7 +275,10 @@ fun ModelScanSheet(
                     Text(
                         when {
                             rows.isEmpty() -> "No models yet. Load them, then scan."
-                            filter == ScanFilter.WORKING && scanned > 0 -> "No model answered the last check. Use the Broken filter or re-check."
+                            filter == ScanFilter.WORKING && scanned > 0 && working == 0 ->
+                                "0 of ${rows.size} answered. Switch to All to see them."
+                            filter == ScanFilter.BROKEN && scanned > 0 && broken == 0 ->
+                                "Nothing is broken. Switch to All to see the working models."
                             else -> "Nothing matches this filter."
                         },
                         fontSize = 12.sp,
