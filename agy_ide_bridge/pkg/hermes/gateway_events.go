@@ -318,12 +318,19 @@ func (m *Manager) handleSetModel(w http.ResponseWriter, r *http.Request, sess *S
 		return
 	}
 
-	// a model Hermes knows: switch the live session now
+	// a model Hermes knows: switch the live session now. When the app also holds
+	// this provider's own endpoint and key, ride that instead of Hermes' name —
+	// the container's .env can have an empty NVIDIA_API_KEY, and Hermes answers
+	// such a turn with "unknown provider nvidia".
+	baseURL, apiKey := "", ""
+	if p := findAppProvider(m.homeDir, body.ProviderID); p != nil && p.BaseURL != "" {
+		baseURL, apiKey = p.BaseURL, p.APIKey
+	}
 	sess.mu.Lock()
 	sess.gwModel = body.Model
 	sess.gwProvider = ""
-	sess.gwBaseURL = ""
-	sess.gwAPIKey = ""
+	sess.gwBaseURL = baseURL
+	sess.gwAPIKey = apiKey
 	sess.mu.Unlock()
 	if gwID == "" {
 		writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true})
@@ -409,9 +416,21 @@ func loadAppProviders(homeDir string) []appProvider {
 }
 
 // findAppProvider returns the provider with this id, or nil.
+// findAppProvider resolves a provider by its id, and — for the picker's Hermes
+// presets — by display name too: the model list shows Hermes slugs ("nvidia")
+// while the app saves that same provider under its own id ("https"). Without
+// the name fallback the picker's provider slug reached Hermes verbatim and
+// every turn died with "unknown provider nvidia".
 func findAppProvider(homeDir, id string) *appProvider {
-	for _, p := range loadAppProviders(homeDir) {
+	providers := loadAppProviders(homeDir)
+	for _, p := range providers {
 		if p.ID == id {
+			p := p
+			return &p
+		}
+	}
+	for _, p := range providers {
+		if p.BaseURL != "" && (strings.EqualFold(p.Name, id) || strings.EqualFold(p.ID, id)) {
 			p := p
 			return &p
 		}
@@ -570,12 +589,18 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 
 	// A custom app provider is probed directly against its own endpoint, which
-	// costs one HTTP call and no gateway session; presets go through the
-	// gateway (that is where their keys live).
+	// costs one HTTP call and no gateway session. This is also the honest path
+	// for a Hermes preset the app mirrors (nvidia): a probe through Hermes would
+	// go green on the app's key while the real turn dies on an empty
+	// NVIDIA_API_KEY in the container's .env.
 	direct := provider != nil && provider.BaseURL != ""
 	limit := make(chan struct{}, 12)
 	if direct {
 		limit = make(chan struct{}, 24)
+	}
+	gatewayProvider := body.ProviderID
+	if direct {
+		gatewayProvider = ""
 	}
 	for _, model := range body.Models {
 		if model == "" {
@@ -592,7 +617,7 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 				latency, errMsg = probeOpenAICompatible(provider.BaseURL, provider.APIKey, model, timeout)
 			} else {
 				var err error
-				latency, errMsg, err = m.gw.probeModel(model, body.ProviderID, "", "", timeout)
+				latency, errMsg, err = m.gw.probeModel(model, gatewayProvider, "", "", timeout)
 				if err != nil {
 					latency, errMsg = 0, err.Error()
 				}
