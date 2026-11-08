@@ -135,6 +135,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "sessions" && r.Method == http.MethodPost:
 		m.handleCreate(w, r)
+	case path == "gateway":
+		m.handleGatewayStatus(w)
 
 	default:
 		// /sessions/{id}/…
@@ -390,6 +392,7 @@ func (s *Session) runTurn(content string) {
 		}
 	} else {
 		log.Printf("[hermes] gateway unavailable (%v); spawning hermes chat", err)
+		s.emit(obj{"type": "status", "message": fmt.Sprintf("Gateway unavailable (%v); trying a direct launch", err)})
 	}
 	s.emit(obj{"type": "status", "message": "Starting Hermes…"})
 	s.runTurnSpawn(content, hermesID)
@@ -406,6 +409,7 @@ func (s *Session) runTurnGateway(content string) bool {
 		s.emit(obj{"type": "status", "message": "Starting Hermes…"})
 		if err := g.createSession(s); err != nil {
 			log.Printf("[hermes] gateway session failed: %v", err)
+			s.emit(obj{"type": "status", "message": fmt.Sprintf("Gateway session failed (%v); trying a direct launch", err)})
 			return false
 		}
 		s.mu.Lock()

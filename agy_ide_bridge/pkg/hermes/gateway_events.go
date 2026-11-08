@@ -8,10 +8,12 @@
 package hermes
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -413,4 +415,25 @@ func appProvidersForUI(homeDir string) []obj {
 		})
 	}
 	return out
+}
+
+// handleGatewayStatus reports the warm connection's state for diagnosis:
+// whether the bridge holds a live gateway WebSocket, the endpoint it
+// attached to, why the last connect failed, and the hermes CLI's own view
+// of the gateway.
+func (m *Manager) handleGatewayStatus(w http.ResponseWriter) {
+	payload := obj{}
+	m.gw.mu.Lock()
+	payload["connected"] = m.gw.healthy && m.gw.conn != nil
+	payload["endpoint"] = m.gw.endpoint
+	payload["last_error"] = m.gw.lastErr
+	m.gw.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, m.hermesBin, "gateway", "status").CombinedOutput()
+	payload["cli_status"] = strings.TrimSpace(string(out))
+	if err != nil {
+		payload["cli_status_error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, payload)
 }

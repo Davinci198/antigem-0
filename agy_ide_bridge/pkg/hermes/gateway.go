@@ -83,7 +83,10 @@ type gateway struct {
 	views map[string]*gwView
 
 	healthy bool
-	closing bool
+	// last diagnostics for the /api/hermes/gateway status endpoint
+	endpoint string // api_origin of the last successful attach
+	lastErr  string // why the last connect attempt failed
+	closing  bool
 }
 
 // gwView is this connection's view of one gateway session.
@@ -146,6 +149,7 @@ func (g *gateway) ensure() error {
 	g.pending = make(map[int64]chan map[string]interface{})
 	g.views = make(map[string]*gwView) // subscriptions are per connection
 	g.healthy = true
+	g.lastErr = ""
 	g.mu.Unlock()
 
 	go g.readLoop()
@@ -169,9 +173,15 @@ func (g *gateway) attach() (string, string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, g.mgr.hermesBin, "gateway", "attach")
 	cmd.Dir = g.mgr.homeDir
+	var stderr tailBuffer
+	stderr.max = 1024
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", "", fmt.Errorf("hermes gateway attach: %v", err)
+		g.mu.Lock()
+		g.lastErr = fmt.Sprintf("hermes gateway attach: %v: %s", err, stderr.String())
+		g.mu.Unlock()
+		return "", "", fmt.Errorf("hermes gateway attach: %v: %s", err, stderr.String())
 	}
 	var info struct {
 		URL      string `json:"url"`
@@ -185,6 +195,9 @@ func (g *gateway) attach() (string, string, error) {
 	if info.URL == "" || info.Ticket == "" {
 		return "", "", fmt.Errorf("hermes gateway attach: no url/ticket (state %q)", info.State)
 	}
+	g.mu.Lock()
+	g.endpoint = info.URL
+	g.mu.Unlock()
 	return info.URL, info.Ticket, nil
 }
 
