@@ -169,8 +169,27 @@ fun HermesModelSheet(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                     modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = { backend.scanModels() }, enabled = !scanning && allEntries.isNotEmpty()) {
-                    Text(if (scanning) "${progress.first}/${progress.second}" else "Testează")
+                val unscanned = allEntries.count { health[it.key] == null }
+                TextButton(
+                    onClick = { backend.scanModels() },
+                    enabled = !scanning && allEntries.isNotEmpty(),
+                ) {
+                    Text(
+                        when {
+                            scanning -> "${progress.first}/${progress.second}"
+                            unscanned > 0 -> "Testează ($unscanned)"
+                            else -> "Testează din nou"
+                        }
+                    )
+                }
+            }
+            // A full re-scan is a deliberate act: the verdicts on screen survive
+            // picker visits and restarts until this is pressed.
+            if (!scanning && unscanned == 0 && allEntries.isNotEmpty()) {
+                Row(Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { backend.scanModels(force = true) }, modifier = Modifier.align(Alignment.CenterVertically)) {
+                        Text("Rescanează toate", fontSize = 12.sp)
+                    }
                 }
             }
 

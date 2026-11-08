@@ -169,9 +169,51 @@ class HermesChatBackend(
     /** A note from the bridge about a model switch (deferred / refused). */
     val modelMessage: StateFlow<String?> = _modelMessage.asStateFlow()
 
-    /** Health verdicts from the last scan, keyed by "providerId|modelId". */
-    private val _modelHealth = MutableStateFlow<Map<String, HermesModelHealth>>(emptyMap())
+    /** Health verdicts from the last scan, keyed by "providerId|modelId".
+     * Persisted: a scan result stays on screen across picker visits, app
+     * restarts and model re-selection until the user scans again. */
+    private val healthPrefs =
+        application.getSharedPreferences("hermes_model_health", android.content.Context.MODE_PRIVATE)
+    private val _modelHealth = MutableStateFlow<Map<String, HermesModelHealth>>(loadStoredHealth())
     val modelHealth: StateFlow<Map<String, HermesModelHealth>> = _modelHealth.asStateFlow()
+
+    /** Restores verdicts written by an earlier run (scan results outlive the app). */
+    private fun loadStoredHealth(): Map<String, HermesModelHealth> {
+        val raw = runCatching { healthPrefs.getString("verdicts", null) }.getOrNull() ?: return emptyMap()
+        return runCatching {
+            val json = JSONObject(raw)
+            buildMap {
+                json.keys().forEach { key ->
+                    val o = json.optJSONObject(key) ?: return@forEach
+                    put(
+                        key,
+                        HermesModelHealth(
+                            ok = o.optBoolean("ok", false),
+                            latencyMs = o.optLong("latency_ms", 0L),
+                            error = o.optString("error").takeIf { it.isNotBlank() },
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Writes the current verdicts so a restart keeps them. */
+    private fun persistHealth(verdicts: Map<String, HermesModelHealth>) {
+        runCatching {
+            val json = JSONObject()
+            verdicts.forEach { (key, v) ->
+                json.put(
+                    key,
+                    JSONObject()
+                        .put("ok", v.ok)
+                        .put("latency_ms", v.latencyMs)
+                        .put("error", v.error ?: "")
+                )
+            }
+            healthPrefs.edit().putString("verdicts", json.toString()).apply()
+        }
+    }
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
@@ -210,18 +252,39 @@ class HermesChatBackend(
     }
 
     /** Probes every model with a one-word turn and records ok/latency live. */
-    fun scanModels() {
+    /**
+     * Probes models with a one-word turn and records ok/latency live.
+     *
+     * Verdicts are sticky: a model already scanned keeps its dot, latency and
+     * placement in the Funcționale/Defecte lists across picker visits, model
+     * re-selection and app restarts. Only unscanned models are probed.
+     *
+     * @param force re-probe everything (the "Testează din nou" action).
+     */
+    fun scanModels(force: Boolean = false) {
         if (_isScanning.value) return
         val targets = modelEntries()
         if (targets.isEmpty()) return
         backendScope.launch {
             _isScanning.value = true
-            _scanProgress.value = 0 to targets.size
+            if (force) {
+                _modelHealth.value = emptyMap()
+                persistHealth(emptyMap())
+            }
+            // Resume: models verified by an earlier scan keep their verdict and
+            // are not probed again; only missing entries are tested.
+            val alreadyKnown = _modelHealth.value
+            val pending = targets.filter { alreadyKnown[it.key] == null }
+            _scanProgress.value = (targets.size - pending.size) to targets.size
+            if (pending.isEmpty()) {
+                _isScanning.value = false
+                return@launch
+            }
             val semaphore = kotlinx.coroutines.sync.Semaphore(4)
-            val done = java.util.concurrent.atomic.AtomicInteger(0)
+            val done = java.util.concurrent.atomic.AtomicInteger(targets.size - pending.size)
             val sid = activeSession ?: "default"
             coroutineScope {
-                targets.map { entry ->
+                pending.map { entry ->
                     async {
                         semaphore.withPermit {
                             val body = JSONObject()
@@ -236,7 +299,9 @@ class HermesChatBackend(
                                 latencyMs = json.optLong("latency_ms", 0L),
                                 error = json.optString("error").takeIf { it.isNotBlank() },
                             )
-                            _modelHealth.value = _modelHealth.value + (entry.key to verdict)
+                            val merged = _modelHealth.value + (entry.key to verdict)
+                            _modelHealth.value = merged
+                            persistHealth(merged)
                             _scanProgress.value = done.incrementAndGet() to targets.size
                         }
                     }
