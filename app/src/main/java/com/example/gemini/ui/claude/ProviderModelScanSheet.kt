@@ -43,7 +43,12 @@ fun ProviderModelScanPage(
         rows = rows,
         verdictFor = { row ->
             store.verdicts[store.key(provider.id, row.modelId)]?.let {
-                ScanVerdict(ok = it.ok, latencyMs = it.latency_ms, status = it.status, error = it.error)
+                ScanVerdict(
+                    kind = store.kindOf(provider.id, row.modelId),
+                    latencyMs = it.latency_ms,
+                    status = it.status,
+                    detail = it.error.takeIf { e -> e.isNotBlank() },
+                )
             }
         },
         filter = store.filter(provider),

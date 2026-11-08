@@ -59,14 +59,6 @@ data class ScanRowModel(
     val detail: String,
 )
 
-/** A scan verdict as the UI shows it, independent of which backend produced it. */
-data class ScanVerdict(
-    val ok: Boolean,
-    val latencyMs: Long,
-    val status: Int = 0,
-    val error: String? = null,
-)
-
 /**
  * The scan page itself: search, filters, verdicts and the scan button.
  *
@@ -98,7 +90,13 @@ fun ModelScanPage(
     val cardColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
 
     val working = rows.count { verdictFor(it)?.ok == true }
-    val broken = rows.count { verdictFor(it)?.ok == false }
+    // "Broken" means the model itself is unusable. A throttled or unpaid model
+    // is a fact about the key, not the model, and Mobile-Harness draws the same
+    // line — counting 429s as broken made a healthy catalog look dead.
+    val broken = rows.count { verdictFor(it)?.kind?.isBroken == true }
+    val throttled = rows.count { verdictFor(it)?.kind == ScanKind.THROTTLED }
+    val noCredits = rows.count { verdictFor(it)?.kind == ScanKind.CREDITS }
+    val timedOut = rows.count { verdictFor(it)?.kind == ScanKind.TIMEOUT }
     val scanned = rows.count { verdictFor(it) != null }
 
     val matchingSearch = rows.filter { r ->
@@ -141,7 +139,12 @@ fun ModelScanPage(
             when {
                 scanning -> "${progress.first} of ${progress.second} checked · each probe times a real answer"
                 scanned == 0 -> "${rows.size} models · run a check to see which answer and how fast"
-                else -> "$working working · $broken broken · pressed Re-check to test them again"
+                else -> buildString {
+                    append("$working working · $broken broken")
+                    if (throttled > 0) append(" · $throttled throttled (429)")
+                    if (noCredits > 0) append(" · $noCredits unpaid (402)")
+                    if (timedOut > 0) append(" · $timedOut slow")
+                }
             },
             fontSize = 11.sp,
             lineHeight = 15.sp,
@@ -260,7 +263,10 @@ fun ModelScanPage(
                                 Modifier.padding(end = 9.dp).size(8.dp).clip(CircleShape).background(
                                     when {
                                         v == null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
-                                        v.ok -> ScanGreen
+                                        v.kind == ScanKind.OK -> ScanGreen
+                                        v.kind == ScanKind.THROTTLED ||
+                                            v.kind == ScanKind.CREDITS ||
+                                            v.kind == ScanKind.TIMEOUT -> ScanAmber
                                         else -> ScanRed
                                     }
                                 )
@@ -289,14 +295,14 @@ fun ModelScanPage(
                             v?.let { r ->
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    when {
-                                        r.ok -> "%.1fs".format(r.latencyMs / 1000.0)
-                                        r.status > 0 -> "HTTP ${r.status}"
-                                        else -> "failed"
-                                    },
+                                    r.badge(),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium,
-                                    color = if (r.ok) ScanGreen else ScanRed,
+                                    color = when {
+                                        r.kind == ScanKind.OK -> ScanGreen
+                                        r.kind.isBroken -> ScanRed
+                                        else -> ScanAmber
+                                    },
                                 )
                             }
                         }
@@ -310,3 +316,5 @@ fun ModelScanPage(
 /** Probe verdict colours, shared so both agents' scans read the same. */
 val ScanGreen = Color(0xFF4CAF50)
 val ScanRed = Color(0xFFE53935)
+/** Throttled / unpaid / slow: not the model's fault, so not red either. */
+val ScanAmber = Color(0xFFF0A030)

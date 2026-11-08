@@ -1,9 +1,10 @@
+package com.example.gemini.ui.agents
+
 import com.example.gemini.ui.components.ScanRed
+import com.example.gemini.ui.components.ScanAmber
 import com.example.gemini.ui.components.ScanGreen
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
-package com.example.gemini.ui.agents
-
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -61,6 +62,8 @@ import com.example.gemini.ui.components.ModelScanPage
 import com.example.gemini.ui.components.ScanFilter
 import com.example.gemini.ui.components.ScanRowModel
 import com.example.gemini.ui.components.ScanVerdict
+import com.example.gemini.ui.components.ScanKind
+import com.example.gemini.ui.components.scanKindOf
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.components.accent
 
@@ -144,7 +147,13 @@ fun HermesModelSheet(
                 accent = accent,
                 rows = rows,
                 verdictFor = { row ->
-                    health[row.value]?.let { ScanVerdict(ok = it.ok, latencyMs = it.latencyMs, error = it.error) }
+                    health[row.value]?.let {
+                        ScanVerdict(
+                            kind = scanKindOf(it.ok, 0, it.error),
+                            latencyMs = it.latencyMs,
+                            detail = it.error,
+                        )
+                    }
                 },
                 filter = when (filter) {
                     HealthFilter.ALL -> ScanFilter.ALL
@@ -238,6 +247,7 @@ fun HermesModelSheet(
                                         when {
                                             v == null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
                                             v.ok -> ScanGreen
+                                            v.error?.contains("429") == true -> ScanAmber
                                             else -> ScanRed
                                         }
                                     )

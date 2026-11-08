@@ -6,6 +6,8 @@ import android.content.SharedPreferences
 import com.example.gemini.data.agent.claude.ClaudeProvider
 import com.example.gemini.data.agent.claude.ClaudeProviderTestResult
 import com.example.gemini.ui.components.ScanFilter
+import com.example.gemini.ui.components.ScanKind
+import com.example.gemini.ui.components.scanKindOf
 import org.json.JSONObject
 
 /**
@@ -43,6 +45,12 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
 
     fun verdict(providerId: String, modelId: String): ClaudeProviderTestResult? =
         verdicts[key(providerId, modelId)]
+
+    /** The verdict's kind, so the UI can tell a 429 from a dead model. */
+    fun kindOf(providerId: String, modelId: String): ScanKind {
+        val v = verdicts[key(providerId, modelId)] ?: return ScanKind.ERROR
+        return scanKindOf(v.ok, v.status, v.error)
+    }
 
     /** The provider's models with their verdicts, in the provider's own order. */
     fun entries(provider: ClaudeProvider): List<ScanEntry> =

@@ -656,21 +656,35 @@ func probeOpenAICompatible(baseURL, apiKey, model string, timeout time.Duration)
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	client := &http.Client{Timeout: timeout}
-	started := time.Now()
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, err.Error()
+	// A 429 is a throttle, not a verdict about the model. Back off and ask
+	// again; only the last attempt's answer is reported. Without this a scan
+	// that ran 24 probes at once marked 12 of 13 OpenRouter models broken.
+	var latency int64
+	var msg string
+	for attempt := 1; attempt <= 3; attempt++ {
+		if attempt > 1 {
+			time.Sleep(time.Duration(500*(1<<(attempt-2))) * time.Millisecond)
+		}
+		started := time.Now()
+		resp, err := client.Do(req.Clone(context.Background()))
+		if err != nil {
+			return 0, err.Error()
+		}
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		latency = time.Since(started).Milliseconds()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return latency, ""
+		}
+		msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if s := strings.TrimSpace(string(snippet)); s != "" {
+			msg += ": " + s
+		}
+		if resp.StatusCode != http.StatusTooManyRequests {
+			return latency, msg
+		}
 	}
-	defer resp.Body.Close()
-	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return time.Since(started).Milliseconds(), ""
-	}
-	msg := fmt.Sprintf("HTTP %d", resp.StatusCode)
-	if s := strings.TrimSpace(string(snippet)); s != "" {
-		msg += ": " + s
-	}
-	return time.Since(started).Milliseconds(), msg
+	return latency, msg
 }
 
 // handleModelScanBatch probes many models at once, server-side, with a short
@@ -705,10 +719,10 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	// go green on the app's key while the real turn dies on an empty
 	// NVIDIA_API_KEY in the container's .env.
 	direct := provider != nil && provider.BaseURL != ""
-	limit := make(chan struct{}, 12)
-	if direct {
-		limit = make(chan struct{}, 24)
-	}
+	// Five at a time, like Mobile-Harness. 24 concurrent probes tripped
+	// OpenRouter's per-key limiter and 12 of 13 models came back 429, which the
+	// app then reported as "broken" — the scan was the problem, not the models.
+	limit := make(chan struct{}, 5)
 	gatewayProvider := body.ProviderID
 	if direct {
 		gatewayProvider = ""
