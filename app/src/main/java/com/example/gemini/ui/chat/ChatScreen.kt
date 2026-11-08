@@ -157,6 +157,12 @@ fun ChatScreen(
     val currentConv by viewModel.currentConversation.collectAsState()
     val newChatAgent by viewModel.newChatAgent.collectAsState()
     val isClaudeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
+    val isHermesChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.HERMES
+    val hermesBackend = viewModel.hermesBackend
+    val hermesModels by hermesBackend.models.collectAsState()
+    val hermesSelectedModelId by hermesBackend.selectedModelId.collectAsState()
+    val hermesSelectedProviderId by hermesBackend.selectedProviderId.collectAsState()
+    val hermesModelsRefreshing by hermesBackend.isRefreshingModels.collectAsState()
     val isFreshNewChat = currentConv == null || currentConv?.title == "New Chat"
     val claudeBackend = viewModel.claudeBackend
     val claudePending by claudeBackend.pendingPermissions.collectAsState()
@@ -198,6 +204,11 @@ fun ChatScreen(
     val chatDividersEnabled by viewModel.authPreferences.chatDividersEnabled.collectAsState(initial = true)
     val claudeCompacting by claudeBackend.isCompacting.collectAsState()
     val bridgeStatusMessage by viewModel.bridgeStatusMessage.collectAsState()
+    // keep Hermes' model picker warm for this chat: the fetch is session-scoped
+    // once a bridge session exists, so it also reflects the running model
+    LaunchedEffect(isHermesChat, currentConv?.id) {
+        if (isHermesChat) hermesBackend.refreshModels()
+    }
     val isServerOnline by viewModel.isServerOnline.collectAsState()
     val isReconnecting by viewModel.isReconnecting.collectAsState()
     val isBridgeOnline by viewModel.isBridgeOnline.collectAsState()
@@ -768,8 +779,8 @@ fun ChatScreen(
         lastToolCalls.any { it.status == "PENDING_APPROVAL" || it.status == "AWAITING_CHOICE" }
     val showWorkingRow = workingAnimationEnabled && (isRunningOrStreaming || holdingTail) && !waitingForUser && !footerShown
 
-    val currentModel = if (isClaudeChat) {
-        claudeModelList.find { it.id == selectedModelId } ?: AiModel(
+    val currentModel = when {
+        isClaudeChat -> claudeModelList.find { it.id == selectedModelId } ?: AiModel(
             id = selectedModelId.ifBlank { "default" },
             displayName = when {
                 claudeModelsRefreshing -> "Loading models…"
@@ -778,7 +789,21 @@ fun ChatScreen(
             },
             family = com.example.gemini.domain.model.ModelFamily.CLAUDE
         )
-    } else AiModel.findInList(enabledModels, selectedModelId, preferredModelName)
+        isHermesChat -> {
+            // the pill shows the picked model: a preset id, "@provider/model"
+            // for a custom provider, or what Hermes is actually running
+            val data = hermesModels
+            val label = when {
+                hermesSelectedProviderId.isNotBlank() -> "@${hermesSelectedProviderId}/${hermesSelectedModelId}"
+                hermesSelectedModelId.isNotBlank() -> hermesSelectedModelId
+                data?.currentModel?.isNotBlank() == true -> data.currentModel
+                hermesModelsRefreshing -> "Loading models…"
+                else -> "Choose model"
+            }
+            AiModel(id = hermesSelectedModelId.ifBlank { "hermes-default" }, displayName = label)
+        }
+        else -> AiModel.findInList(enabledModels, selectedModelId, preferredModelName)
+    }
     val currentQuota = quotas.find { it.modelId == selectedModelId }
 
     val activeChatProject by TermuxDaemonManager.activeProject.collectAsState()
@@ -2102,7 +2127,9 @@ fun ChatScreen(
 
     // Model Selector Bottom Sheet (Active Model at Top & Expandable Categories)
     if (isClaudeChat) com.example.gemini.ui.claude.ClaudeProviderSwitchDialog(claudeBackend)
-    if (showModelSelector && isClaudeChat) {
+    if (showModelSelector && isHermesChat) {
+        com.example.gemini.ui.agents.HermesModelSheet(hermesBackend) { showModelSelector = false }
+    } else if (showModelSelector && isClaudeChat) {
         com.example.gemini.ui.claude.ClaudeModelSheet(claudeBackend, viewModel.claudeAccount) { showModelSelector = false }
     } else if (showModelSelector) {
         ModelSelectorBottomSheet(
