@@ -29,7 +29,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -127,10 +126,10 @@ fun ModelScanSheet(
         ScanFilter.ALL -> matchingSearch
     }
 
-    val sheetState = rememberModalBottomSheetState(
-        skipPartiallyExpanded = true,
-        confirmValueChange = { it != SheetValue.Hidden }
-    )
+    // Do NOT veto SheetValue.Hidden here. `confirmValueChange = { it != Hidden }`
+    // rejects the very transition hide() and a swipe-down need, so the sheet
+    // stayed on screen while the chat underneath ignored every gesture.
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     fun closeSheet() {
         scope.launch { sheetState.hide() }.invokeOnCompletion {
             if (!sheetState.isVisible) onDismiss()
