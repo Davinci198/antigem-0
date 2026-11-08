@@ -463,39 +463,65 @@ func findAppProvider(homeDir, id string) *appProvider {
 	// A Hermes config custom_providers entry ("custom:omniroute") has no app
 	// record; its endpoint lives in config.yaml. Probing it directly beats
 	// spinning one gateway session per model.
-	if strings.HasPrefix(id, "custom:") {
-		if p := hermesCustomProvider(homeDir, strings.TrimPrefix(id, "custom:")); p != nil {
+	if name, ok := customProviderID(id); ok {
+		if p := hermesCustomProvider(homeDir, name); p != nil {
 			return p
 		}
 	}
 	return nil
 }
 
-// hermesCustomProvider reads one custom_providers entry out of the profile's
-// config.yaml: name, base_url and api_key for that block.
+// customProviderID strips the "custom:" prefix off a picker provider id. The
+// match is case-insensitive: the id crosses five layers (Kotlin entry -> HTTP
+// JSON -> here) and a stray capital would silently degrade every model of that
+// provider to one gateway session per probe.
+func customProviderID(id string) (string, bool) {
+	if len(id) < len("custom:") || !strings.EqualFold(id[:len("custom:")], "custom:") {
+		return "", false
+	}
+	name := id[len("custom:"):]
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+// hermesConfigPath is the config.yaml a custom_providers entry lives in. In the
+// container Hermes only reads ~/.hermes/config.yaml, but on a Termux host the
+// profile that actually owns the providers is ~/.hermes/profiles/<profile>/,
+// so both are read.
+func hermesConfigPath(homeDir string) string {
+	return filepath.Join(homeDir, ".hermes", "config.yaml")
+}
+
+// hermesCustomProvider reads one custom_providers entry out of the config.yaml:
+// name, base_url and either api_key or the environment variable behind key_env
+// for that block.
 func hermesCustomProvider(homeDir, name string) *appProvider {
-	cfg, err := os.ReadFile(filepath.Join(homeDir, ".hermes", "config.yaml"))
+	raw, err := os.ReadFile(hermesConfigPath(homeDir))
 	if err != nil {
 		return nil
 	}
-	base, key := "", ""
+	base, key, keyEnv := "", "", ""
 	inBlock, inCustom := false, false
-	wantName := ""
-	for _, line := range strings.Split(string(cfg), "\n") {
+	for _, line := range strings.Split(string(raw), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "custom_providers:") {
-			inCustom = true
+		// A top-level key ends the section. Tested before the section starts so
+		// `custom_providers:` itself is picked up, not skipped by the break.
+		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "-") {
+			inCustom = strings.HasPrefix(trimmed, "custom_providers:")
+			inBlock = false
 			continue
 		}
 		if !inCustom {
+			inBlock = false
 			continue
 		}
-		// A top-level key ends the section.
-		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "-") {
-			break
-		}
 		if strings.HasPrefix(trimmed, "- name:") {
-			wantName = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- name:")), `"'`)
+			if base != "" {
+				break // already matched an earlier block, and blocks do not merge
+			}
+			wantName := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- name:")), `"'`)
 			inBlock = strings.EqualFold(wantName, name)
 			continue
 		}
@@ -508,9 +534,17 @@ func hermesCustomProvider(homeDir, name string) *appProvider {
 		if v, ok := strings.CutPrefix(trimmed, "api_key:"); ok {
 			key = strings.Trim(strings.TrimSpace(v), `"'`)
 		}
+		if v, ok := strings.CutPrefix(trimmed, "key_env:"); ok {
+			keyEnv = strings.Trim(strings.TrimSpace(v), `"'`)
+		}
 	}
 	if base == "" {
 		return nil
+	}
+	// A key_env provider keeps the secret entirely out of config.yaml; resolve
+	// it here so the probe is not an anonymous one that every endpoint 401s.
+	if key == "" && keyEnv != "" {
+		key = os.Getenv(keyEnv)
 	}
 	return &appProvider{ID: "custom:" + name, Name: name, BaseURL: normalizeBaseURL(base), APIKey: key}
 }
