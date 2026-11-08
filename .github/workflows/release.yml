@@ -35,6 +35,12 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
+      # The wrapper resolves services.gradle.org, which redirects to the GitHub
+      # Releases CDN. That CDN answers 504 for minutes at a time and the wrapper
+      # has no retry of its own, so one bad minute fails the whole build.
+      - name: Prefetch Gradle distribution (with retries)
+        run: bash scripts/prefetch_gradle.sh
+
       - name: Parse version.json
         id: version
         run: |
@@ -58,7 +64,18 @@ jobs:
       - name: Build Release APKs
         run: |
           chmod +x gradlew scripts/build_all_apks.sh
-          ./scripts/build_all_apks.sh --release
+          # One download hiccup must not sink the job.
+          for attempt in 1 2 3; do
+            echo "build attempt $attempt"
+            if ./scripts/build_all_apks.sh --release; then
+              exit 0
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::release build failed after 3 attempts"
+              exit 1
+            fi
+            sleep 20
+          done
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
