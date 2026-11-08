@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.example.gemini.ui.components.ScanFilter
 import com.example.gemini.ui.components.ScanGreen
 import com.example.gemini.ui.components.ScanRed
 import androidx.compose.ui.text.font.FontWeight
