@@ -15,6 +15,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +43,52 @@ private const val MAX_WS_RETRIES = 3
 
 /** How long sendMessage waits for the stream socket to open before sending anyway. */
 private const val WS_OPEN_TIMEOUT_MS = 5_000L
+
+/** One provider row of Hermes' own model picker (the gateway's model.options). */
+data class HermesPresetProvider(val slug: String, val name: String, val models: List<String>)
+
+/** One model of an app custom provider (the bridge strips the key). */
+data class HermesCustomModel(val id: String, val name: String)
+
+/** One app custom provider (~/.claude/agy_providers.json, shared with the Claude chats). */
+data class HermesCustomProvider(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val keyHint: String,
+    val models: List<HermesCustomModel>
+)
+
+/** The Hermes model picker payload: Hermes' own presets plus the app's custom providers. */
+data class HermesModels(
+    val presets: List<HermesPresetProvider>,
+    val currentModel: String,
+    val currentProvider: String,
+    val custom: List<HermesCustomProvider>,
+    val error: String?
+) {
+    /** The model id currently selected in the picker, or "" for Hermes' default. */
+    fun findPresetModel(id: String): String? = presets.firstOrNull { id in it.models }?.let { id }
+}
+
+/** One row of the model scan sheet: a probeable model and where it lives. */
+data class HermesModelEntry(
+    val modelId: String,
+    val label: String,
+    val providerId: String,
+    val providerLabel: String,
+    val isCustom: Boolean,
+) {
+    /** Stable key for health results and list items. */
+    val key: String get() = "$providerId|$modelId"
+}
+
+/** One probe's verdict, from POST /models/scan. */
+data class HermesModelHealth(
+    val ok: Boolean,
+    val latencyMs: Long,
+    val error: String? = null,
+)
 
 /**
  * Chat backend for Hermes Agent.
@@ -97,6 +146,277 @@ class HermesChatBackend(
 
     /** Completes once the current stream socket is open (true) or failed (false). */
     private var wsOpened = CompletableDeferred<Boolean>()
+
+    // ── model selection ────────────────────────────────────────────────────
+
+    private val _models = MutableStateFlow<HermesModels?>(null)
+    /** The model picker payload (Hermes presets + the app's custom providers). */
+    val models: StateFlow<HermesModels?> = _models.asStateFlow()
+
+    private val _isRefreshingModels = MutableStateFlow(false)
+    val isRefreshingModels: StateFlow<Boolean> = _isRefreshingModels.asStateFlow()
+
+    private val _selectedModelId = MutableStateFlow("")
+    /** Raw model id of the picker selection ("" = Hermes' own default). */
+    val selectedModelId: StateFlow<String> = _selectedModelId.asStateFlow()
+
+    private val _selectedProviderId = MutableStateFlow("")
+    /** The app custom provider the selection runs on ("" = Hermes' own providers). */
+    val selectedProviderId: StateFlow<String> = _selectedProviderId.asStateFlow()
+
+    private val _modelMessage = MutableStateFlow<String?>(null)
+    /** A note from the bridge about a model switch (deferred / refused). */
+    val modelMessage: StateFlow<String?> = _modelMessage.asStateFlow()
+
+    /** Health verdicts from the last scan, keyed by "providerId|modelId".
+     * Persisted: a scan result stays on screen across picker visits, app
+     * restarts and model re-selection until the user scans again. */
+    private val healthPrefs =
+        application.getSharedPreferences("hermes_model_health", android.content.Context.MODE_PRIVATE)
+    private val _modelHealth = MutableStateFlow<Map<String, HermesModelHealth>>(loadStoredHealth())
+    val modelHealth: StateFlow<Map<String, HermesModelHealth>> = _modelHealth.asStateFlow()
+
+    /** Restores verdicts written by an earlier run (scan results outlive the app). */
+    private fun loadStoredHealth(): Map<String, HermesModelHealth> {
+        val raw = runCatching { healthPrefs.getString("verdicts", null) }.getOrNull() ?: return emptyMap()
+        return runCatching {
+            val json = JSONObject(raw)
+            buildMap {
+                json.keys().forEach { key ->
+                    val o = json.optJSONObject(key) ?: return@forEach
+                    put(
+                        key,
+                        HermesModelHealth(
+                            ok = o.optBoolean("ok", false),
+                            latencyMs = o.optLong("latency_ms", 0L),
+                            error = o.optString("error").takeIf { it.isNotBlank() },
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Writes the current verdicts so a restart keeps them. */
+    private fun persistHealth(verdicts: Map<String, HermesModelHealth>) {
+        runCatching {
+            val json = JSONObject()
+            verdicts.forEach { (key, v) ->
+                json.put(
+                    key,
+                    JSONObject()
+                        .put("ok", v.ok)
+                        .put("latency_ms", v.latencyMs)
+                        .put("error", v.error ?: "")
+                )
+            }
+            healthPrefs.edit().putString("verdicts", json.toString()).apply()
+        }
+    }
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    /** Scan progress: models verified so far to total. */
+    private val _scanProgress = MutableStateFlow(0 to 0)
+    val scanProgress: StateFlow<Pair<Int, Int>> = _scanProgress.asStateFlow()
+
+    /** One entry per probeable model, flattened from the picker payload. */
+    fun modelEntries(): List<HermesModelEntry> {
+        val data = _models.value ?: return emptyList()
+        val entries = mutableListOf<HermesModelEntry>()
+        data.presets.forEach { p ->
+            p.models.forEach { id ->
+                entries += HermesModelEntry(
+                    modelId = id,
+                    label = id.substringAfterLast('/', id),
+                    providerId = p.slug,
+                    providerLabel = p.name.ifBlank { p.slug },
+                    isCustom = false,
+                )
+            }
+        }
+        data.custom.forEach { p ->
+            p.models.forEach { m ->
+                entries += HermesModelEntry(
+                    modelId = m.id,
+                    label = m.name.takeIf { it.isNotBlank() } ?: m.id.substringAfterLast('/', m.id),
+                    providerId = p.id,
+                    providerLabel = p.name.ifBlank { p.id },
+                    isCustom = true,
+                )
+            }
+        }
+        return entries.distinctBy { it.key }
+    }
+
+    /** Probes every model with a one-word turn and records ok/latency live. */
+    /**
+     * Probes models with a one-word turn and records ok/latency live.
+     *
+     * Verdicts are sticky: a model already scanned keeps its dot, latency and
+     * placement in the Funcționale/Defecte lists across picker visits, model
+     * re-selection and app restarts. Only unscanned models are probed.
+     *
+     * @param force re-probe everything (the "Testează din nou" action).
+     */
+    fun scanModels(force: Boolean = false) {
+        if (_isScanning.value) return
+        val targets = modelEntries()
+        if (targets.isEmpty()) return
+        backendScope.launch {
+            _isScanning.value = true
+            if (force) {
+                _modelHealth.value = emptyMap()
+                persistHealth(emptyMap())
+            }
+            // Resume: models verified by an earlier scan keep their verdict and
+            // are not probed again; only missing entries are tested.
+            val alreadyKnown = _modelHealth.value
+            val pending = targets.filter { alreadyKnown[it.key] == null }
+            _scanProgress.value = (targets.size - pending.size) to targets.size
+            if (pending.isEmpty()) {
+                _isScanning.value = false
+                return@launch
+            }
+            // One batch per provider: the bridge fans out internally, so this is
+            // a handful of HTTP calls instead of one per model (448 round trips
+            // over loopback, 4 at a time, was minutes of waiting).
+            val pendingByProvider = pending.groupBy { it.providerId }
+            val done = java.util.concurrent.atomic.AtomicInteger(targets.size - pending.size)
+            val sid = activeSession ?: "default"
+            coroutineScope {
+                pendingByProvider.map { (providerId, entries) ->
+                    async {
+                        val payload = JSONObject()
+                            .put("provider_id", providerId)
+                            .put("timeout_ms", 15000)
+                            .put("models", org.json.JSONArray(entries.map { it.modelId }))
+                            .toString()
+                        val results = runCatching {
+                            JSONObject(postBridge("/sessions/$sid/models/scan-batch", payload))
+                                .optJSONObject("results")
+                        }.getOrNull()
+                        val byModel = entries.associateBy { it.modelId }
+                        results?.keys()?.forEach { modelId ->
+                            val o = results.optJSONObject(modelId) ?: return@forEach
+                            val entry = byModel[modelId] ?: return@forEach
+                            val verdict = HermesModelHealth(
+                                ok = o.optBoolean("ok", false),
+                                latencyMs = o.optLong("latency_ms", 0L),
+                                error = o.optString("error").takeIf { it.isNotBlank() },
+                            )
+                            _modelHealth.value = _modelHealth.value + (entry.key to verdict)
+                            _scanProgress.value = done.incrementAndGet() to targets.size
+                        }
+                        persistHealth(_modelHealth.value)
+                    }
+                }.awaitAll()
+            }
+            _isScanning.value = false
+        }
+    }
+
+    /** Fetches the model picker payload. Works before the first turn too:
+     * the bridge answers with the profile defaults when no session is live. */
+    fun refreshModels() {
+        backendScope.launch {
+            _isRefreshingModels.value = true
+            runCatching {
+                val sid = activeSession ?: "default"
+                JSONObject(getBridge("/sessions/$sid/models"))
+            }.onSuccess { json ->
+                _models.value = parseModels(json)
+            }.onFailure {
+                _models.value = _models.value?.copy(error = it.message) ?: HermesModels(emptyList(), "", "", emptyList(), it.message)
+            }
+            _isRefreshingModels.value = false
+        }
+    }
+
+    private fun parseModels(json: JSONObject): HermesModels {
+        val presets = mutableListOf<HermesPresetProvider>()
+        val providers = json.optJSONObject("presets")?.optJSONArray("providers")
+        if (providers != null) {
+            for (i in 0 until providers.length()) {
+                val p = providers.optJSONObject(i) ?: continue
+                val ids = mutableListOf<String>()
+                val arr = p.optJSONArray("models")
+                if (arr != null) {
+                    for (j in 0 until arr.length()) {
+                        when (val entry = arr.opt(j)) {
+                            is String -> ids += entry
+                            is JSONObject -> entry.optString("id").takeIf { it.isNotBlank() }?.let { ids += it }
+                        }
+                    }
+                }
+                presets += HermesPresetProvider(
+                    slug = p.optString("slug"),
+                    name = p.optString("name").ifBlank { p.optString("slug") },
+                    models = ids
+                )
+            }
+        }
+        val custom = mutableListOf<HermesCustomProvider>()
+        val customs = json.optJSONArray("custom")
+        if (customs != null) {
+            for (i in 0 until customs.length()) {
+                val p = customs.optJSONObject(i) ?: continue
+                val models = mutableListOf<HermesCustomModel>()
+                val arr = p.optJSONArray("models")
+                if (arr != null) {
+                    for (j in 0 until arr.length()) {
+                        val m = arr.optJSONObject(j) ?: continue
+                        models += HermesCustomModel(m.optString("id"), m.optString("name"))
+                    }
+                }
+                custom += HermesCustomProvider(
+                    id = p.optString("id"),
+                    name = p.optString("name").ifBlank { p.optString("id") },
+                    baseUrl = p.optString("base_url"),
+                    keyHint = p.optString("api_key_hint"),
+                    models = models
+                )
+            }
+        }
+        val presetObj = json.optJSONObject("presets")
+        return HermesModels(
+            presets = presets,
+            currentModel = presetObj?.optString("model").orEmpty(),
+            currentProvider = presetObj?.optString("provider").orEmpty(),
+            custom = custom,
+            error = json.optString("presets_error").takeIf { it.isNotBlank() }
+        )
+    }
+
+    /** Picks a model for this chat. Custom models ride a provider id; the
+     * bridge resolves its endpoint and key (the app never holds them). */
+    fun selectModel(modelId: String, providerId: String) {
+        _selectedModelId.value = modelId
+        _selectedProviderId.value = providerId
+        _modelMessage.value = null
+        val sid = activeSession ?: return
+        backendScope.launch {
+            runCatching {
+                postBridge(
+                    "/sessions/$sid/model",
+                    JSONObject()
+                        .put("model", modelId)
+                        .put("provider_id", providerId)
+                        .toString()
+                )
+            }.onSuccess { resp ->
+                val o = runCatching { JSONObject(resp) }.getOrNull() ?: return@onSuccess
+                if (!o.optBoolean("success", true)) {
+                    _modelMessage.value = o.optString("error").ifBlank { o.optString("message") }
+                } else if (o.optBoolean("deferred", false)) {
+                    _modelMessage.value = o.optString("message").takeIf { it.isNotBlank() }
+                }
+            }.onFailure {
+                _modelMessage.value = "Model switch failed: ${it.message}"
+            }
+        }
+    }
 
     /**
      * Long-lived stream socket. The shared [AgyBridgeService.wsClient] pings every
@@ -227,6 +547,7 @@ class HermesChatBackend(
             activeSession = newSid
             updateConversation(conv.copy(title = conv.title))
             reconnectWs(newSid)
+            refreshModels()
             newSid
         }
         // give the stream socket a moment to open so the first events are not missed
@@ -248,8 +569,18 @@ class HermesChatBackend(
         val body = JSONObject()
             .put("conversation_id", conv.id)
             .put("title", conv.title)
-            .toString()
-        val resp = postBridge("/sessions", body)
+        // the picked model rides the create: a preset goes as its id, a
+        // custom provider's model as model + provider_id (the bridge adds
+        // the endpoint and key from its own store)
+        val provider = _selectedProviderId.value
+        val model = _selectedModelId.value
+        if (provider.isNotBlank()) {
+            body.put("provider_id", provider)
+            if (model.isNotBlank()) body.put("model", model)
+        } else if (model.isNotBlank()) {
+            body.put("model", model)
+        }
+        val resp = postBridge("/sessions", body.toString())
         JSONObject(resp).getString("session_id")
     }
 

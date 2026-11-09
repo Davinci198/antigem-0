@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -39,6 +40,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -46,16 +48,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import com.example.gemini.ui.components.ScanFilter
+import com.example.gemini.ui.components.ScanGreen
+import com.example.gemini.ui.components.ScanRed
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gemini.data.agent.claude.ClaudeAccountManager
 import com.example.gemini.data.agent.claude.ClaudeChatBackend
+import com.example.gemini.data.agent.claude.ClaudeProvider
+import com.example.gemini.data.agent.claude.ClaudeProviderTestResult
 import com.example.gemini.data.agent.claude.contextLabel
 import com.example.gemini.data.agent.claude.thinkingLabel
 import com.example.gemini.data.agent.claude.ClaudePreferences
@@ -68,6 +77,7 @@ import com.example.gemini.ui.agents.SegmentedSelector
 import com.example.gemini.ui.agents.SheetSectionLabel
 import com.example.gemini.ui.components.ClaudeAccent
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private fun isoUtcSeconds(epochSeconds: Long): String =
     java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
@@ -241,8 +251,12 @@ fun ClaudeControlsStrip(
 fun ClaudeModelSheet(
     backend: ClaudeChatBackend,
     account: ClaudeAccountManager,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    store: ModelScanStore = ModelScanStore.shared(LocalContext.current),
 ) {
+    // The provider whose models are being scanned, if any: the scan sheet is a
+    // second sheet on top of this one, never a replacement for it.
+    var scanProvider by remember { mutableStateOf<ClaudeProvider?>(null) }
     val models by backend.modelInfos.collectAsState()
     val fallback by backend.availableModels.collectAsState()
     val selected by backend.selectedModelId.collectAsState()
@@ -257,6 +271,17 @@ fun ClaudeModelSheet(
     val providers by backend.providers.collectAsState()
     val accountState by account.state.collectAsState()
     val cardColor = claudeCardColor()
+    val scanSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+
+    // Closing a modal sheet means animating it to Hidden and only then telling
+    // the caller. Without this, a drag or a tap on the scrim can leave the chat
+    // behind an invisible-but-modal sheet that swallows every swipe and tap.
+    fun closeSheet() {
+        scope.launch { scanSheetState.hide() }.invokeOnCompletion {
+            if (!scanSheetState.isVisible) onDismiss()
+        }
+    }
 
     LaunchedEffect(Unit) {
         account.refreshUsage(force = false)
@@ -264,11 +289,40 @@ fun ClaudeModelSheet(
     }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { closeSheet() },
+        sheetState = scanSheetState,
         containerColor = MaterialTheme.colorScheme.background,
         tonalElevation = 0.dp,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
+        // One sheet, two pages. A second ModalBottomSheet on top of this one did
+        // not stack: it took focus, and dismissing it dismissed the picker too,
+        // so "View scan" threw the user back to the chat.
+        val scanningProvider = scanProvider
+        if (scanningProvider != null) {
+            ProviderModelScanPage(
+                provider = scanningProvider,
+                store = store,
+                accentColor = ClaudeAccent,
+                selectedModelId = selected.removePrefix("@${scanningProvider.id}/")
+                    .takeIf { selected.startsWith("@${scanningProvider.id}/") },
+                onScan = { force ->
+                    if (force) store.beginScan(scanningProvider)
+                    backend.scanProviderLatency(
+                        scanningProvider, scanningProvider.models,
+                        onProgress = { model, res -> store.recordProgress(scanningProvider.id, model, res) },
+                        onFinished = { _, fastest -> store.finishScan(scanningProvider, fastest?.model) }
+                    )
+                },
+                onPick = { m ->
+                    scanProvider = null
+                    backend.selectModel("@${scanningProvider.id}/${m.id}")
+                    onDismiss()
+                },
+                onBack = { scanProvider = null },
+                onClose = { closeSheet() },
+            )
+        } else {
         Column(
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(bottom = 22.dp).navigationBarsPadding()
         ) {
@@ -330,7 +384,13 @@ fun ClaudeModelSheet(
             }
 
             @Composable
-            fun ModelRow(value: String, name: String, desc: String, warnDesc: Boolean = false) {
+            fun ModelRow(
+                value: String,
+                name: String,
+                desc: String,
+                warnDesc: Boolean = false,
+                probe: ClaudeProviderTestResult? = null
+            ) {
                 val isSel = value == selected
                 Surface(
                     onClick = {
@@ -362,6 +422,20 @@ fun ClaudeModelSheet(
                                 Spacer(Modifier.width(3.dp))
                                 Text("Active", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = ClaudeAccent)
                             }
+                        }
+                        // the scan verdict, so a picked model is not a blind pick
+                        probe?.let { r ->
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                when {
+                                    r.ok -> "%.1fs".format(r.latency_ms / 1000.0)
+                                    r.status > 0 -> "HTTP ${r.status}"
+                                    else -> "failed"
+                                },
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (r.ok) ScanGreen else ScanRed
+                            )
                         }
                     }
                 }
@@ -402,16 +476,59 @@ fun ClaudeModelSheet(
 
             // one section per custom provider (Settings → Claude Code → Custom providers)
             customSections.forEach { p ->
-                SheetSectionLabel(p.name, trailing = "custom provider")
+                val working = store.workingCount(p)
+                val broken = store.brokenCount(p)
+                val scanned = store.scannedCount(p)
+                SheetSectionLabel(
+                    p.name,
+                    trailing = when {
+                        store.scanning[p.id] == true -> "measuring…"
+                        scanned == 0 -> "custom provider"
+                        else -> "$working working · $broken broken"
+                    }
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (scanned == 0) "${p.models.size} models · not checked yet"
+                        else "$scanned of ${p.models.size} checked",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        enabled = p.models.isNotEmpty(),
+                        onClick = {
+                            store.setFilter(p, ScanFilter.ALL)
+                            scanProvider = p
+                        }
+                    ) {
+                        Icon(Icons.Outlined.Speed, null, Modifier.size(15.dp), tint = ClaudeAccent)
+                        Spacer(Modifier.width(5.dp))
+                        Text(if (scanned == 0) "Scan models" else "View scan", color = ClaudeAccent, fontSize = 12.sp)
+                    }
+                }
+                // A scanned provider lists only the models that answered: 300
+                // rows with the dead ones mixed in is not a picker.
+                val shownModels = store.visibleModels(p)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    p.models.forEach { m ->
+                    shownModels.forEach { m ->
                         val ctxLabel = m.contextLabel(p)
+                        val probe = store.verdict(p.id, m.id)
                         ModelRow(
                             "@${p.id}/${m.id}",
                             m.name?.takeIf { it.isNotBlank() } ?: m.id,
                             listOfNotNull(m.id.takeIf { !m.name.isNullOrBlank() }, ctxLabel ?: "context unknown", m.thinkingLabel(p)).joinToString(" · "),
-                            warnDesc = ctxLabel == null
+                            warnDesc = ctxLabel == null,
+                            probe = probe
                         )
+                    }
+                    if (scanned > 0 && shownModels.size < p.models.size) {
+                        TextButton(onClick = { scanProvider = p }) {
+                            Text("${p.models.size - shownModels.size} more hidden · open the scan", fontSize = 11.5.sp, color = ClaudeAccent)
+                        }
                     }
                 }
             }
@@ -454,7 +571,9 @@ fun ClaudeModelSheet(
                 }
             }
         }
+        }
     }
+
 }
 
 /** Context window usage of the open chat (the `/context` command). */

@@ -148,6 +148,8 @@ object AgentProvisioner {
             results += installOpencode(appContext, downloads, log)
             results += installHermes(appContext, log)
 
+            removeContainerGatewayUnits(appContext, log)
+
             ensureGuestPath(appContext, log)
 
             results.forEach { result ->
@@ -552,6 +554,44 @@ PYEOF
         if (result.exitCode != 0) {
             log("[agents] PATH setup failed: ${result.output.takeLast(300)}")
         }
+    }
+
+    /**
+     * Drops any systemd gateway unit left in the container.
+     *
+     * Every `hermes chat` turn runs in a gateway, and the client decides how to own one by the
+     * presence of an installed unit file: with any `hermes-gateway*.service` present it picks the
+     * systemd backend, whose probe then fails inside this proot rootfs (no systemd, `/run` holds
+     * only `lock`) and the whole turn dies with "Gateway inaccessible: service_manager_unavailable".
+     * With no unit installed it falls to the unmanaged auto-start, which is the only owner this
+     * environment can give it.
+     *
+     * Nothing here installs a unit on purpose; one appears only from a `hermes gateway install` /
+     * `hermes setup` run inside the container, which can happen by hand or from an installer stage.
+     * So the units are cleared after a fresh install and on every server start, which also covers a
+     * unit that appears later.
+     */
+    fun removeContainerGatewayUnits(context: Context, log: (String) -> Unit = {}) {
+        val root = LocalEnvironmentManager.getUbuntuRootDir(context)
+        if (!root.isDirectory) return
+        val dirs = listOf(
+            "root/.config/systemd/user",
+            "root/.config/systemd/user/default.target.wants",
+            "etc/systemd/system",
+            "usr/lib/systemd/system",
+            "lib/systemd/system",
+        )
+        val removed = mutableListOf<String>()
+        for (dir in dirs) {
+            for (entry in File(root, dir).listFiles() ?: continue) {
+                // Covers hermes-gateway.service, the -<profile> suffix and the .disabled sibling,
+                // plus the enable symlink in default.target.wants.
+                if (entry.name.startsWith("hermes-gateway") && entry.delete()) {
+                    removed += "$dir/${entry.name}"
+                }
+            }
+        }
+        removed.forEach { log("[hermes] dropped stale gateway unit $it (no service manager in the container)") }
     }
 
     /**
