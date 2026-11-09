@@ -101,6 +101,9 @@ fun HermesModelSheet(
 
     var search by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(ScanFilter.ALL) }
+    // Providers whose models are folded away. Expanded by default: the header
+    // carries the provider name the flat list used to repeat on every row.
+    var collapsedProviders by remember { mutableStateOf(setOf<String>()) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     /** Hide first, then flip the caller's state: a sheet left half-dismissed keeps the chat behind it from scrolling. */
@@ -127,17 +130,22 @@ fun HermesModelSheet(
     val brokenCount = allEntries.count { health[it.key]?.ok == false }
     // The picker and the scan read the same verdicts, so the search must match
     // the same fields in both places: a model found in the scan is found here.
-    val matchingSearch = rows.filter {
-        search.isBlank() ||
-            it.modelId.contains(search, true) ||
-            it.label.contains(search, true) ||
-            it.detail.contains(search, true)
+    val filteredEntries = allEntries.filter { e ->
+        val matchesQuery = search.isBlank() ||
+            e.modelId.contains(search, true) ||
+            e.label.contains(search, true) ||
+            e.providerLabel.contains(search, true)
+        val matchesFilter = when (filter) {
+            ScanFilter.ALL -> true
+            ScanFilter.WORKING -> health[e.key]?.ok == true
+            ScanFilter.BROKEN -> health[e.key]?.ok == false
+        }
+        matchesQuery && matchesFilter
     }
-    val visible = when (filter) {
-        ScanFilter.ALL -> matchingSearch
-        ScanFilter.WORKING -> matchingSearch.filter { health[it.value]?.ok == true }
-        ScanFilter.BROKEN -> matchingSearch.filter { health[it.value]?.ok == false }
-    }
+    // groupBy keeps the backend's order: gateway presets first, then the app's
+    // custom providers.
+    val providerGroups = filteredEntries.groupBy { it.providerId }
+    val selectedKey = allEntries.firstOrNull { it.providerId == selectedProvider && it.modelId == selected }?.key
 
     // One sheet, two pages: the picker, and the scan it opens. A second
     // ModalBottomSheet on top of this one did not stack in Material3.
@@ -231,7 +239,7 @@ fun HermesModelSheet(
                     labels = FilterLabels,
                     modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
                 )
-                if (visible.isEmpty()) {
+                if (filteredEntries.isEmpty()) {
                     Box(
                         Modifier.fillMaxWidth().weight(1f),
                         contentAlignment = Alignment.Center
@@ -248,55 +256,76 @@ fun HermesModelSheet(
                         )
                     }
                 } else {
-                LazyColumn(
-                    Modifier.fillMaxWidth().weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(
-                        visible,
-                        key = { it.value }
-                    ) { row ->
-                        val isSel = row.value == allEntries.firstOrNull { it.providerId == selectedProvider && it.modelId == selected }?.key
-                        val v = health[row.value]
-                        Surface(
-                            onClick = {
-                                backend.selectModel(row.modelId, allEntries.firstOrNull { it.key == row.value }?.providerId.orEmpty())
-                                closeSheet()
-                            },
-                            shape = RoundedCornerShape(14.dp),
-                            color = cardColor,
-                            border = BorderStroke(
-                                if (isSel) 1.5.dp else 1.dp,
-                                if (isSel) accent.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    Modifier.padding(end = 9.dp).size(8.dp).clip(CircleShape).background(
-                                        when {
-                                            v == null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
-                                            v.ok -> ScanGreen
-                                            v.error?.contains("429") == true -> ScanAmber
-                                            else -> ScanRed
+                    LazyColumn(
+                        Modifier.fillMaxWidth().weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        providerGroups.forEach { (providerId, entries) ->
+                            item(key = "provider:$providerId") {
+                                val groupOk = entries.count { health[it.key]?.ok == true }
+                                val groupBroken = entries.count { health[it.key]?.ok == false }
+                                CollapsibleSheetSection(
+                                    title = entries.first().providerLabel,
+                                    trailing = when {
+                                        scanning && entries.any { health[it.key] == null } -> "measuring…"
+                                        groupOk + groupBroken == 0 -> "${entries.size} modele"
+                                        else -> "$groupOk funcționale · $groupBroken defecte"
+                                    },
+                                    expanded = providerId !in collapsedProviders,
+                                    onToggle = {
+                                        collapsedProviders = if (providerId in collapsedProviders) {
+                                            collapsedProviders - providerId
+                                        } else {
+                                            collapsedProviders + providerId
                                         }
-                                    )
+                                    },
                                 )
-                                Column(Modifier.weight(1f)) {
-                                    Text(row.label, fontWeight = if (isSel) FontWeight.Bold else FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
-                                    Text(row.detail, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), maxLines = 1)
-                                }
-                                v?.let { r ->
-                                    Text(
-                                        if (r.ok) "%.1fs".format(r.latencyMs / 1000.0) else "failed",
-                                        fontSize = 11.sp,
-                                        color = if (r.ok) ScanGreen else ScanRed,
-                                    )
+                            }
+                            if (providerId !in collapsedProviders) {
+                                items(entries, key = { it.key }) { e ->
+                                    val isSel = e.key == selectedKey
+                                    val v = health[e.key]
+                                    Surface(
+                                        onClick = {
+                                            backend.selectModel(e.modelId, e.providerId)
+                                            closeSheet()
+                                        },
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = cardColor,
+                                        border = BorderStroke(
+                                            if (isSel) 1.5.dp else 1.dp,
+                                            if (isSel) accent.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
+                                        ),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                Modifier.padding(end = 9.dp).size(8.dp).clip(CircleShape).background(
+                                                    when {
+                                                        v == null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                                        v.ok -> ScanGreen
+                                                        v.error?.contains("429") == true -> ScanAmber
+                                                        else -> ScanRed
+                                                    }
+                                                )
+                                            )
+                                            Column(Modifier.weight(1f)) {
+                                                Text(e.label, fontWeight = if (isSel) FontWeight.Bold else FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
+                                                Text("${e.providerLabel} · ${e.modelId}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), maxLines = 1)
+                                            }
+                                            v?.let { r ->
+                                                Text(
+                                                    if (r.ok) "%.1fs".format(r.latencyMs / 1000.0) else "failed",
+                                                    fontSize = 11.sp,
+                                                    color = if (r.ok) ScanGreen else ScanRed,
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                }
                 }
             }
         }

@@ -78,6 +78,7 @@ import com.example.gemini.theme.QuotaGreen
 import com.example.gemini.theme.QuotaRed
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.agents.AgentSheetHeader
+import com.example.gemini.ui.agents.CollapsibleSheetSection
 import com.example.gemini.ui.agents.SegmentedSelector
 import com.example.gemini.ui.agents.SheetSectionLabel
 import com.example.gemini.ui.components.ClaudeAccent
@@ -283,6 +284,12 @@ fun ClaudeModelSheet(
     // the same three verdict filters now live here.
     var query by remember { mutableStateOf("") }
     var pickerFilter by remember { mutableStateOf(ScanFilter.ALL) }
+    // Provider sections start open; a tap on the header folds its models away.
+    var collapsedSections by remember { mutableStateOf(setOf<String>()) }
+
+    fun toggleSection(id: String) {
+        collapsedSections = if (id in collapsedSections) collapsedSections - id else collapsedSections + id
+    }
 
     // Closing a modal sheet means animating it to Hidden and only then telling
     // the caller. Without this, a drag or a tap on the scrim can leave the chat
@@ -520,7 +527,13 @@ fun ClaudeModelSheet(
             // Claude's own rows have no verdicts, so a verdict filter only makes
             // sense for the custom providers; "All" keeps the Claude plan list.
             if (pickerFilter == ScanFilter.ALL) {
-                SheetSectionLabel(if (customSections.isEmpty()) "Model" else "Claude", trailing = if (customSections.isEmpty()) null else "your Claude plan")
+                CollapsibleSheetSection(
+                    title = if (customSections.isEmpty()) "Model" else "Claude",
+                    trailing = if (customSections.isEmpty()) null else "your Claude plan",
+                    expanded = "claude" !in collapsedSections,
+                    onToggle = { toggleSection("claude") },
+                )
+                if ("claude" !in collapsedSections) {
                 if (signedOut) {
                     Text(
                         "Sign in to Claude Code (Settings → Claude Code → Account) to use Claude's models.",
@@ -552,6 +565,7 @@ fun ClaudeModelSheet(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     filteredRows.forEach { (value, name, desc) -> ModelRow(value, name, desc) }
                 }
+                }
             }
 
             // one section per custom provider (Settings → Claude Code → Custom providers)
@@ -559,14 +573,17 @@ fun ClaudeModelSheet(
                 val working = store.workingCount(p)
                 val broken = store.brokenCount(p)
                 val scanned = store.scannedCount(p)
-                SheetSectionLabel(
-                    p.name,
+                CollapsibleSheetSection(
+                    title = p.name,
                     trailing = when {
                         store.scanning[p.id] == true -> "measuring…"
                         scanned == 0 -> "custom provider"
                         else -> "$working working · $broken broken"
-                    }
+                    },
+                    expanded = p.id !in collapsedSections,
+                    onToggle = { toggleSection(p.id) },
                 )
+                if (p.id !in collapsedSections) {
                 Row(
                     Modifier.fillMaxWidth().padding(bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -605,6 +622,7 @@ fun ClaudeModelSheet(
                             kind = probe?.let { store.kindOf(p.id, m.id) }
                         )
                     }
+                }
                 }
             }
 
