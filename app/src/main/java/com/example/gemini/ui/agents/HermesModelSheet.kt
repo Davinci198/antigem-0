@@ -145,7 +145,11 @@ fun HermesModelSheet(
     // groupBy keeps the backend's order: gateway presets first, then the app's
     // custom providers.
     val providerGroups = filteredEntries.groupBy { it.providerId }
+    // A preset merged into the app provider keeps its model id but changes its
+    // provider id; the fallback keeps the old selection highlighted after the
+    // one-time catalog merge.
     val selectedKey = allEntries.firstOrNull { it.providerId == selectedProvider && it.modelId == selected }?.key
+        ?: allEntries.firstOrNull { it.modelId == selected }?.key
 
     // One sheet, two pages: the picker, and the scan it opens. A second
     // ModalBottomSheet on top of this one did not stack in Material3.
@@ -167,7 +171,7 @@ fun HermesModelSheet(
                 verdictFor = { row ->
                     health[row.value]?.let {
                         ScanVerdict(
-                            kind = scanKindOf(it.ok, 0, it.error),
+                            kind = scanKindOf(it.ok, it.status, it.error),
                             latencyMs = it.latencyMs,
                             detail = it.error,
                         )
@@ -304,7 +308,7 @@ fun HermesModelSheet(
                                                     when {
                                                         v == null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
                                                         v.ok -> ScanGreen
-                                                        v.error?.contains("429") == true -> ScanAmber
+                                                        v.status == 429 -> ScanAmber
                                                         else -> ScanRed
                                                     }
                                                 )

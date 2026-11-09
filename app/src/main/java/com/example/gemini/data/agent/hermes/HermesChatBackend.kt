@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.example.gemini.data.agent.AgentChatBackend
 import com.example.gemini.data.agent.ChatSessionStore
+import com.example.gemini.data.agent.claude.ClaudeProviderTestResult
 import com.example.gemini.data.preferences.AuthPreferences
 import com.example.gemini.data.remote.AgyBridgeService
 import com.example.gemini.domain.model.AgentKind
@@ -11,6 +12,7 @@ import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.Conversation
 import com.example.gemini.domain.model.MessageRole
 import com.example.gemini.domain.model.TokenUsage
+import com.example.gemini.ui.claude.ModelScanStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -88,7 +90,106 @@ data class HermesModelHealth(
     val ok: Boolean,
     val latencyMs: Long,
     val error: String? = null,
+    /** HTTP status parsed from the error, so a 429 is amber and not a dead model. */
+    val status: Int = 0,
 )
+
+/**
+ * Flattens the picker payload into one row per model.
+ *
+ * A Hermes preset and an app custom provider can be the same endpoint under
+ * two names: the gateway calls it "NVIDIA NIM" (slug nvidia), while the custom
+ * store calls it "nvidia" (id https). The app provider is the global one —
+ * it carries the key the scan uses and Claude lists the same store — so its
+ * id wins and the preset's extra models are folded into that section. One
+ * provider, one set of models, one scan, in both agents.
+ */
+internal fun mergeHermesCatalog(
+    presets: List<HermesPresetProvider>,
+    custom: List<HermesCustomProvider>,
+): List<HermesModelEntry> {
+    val entries = mutableListOf<HermesModelEntry>()
+    val mirroredExtras = mutableListOf<HermesModelEntry>()
+    presets.forEach { preset ->
+        val mirror = findCustomMirror(preset, custom)
+        if (mirror == null) {
+            preset.models.forEach { id -> entries += presetEntry(preset, id) }
+        } else {
+            // The custom pass below adds the models it knows; only the preset's
+            // extras need a row under the same global provider id.
+            val known = mirror.models.map { it.id }.toHashSet()
+            preset.models.filter { it !in known }.forEach { id ->
+                mirroredExtras += HermesModelEntry(
+                    modelId = id,
+                    label = id.substringAfterLast('/', id),
+                    providerId = mirror.id,
+                    providerLabel = mirror.name.ifBlank { mirror.id },
+                    isCustom = true,
+                )
+            }
+        }
+    }
+    custom.forEach { provider ->
+        provider.models.forEach { model ->
+            entries += HermesModelEntry(
+                modelId = model.id,
+                label = model.name.takeIf { it.isNotBlank() } ?: model.id.substringAfterLast('/', model.id),
+                providerId = provider.id,
+                providerLabel = provider.name.ifBlank { provider.id },
+                isCustom = true,
+            )
+        }
+    }
+    entries += mirroredExtras
+    return entries.distinctBy { it.key }
+}
+
+private fun presetEntry(preset: HermesPresetProvider, id: String) = HermesModelEntry(
+    modelId = id,
+    label = id.substringAfterLast('/', id),
+    providerId = preset.slug,
+    providerLabel = preset.name.ifBlank { preset.slug },
+    isCustom = false,
+)
+
+/**
+ * Finds the app provider that mirrors a Hermes preset. Names are compared
+ * after stripping punctuation ("NVIDIA NIM" vs "nvidia"), and a majority
+ * model overlap is accepted too so a renamed provider still collapses.
+ *
+ * The overlap must cover most of *both* catalogs: an aggregator can list a
+ * couple of the same model ids as a direct provider without being the same
+ * endpoint, and collapsing those would hide a whole provider behind a
+ * one-model overlap.
+ */
+private fun findCustomMirror(
+    preset: HermesPresetProvider,
+    custom: List<HermesCustomProvider>,
+): HermesCustomProvider? {
+    val presetKeys = listOf(preset.name, preset.slug)
+        .map(::providerKey)
+        .filter { it.length >= 4 && it !in GENERIC_PROVIDER_KEYS }
+    val presetModels = preset.models.toHashSet()
+    return custom.firstOrNull { provider ->
+        val customKeys = listOf(provider.name, provider.id)
+            .map(::providerKey)
+            .filter { it.length >= 4 && it !in GENERIC_PROVIDER_KEYS }
+        val namesMatch = presetKeys.any { p -> customKeys.any { c -> p == c || p.contains(c) || c.contains(p) } }
+        val overlap = provider.models.count { it.id in presetModels }
+        val modelsMatch = overlap >= 2 && overlap * 2 >= maxOf(preset.models.size, provider.models.size)
+        namesMatch || modelsMatch
+    }
+}
+
+private fun providerKey(raw: String): String =
+    raw.lowercase().replace(Regex("[^a-z0-9]+"), "")
+
+/** Names that say nothing about the endpoint; never use them to collapse providers. */
+private val GENERIC_PROVIDER_KEYS = setOf("https", "http", "api", "custom", "provider", "openai", "anthropic")
+
+/** "HTTP 429: ..." -> 429, so the shared scan store can colour a throttle amber. */
+private fun httpStatusOf(error: String?): Int =
+    error?.let { Regex("""HTTP\s+(\d{3})""").find(it)?.groupValues?.getOrNull(1)?.toIntOrNull() } ?: 0
 
 /**
  * Chat backend for Hermes Agent.
@@ -169,15 +270,34 @@ class HermesChatBackend(
     val modelMessage: StateFlow<String?> = _modelMessage.asStateFlow()
 
     /** Health verdicts from the last scan, keyed by "providerId|modelId".
-     * Persisted: a scan result stays on screen across picker visits, app
-     * restarts and model re-selection until the user scans again. */
+     * The app custom providers are the global catalog: Claude scans them into
+     * the same store, so a verdict from either agent shows up in both. */
     private val healthPrefs =
         application.getSharedPreferences("hermes_model_health", android.content.Context.MODE_PRIVATE)
+    private val sharedScanStore by lazy { ModelScanStore.shared(application) }
+    private val sharedScanPrefs by lazy {
+        application.getSharedPreferences(ModelScanStore.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    }
     private val _modelHealth = MutableStateFlow<Map<String, HermesModelHealth>>(loadStoredHealth())
     val modelHealth: StateFlow<Map<String, HermesModelHealth>> = _modelHealth.asStateFlow()
 
-    /** Restores verdicts written by an earlier run (scan results outlive the app). */
+    /** Restores verdicts written by an earlier run, preferring the shared store. */
     private fun loadStoredHealth(): Map<String, HermesModelHealth> {
+        if (sharedScanPrefs.contains(ModelScanStore.KEY_VERDICTS)) {
+            return sharedScanStore.verdicts.entries.mapNotNull { (key, verdict) ->
+                val at = key.indexOf('@')
+                if (at <= 0 || at == key.lastIndex) return@mapNotNull null
+                val providerId = key.substring(0, at)
+                val modelId = key.substring(at + 1)
+                "$providerId|$modelId" to HermesModelHealth(
+                    ok = verdict.ok,
+                    latencyMs = verdict.latency_ms,
+                    error = verdict.error.takeIf { it.isNotBlank() },
+                    status = verdict.status,
+                )
+            }.toMap()
+        }
+        // Verdicts written before the two agents shared a store.
         val raw = runCatching { healthPrefs.getString("verdicts", null) }.getOrNull() ?: return emptyMap()
         return runCatching {
             val json = JSONObject(raw)
@@ -197,21 +317,9 @@ class HermesChatBackend(
         }.getOrDefault(emptyMap())
     }
 
-    /** Writes the current verdicts so a restart keeps them. */
-    private fun persistHealth(verdicts: Map<String, HermesModelHealth>) {
-        runCatching {
-            val json = JSONObject()
-            verdicts.forEach { (key, v) ->
-                json.put(
-                    key,
-                    JSONObject()
-                        .put("ok", v.ok)
-                        .put("latency_ms", v.latencyMs)
-                        .put("error", v.error ?: "")
-                )
-            }
-            healthPrefs.edit().putString("verdicts", json.toString()).apply()
-        }
+    /** Re-reads the shared verdicts, so a scan run in Claude's picker shows here too. */
+    fun refreshHealth() {
+        _modelHealth.value = loadStoredHealth()
     }
 
     private val _isScanning = MutableStateFlow(false)
@@ -224,30 +332,7 @@ class HermesChatBackend(
     /** One entry per probeable model, flattened from the picker payload. */
     fun modelEntries(): List<HermesModelEntry> {
         val data = _models.value ?: return emptyList()
-        val entries = mutableListOf<HermesModelEntry>()
-        data.presets.forEach { p ->
-            p.models.forEach { id ->
-                entries += HermesModelEntry(
-                    modelId = id,
-                    label = id.substringAfterLast('/', id),
-                    providerId = p.slug,
-                    providerLabel = p.name.ifBlank { p.slug },
-                    isCustom = false,
-                )
-            }
-        }
-        data.custom.forEach { p ->
-            p.models.forEach { m ->
-                entries += HermesModelEntry(
-                    modelId = m.id,
-                    label = m.name.takeIf { it.isNotBlank() } ?: m.id.substringAfterLast('/', m.id),
-                    providerId = p.id,
-                    providerLabel = p.name.ifBlank { p.id },
-                    isCustom = true,
-                )
-            }
-        }
-        return entries.distinctBy { it.key }
+        return mergeHermesCatalog(data.presets, data.custom)
     }
 
     /** Probes every model with a one-word turn and records ok/latency live. */
@@ -268,7 +353,7 @@ class HermesChatBackend(
             _isScanning.value = true
             if (force) {
                 _modelHealth.value = emptyMap()
-                persistHealth(emptyMap())
+                sharedScanStore.clearProviders(targets.map { it.providerId }.toSet())
             }
             // Resume: models verified by an earlier scan keep their verdict and
             // are not probed again; only missing entries are tested.
@@ -301,15 +386,29 @@ class HermesChatBackend(
                         results?.keys()?.forEach { modelId ->
                             val o = results.optJSONObject(modelId) ?: return@forEach
                             val entry = byModel[modelId] ?: return@forEach
+                            val error = o.optString("error").takeIf { it.isNotBlank() }
                             val verdict = HermesModelHealth(
                                 ok = o.optBoolean("ok", false),
                                 latencyMs = o.optLong("latency_ms", 0L),
-                                error = o.optString("error").takeIf { it.isNotBlank() },
+                                error = error,
+                                status = httpStatusOf(error),
                             )
                             _modelHealth.value = _modelHealth.value + (entry.key to verdict)
+                            // The custom providers are shared with Claude; writing
+                            // here is what makes "working/broken" the same in both.
+                            sharedScanStore.recordProgress(
+                                entry.providerId,
+                                entry.modelId,
+                                ClaudeProviderTestResult(
+                                    ok = verdict.ok,
+                                    status = verdict.status,
+                                    latency_ms = verdict.latencyMs,
+                                    model = entry.modelId,
+                                    error = verdict.error.orEmpty(),
+                                )
+                            )
                             _scanProgress.value = done.incrementAndGet() to targets.size
                         }
-                        persistHealth(_modelHealth.value)
                     }
                 }.awaitAll()
             }
@@ -320,6 +419,7 @@ class HermesChatBackend(
     /** Fetches the model picker payload. Works before the first turn too:
      * the bridge answers with the profile defaults when no session is live. */
     fun refreshModels() {
+        refreshHealth()
         backendScope.launch {
             _isRefreshingModels.value = true
             runCatching {

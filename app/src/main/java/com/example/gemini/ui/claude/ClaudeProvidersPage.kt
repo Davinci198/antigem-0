@@ -1534,7 +1534,7 @@ private fun QuickAddProviderDialog(backend: ClaudeChatBackend, onDismiss: () -> 
                         modelsUrl = null
                         picked = ""
                         probes.clear()
-                        if (!nameTouched) name = providerNameOf("http://$it")
+                        if (!nameTouched) name = providerNameOf(it)
                     },
                     label = { Text("Base URL") }, singleLine = true,
                     placeholder = { Text("https://api.example.com/anthropic") },

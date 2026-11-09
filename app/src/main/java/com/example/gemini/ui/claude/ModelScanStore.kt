@@ -114,6 +114,28 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
         persist()
     }
 
+    /** The verdicts of one provider, keyed by model id (the shared catalog uses these). */
+    fun verdictsFor(providerId: String): Map<String, ClaudeProviderTestResult> =
+        verdicts.entries
+            .filter { it.key.startsWith("$providerId@") }
+            .associate { it.key.substringAfter('@') to it.value }
+
+    /**
+     * Drops one provider's verdicts before a forced rescan, leaving every other
+     * provider's results alone. The Hermes picker writes here too, so a scan in
+     * one agent is the same scan in the other.
+     */
+    fun clearProviders(providerIds: Collection<String>) {
+        if (providerIds.isEmpty()) return
+        val prefixes = providerIds.map { "$it@" }
+        verdicts.keys.removeAll { key -> prefixes.any { key.startsWith(it) } }
+        providerIds.forEach {
+            fastest.remove(it)
+            overrides.remove(it)
+        }
+        persist()
+    }
+
     fun finishScan(provider: ClaudeProvider, fastestModel: String?) {
         scanning[provider.id] = false
         if (fastestModel != null) fastest[provider.id] = fastestModel
