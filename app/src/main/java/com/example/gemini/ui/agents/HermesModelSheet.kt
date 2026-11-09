@@ -25,17 +25,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,7 +54,9 @@ import com.example.gemini.data.agent.hermes.HermesChatBackend
 import com.example.gemini.data.agent.hermes.HermesModelEntry
 import com.example.gemini.data.agent.hermes.HermesModelHealth
 import com.example.gemini.ui.components.ModelScanPage
+import com.example.gemini.ui.components.ModelSearchField
 import com.example.gemini.ui.components.ScanFilter
+import com.example.gemini.ui.components.ScanFilterChips
 import com.example.gemini.ui.components.ScanRowModel
 import com.example.gemini.ui.components.ScanVerdict
 import com.example.gemini.ui.components.ScanKind
@@ -67,11 +64,11 @@ import com.example.gemini.ui.components.scanKindOf
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.components.accent
 
-private enum class HealthFilter(val label: String) {
-    ALL("Toate"),
-    OK("Funcționale"),
-    BROKEN("Defecte"),
-}
+private val FilterLabels = mapOf(
+    ScanFilter.ALL to "Toate",
+    ScanFilter.WORKING to "Funcționale",
+    ScanFilter.BROKEN to "Defecte",
+)
 
 /**
  * Hermes' model picker with the availability scan: the gateway's presets plus
@@ -103,7 +100,7 @@ fun HermesModelSheet(
     val scope = rememberCoroutineScope()
 
     var search by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(HealthFilter.ALL) }
+    var filter by remember { mutableStateOf(ScanFilter.ALL) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     /** Hide first, then flip the caller's state: a sheet left half-dismissed keeps the chat behind it from scrolling. */
@@ -128,6 +125,19 @@ fun HermesModelSheet(
     }
     val okCount = allEntries.count { health[it.key]?.ok == true }
     val brokenCount = allEntries.count { health[it.key]?.ok == false }
+    // The picker and the scan read the same verdicts, so the search must match
+    // the same fields in both places: a model found in the scan is found here.
+    val matchingSearch = rows.filter {
+        search.isBlank() ||
+            it.modelId.contains(search, true) ||
+            it.label.contains(search, true) ||
+            it.detail.contains(search, true)
+    }
+    val visible = when (filter) {
+        ScanFilter.ALL -> matchingSearch
+        ScanFilter.WORKING -> matchingSearch.filter { health[it.value]?.ok == true }
+        ScanFilter.BROKEN -> matchingSearch.filter { health[it.value]?.ok == false }
+    }
 
     // One sheet, two pages: the picker, and the scan it opens. A second
     // ModalBottomSheet on top of this one did not stack in Material3.
@@ -155,18 +165,8 @@ fun HermesModelSheet(
                         )
                     }
                 },
-                filter = when (filter) {
-                    HealthFilter.ALL -> ScanFilter.ALL
-                    HealthFilter.OK -> ScanFilter.WORKING
-                    HealthFilter.BROKEN -> ScanFilter.BROKEN
-                },
-                onFilterChange = { f ->
-                    filter = when (f) {
-                        ScanFilter.ALL -> HealthFilter.ALL
-                        ScanFilter.WORKING -> HealthFilter.OK
-                        ScanFilter.BROKEN -> HealthFilter.BROKEN
-                    }
-                },
+                filter = filter,
+                onFilterChange = { filter = it },
                 scanning = scanning,
                 progress = progress,
                 selectedValue = allEntries.firstOrNull { it.providerId == selectedProvider && it.modelId == selected }?.key,
@@ -212,21 +212,48 @@ fun HermesModelSheet(
                         Text("Scanare", color = accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-                OutlinedTextField(
-                    value = search,
-                    onValueChange = { search = it },
-                    singleLine = true,
-                    placeholder = { Text("Caută model", fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(18.dp)) },
-                    shape = RoundedCornerShape(12.dp),
+                ModelSearchField(
+                    query = search,
+                    onQueryChange = { search = it },
+                    accent = accent,
+                    placeholder = "Caută model",
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 )
+                ScanFilterChips(
+                    filter = filter,
+                    counts = mapOf(
+                        ScanFilter.ALL to rows.size,
+                        ScanFilter.WORKING to okCount,
+                        ScanFilter.BROKEN to brokenCount,
+                    ),
+                    accent = accent,
+                    onFilterChange = { filter = it },
+                    labels = FilterLabels,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
+                )
+                if (visible.isEmpty()) {
+                    Box(
+                        Modifier.fillMaxWidth().weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            when {
+                                rows.isEmpty() -> "niciun model încărcat"
+                                search.isNotBlank() -> "niciun model pentru \"$search\""
+                                filter == ScanFilter.BROKEN -> "niciun model defect"
+                                else -> "niciun model funcțional"
+                            },
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        )
+                    }
+                } else {
                 LazyColumn(
                     Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(
-                        rows.filter { search.isBlank() || it.modelId.contains(search, true) || it.label.contains(search, true) },
+                        visible,
                         key = { it.value }
                     ) { row ->
                         val isSel = row.value == allEntries.firstOrNull { it.providerId == selectedProvider && it.modelId == selected }?.key
@@ -269,6 +296,7 @@ fun HermesModelSheet(
                             }
                         }
                     }
+                }
                 }
             }
         }
