@@ -103,6 +103,8 @@ fun CollapsibleSheetSection(
     expanded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Optional per-provider action, kept out of the row's collapse tap. */
+    action: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier
@@ -119,6 +121,7 @@ fun CollapsibleSheetSection(
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
             modifier = Modifier.weight(1f)
         )
+        action?.invoke()
         trailing?.let {
             Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f))
             Spacer(Modifier.width(4.dp))

@@ -91,6 +91,7 @@ fun HermesModelSheet(
     val health by backend.modelHealth.collectAsState()
     val scanning by backend.isScanning.collectAsState()
     val progress by backend.scanProgress.collectAsState()
+    val scanningProvider by backend.scanningProvider.collectAsState()
     val accent = AgentKind.HERMES.accent()
     val cardColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
     // Closing a modal sheet has two halves: the animation, and the state flip
@@ -281,7 +282,9 @@ fun HermesModelSheet(
                                 CollapsibleSheetSection(
                                     title = entries.first().providerLabel,
                                     trailing = when {
-                                        scanning && entries.any { health[it.key] == null } -> "measuring…"
+                                        scanning &&
+                                            (scanningProvider == null || scanningProvider == providerId) &&
+                                            entries.any { health[it.key] == null } -> "measuring…"
                                         groupOk + groupBroken == 0 -> "${entries.size} modele"
                                         else -> "$groupOk funcționale · $groupBroken defecte"
                                     },
@@ -292,6 +295,23 @@ fun HermesModelSheet(
                                         } else {
                                             collapsedProviders + providerId
                                         }
+                                    },
+                                    action = {
+                                        // Per-provider scan: the bridge already probes
+                                        // one provider per batch, so this checks NVIDIA's
+                                        // catalog without waiting for every other provider.
+                                        Text(
+                                            "Testează",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (scanning) accent.copy(alpha = 0.35f) else accent,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable(enabled = !scanning) {
+                                                    backend.scanModels(force = true, providerId = providerId)
+                                                }
+                                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                                        )
                                     },
                                 )
                             }

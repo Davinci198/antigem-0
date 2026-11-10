@@ -540,11 +540,16 @@ func main() {
 		}
 	})
 
+	// WriteTimeout covers the whole response, not each write. A model-scan batch
+	// streams NDJSON for as long as its budget (12 min) and one NVIDIA probe takes
+	// 82-92 s, so 60 s cut long scans off with an empty reply. 15 min matches the
+	// app's scan read timeout and stays above the bridge's own budget; handlers
+	// keep their per-request deadlines.
 	server := &http.Server{
 		Addr:         "0.0.0.0:" + cfg.Port,
 		Handler:      recoveryHandler,
 		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		WriteTimeout: 15 * time.Minute,
 	}
 
 	stopChan := make(chan os.Signal, 1)
