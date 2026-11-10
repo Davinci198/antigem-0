@@ -8,6 +8,7 @@ import (
 
 // Config holds global runtime configuration parameters.
 type Config struct {
+	Bind            string
 	Port            string
 	HomeDir         string
 	WorkspaceDir    string
@@ -31,6 +32,13 @@ func LoadConfig() *Config {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "1234"
+	}
+
+	// The bridge is a phone-local API: only the antiGem app on this device talks to it (over loopback,
+	// which proot shares), so it listens on loopback by default. 0.0.0.0 would expose it to the LAN.
+	bind := os.Getenv("BIND")
+	if bind == "" {
+		bind = "127.0.0.1"
 	}
 
 	workspace := os.Getenv("WORKSPACE_DIR")
@@ -64,6 +72,7 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
+		Bind:            bind,
 		Port:            port,
 		HomeDir:         home,
 		WorkspaceDir:    workspace,

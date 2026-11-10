@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -43,6 +44,7 @@ Flags:
   -t, --token <token>       12-character security token for API & AGY CSRF obfuscation
   -f, --force, --f          Force start AGY Hub automatically without prompting
   -p, --port <port>         Port for the Go IDE Server (default: 1234)
+  --bind <address>          Address the IDE Server listens on (default: 127.0.0.1; use 0.0.0.0 only to reach it directly from other machines)
   --hub-port <port>         Port for the AGY Hub RPC server (default: 1235)
   --tz-offset <seconds>     Timezone offset in seconds (e.g. 20700 for UTC+05:45)
   --tz <location>           Timezone location name (e.g. Asia/Kathmandu)
@@ -190,6 +192,13 @@ func main() {
 				cfg.Port = os.Args[i+1]
 				i++
 			}
+		case strings.HasPrefix(arg, "--bind="):
+			cfg.Bind = strings.TrimPrefix(arg, "--bind=")
+		case arg == "--bind":
+			if i+1 < len(os.Args) {
+				cfg.Bind = os.Args[i+1]
+				i++
+			}
 		case strings.HasPrefix(arg, "--hub-port="):
 			hubPort = strings.TrimPrefix(arg, "--hub-port=")
 		case arg == "--hub-port":
@@ -285,14 +294,16 @@ func main() {
 	fmt.Println("\033[1;36m============================================================\033[0m")
 	fmt.Println("\033[1;32m  ⚡ antiGem Go IDE Server & AGY Hub Supervisor\033[0m")
 	fmt.Println("\033[1;36m============================================================\033[0m")
-	fmt.Printf("  \033[1m• IDE Server Port:\033[0m  http://0.0.0.0:%s\n", cfg.Port)
+	fmt.Printf("  \033[1m• IDE Server Port:\033[0m  http://%s:%s\n", cfg.Bind, cfg.Port)
 	fmt.Printf("  \033[1m• Projects Dir:\033[0m     %s\n", cfg.ProjectsBaseDir)
 	fmt.Printf("  \033[1m• Target Hub Port:\033[0m  %s\n", hubPort)
 	if resolvedAgyBin != "" {
 		fmt.Printf("  \033[1m• AGY Binary:\033[0m       %s\n", resolvedAgyBin)
 	}
-	fmt.Printf("  \033[1;33m• Security Token:\033[0m   %s\n", secToken)
-	fmt.Printf("  \033[1;36m• Framed Header:\033[0m    %s\n", framedHeader)
+	// The token and the framed header are the API secret (the header name embeds the token and its presence alone
+	// authenticates). The banner is copied into the run log (PR #9), so only masked forms are printed.
+	fmt.Printf("  \033[1;33m• Security Token:\033[0m   %s\n", security.MaskToken(secToken))
+	fmt.Printf("  \033[1;36m• Framed Header:\033[0m    %s\n", security.MaskFramedHeader(framedHeader))
 	fmt.Printf("  \033[1m• Local Time:\033[0m       %s\n", time.Now().Format("2006-01-02 15:04:05 MST"))
 	if runLogFile != nil {
 		fmt.Printf("  \033[1m• Log File:\033[0m         %s\n", runLogFile.Path)
@@ -454,7 +465,9 @@ func main() {
 	corsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+framedHeader)
+		// Never echo the framed header here: its name embeds the token, and this response is readable by
+		// any origin (Allow-Origin: *). "*" keeps browser clients working without leaking the secret.
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, *")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -505,7 +518,7 @@ func main() {
 				log.Printf("\033[1;31m═══════════════════════════════════════════════════════════════\033[0m\n")
 				log.Printf("\033[1;31m[API CRASH RECOVERED SAFELY] %s %s\033[0m\n", r.Method, r.URL.Path)
 				if r.URL.RawQuery != "" {
-					log.Printf("  \033[1;33m• Query:\033[0m    %s\n", r.URL.RawQuery)
+					log.Printf("  \033[1;33m• Query:\033[0m    %s\n", security.RedactQuery(r.URL.RawQuery))
 				}
 				if reqPayload != "" {
 					log.Printf("  \033[1;33m• Payload:\033[0m  %s\n", reqPayload)
@@ -532,7 +545,7 @@ func main() {
 		if isErrorResp {
 			log.Printf("\033[1;33m[API ERROR %d] %s %s\033[0m\n", rec.statusCode, r.Method, r.URL.Path)
 			if r.URL.RawQuery != "" {
-				log.Printf("  \033[33m• Query:\033[0m   %s\n", r.URL.RawQuery)
+				log.Printf("  \033[33m• Query:\033[0m   %s\n", security.RedactQuery(r.URL.RawQuery))
 			}
 			if reqPayload != "" {
 				log.Printf("  \033[33m• Payload:\033[0m %s\n", reqPayload)
@@ -553,8 +566,8 @@ func main() {
 	// app's scan read timeout and stays above the bridge's own budget; handlers
 	// keep their per-request deadlines.
 	server := &http.Server{
-		Addr:         "0.0.0.0:" + cfg.Port,
-		Handler:      recoveryHandler,
+		Addr:         net.JoinHostPort(cfg.Bind, cfg.Port),
+		Handler:      security.GuardResponse(secToken, recoveryHandler),
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 15 * time.Minute,
 	}
@@ -576,7 +589,7 @@ func main() {
 		}
 	}()
 
-	fmt.Printf(" \033[32m🚀 antiGem IDE Server running at http://0.0.0.0:%s\033[0m\n\n", cfg.Port)
+	fmt.Printf(" \033[32m🚀 antiGem IDE Server running at http://%s:%s\033[0m\n\n", cfg.Bind, cfg.Port)
 
 	// Determine if AGY Hub should be started
 	shouldStartHub := false
