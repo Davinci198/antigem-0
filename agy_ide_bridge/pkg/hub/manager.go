@@ -167,6 +167,30 @@ func ResolveAgyBinary() string {
 
 // ResolvePatchTarget determines the target binary for CSRF header patching.
 // If the selected binary is < 10 MB (wrapper script), it checks for agy.va39 in the same directory.
+// checkAgyBinary verifies the first bytes are an executable format (ELF, interpreter script or PE).
+// It turns an ENOEXEC that would surface as "exit status 2" plus sh noise into an actionable message.
+func checkAgyBinary(binPath string) error {
+	f, err := os.Open(binPath)
+	if err != nil {
+		return fmt.Errorf("AGY binary is not readable (%s): reinstall it from Settings > Agents", binPath)
+	}
+	defer f.Close()
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(f, head); err != nil {
+		return fmt.Errorf("AGY binary is empty or truncated (%s): reinstall it from Settings > Agents", binPath)
+	}
+	if head[0] == 0x7f && string(head[1:]) == "ELF" {
+		return nil
+	}
+	if head[0] == '#' && head[1] == '!' {
+		return nil // desktop launcher scripts start with an interpreter line
+	}
+	if head[0] == 'M' && head[1] == 'Z' {
+		return nil
+	}
+	return fmt.Errorf("AGY binary (%s) starts with %q, not with an executable header — an auto-update likely interrupted its own install; reinstall it from Settings > Agents", binPath, string(head))
+}
+
 func ResolvePatchTarget(binPath string) string {
 	if binPath == "" {
 		return ""
@@ -402,6 +426,14 @@ func (m *HubManager) Start() error {
 
 	if m.AgyBinPath == "" {
 		err := fmt.Errorf("AGY executable binary not specified or found")
+		m.setStatusLocked(HubStatusError, err.Error())
+		return err
+	}
+
+	// A half-failed AGY auto-update can leave debug text at offset 0 of the binary. execve then answers
+	// ENOEXEC and the sh launcher below parses the ELF bytes as a script ("futexwakeup: not found",
+	// `Syntax error: "(" unexpected`), which the hub used to report as an opaque exit status 2.
+	if err := checkAgyBinary(m.AgyBinPath); err != nil {
 		m.setStatusLocked(HubStatusError, err.Error())
 		return err
 	}
