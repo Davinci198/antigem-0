@@ -37,9 +37,14 @@ var scanBatchBudget = 12 * time.Minute
 
 // nvidiaProbeTimeout is the per-model deadline for NVIDIA's hosted NIM
 // endpoint. Queueing there routinely exceeds the 15s the app asks for (82s
-// measured for minimax-m3.1-flash, over 100s for gpt-oss-20b) while the model
-// still answers. Other providers keep the app's shorter deadline.
-const nvidiaProbeTimeout = 60 * time.Second
+// and 92s measured for minimax-m3.1-flash, over 100s for gpt-oss-20b and
+// deepseek-v4.1-flash) while the model still answers, so a shorter deadline
+// reported working models as slow. 110s leaves headroom over the measured
+// worst case; other providers keep the app's shorter deadline. The batch
+// budget still bounds the whole scan, so a catalog where every model hit this
+// deadline would report its tail as "scan budget exhausted" (a verdict the
+// next scan re-probes) rather than hold the request open.
+const nvidiaProbeTimeout = 110 * time.Second
 
 // scanProbeTimeout returns the deadline for one model: the app's request,
 // raised to nvidiaProbeTimeout for the NVIDIA endpoint. A nil provider means
@@ -750,10 +755,13 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	// go green on the app's key while the real turn dies on an empty
 	// NVIDIA_API_KEY in the container's .env.
 	direct := provider != nil && provider.BaseURL != ""
-	// Eight at a time: an 84-model NVIDIA catalog at its 60s deadline still
-	// fits the budget, and it stays below the 24 concurrent probes that once
-	// tripped OpenRouter's per-key limiter and made 12 of 13 models look
-	// broken (the 429 retry in probeOpenAICompatible covers the rest).
+	// Eight at a time: it stays below the 24 concurrent probes that once tripped
+	// OpenRouter's per-key limiter and made 12 of 13 models look broken (the 429
+	// retry in probeOpenAICompatible covers the rest). At NVIDIA's 110s deadline
+	// a catalog where every model hit the deadline would outlast the batch
+	// budget; the budget then reports the unreached tail as "scan budget
+	// exhausted", a verdict the next scan re-probes. In practice most models
+	// answer or fail in under a second, so only the few slow ones cost time.
 	limit := make(chan struct{}, 8)
 	gatewayProvider := body.ProviderID
 	if direct {

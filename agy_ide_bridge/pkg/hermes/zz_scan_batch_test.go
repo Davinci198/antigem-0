@@ -193,7 +193,7 @@ func TestScanProbeTimeoutRaisesOnlyNvidia(t *testing.T) {
 		{"nvidia uppercase", &appProvider{BaseURL: "https://INTEGRATE.API.NVIDIA.COM"}, requested, nvidiaProbeTimeout},
 		{"openrouter", &appProvider{BaseURL: "https://openrouter.ai/api"}, requested, requested},
 		{"hermes preset", nil, requested, requested},
-		{"already longer", &appProvider{BaseURL: "https://integrate.api.nvidia.com"}, 90 * time.Second, 90 * time.Second},
+		{"already longer", &appProvider{BaseURL: "https://integrate.api.nvidia.com"}, 150 * time.Second, 150 * time.Second},
 	}
 	for _, tc := range cases {
 		if got := scanProbeTimeout(tc.provider, tc.request); got != tc.want {
