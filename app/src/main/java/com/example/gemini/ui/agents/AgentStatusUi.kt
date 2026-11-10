@@ -215,6 +215,7 @@ fun AgentMark(agent: AgentKind, modifier: Modifier = Modifier, size: Dp = 32.dp,
                 AgentKind.AGY -> Icon(Icons.Outlined.RocketLaunch, null, tint = accent, modifier = Modifier.size(size * 0.52f))
                 AgentKind.CLAUDE -> Text("✻", color = accent, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.5f).sp)
                 AgentKind.HERMES -> Text("☤", color = accent, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.5f).sp)
+                AgentKind.OPENCODE -> Text("</>", color = accent, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.3f).sp, maxLines = 1)
             }
         }
         if (statusColor != null) {

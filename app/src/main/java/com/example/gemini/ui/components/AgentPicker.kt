@@ -32,16 +32,21 @@ val AgyAccent = Color(0xFF3B82F6)
 /** Hermes Agent accent — purple matching the Nous Research brand. */
 val HermesAccent = Color(0xFF8B5CF6)
 
+/** OpenCode accent — its brand green. */
+val OpenCodeAccent = Color(0xFF10B981)
+
 fun AgentKind.label(): String = when (this) {
     AgentKind.AGY -> "Antigravity"
     AgentKind.CLAUDE -> "Claude Code"
     AgentKind.HERMES -> "Hermes"
+    AgentKind.OPENCODE -> "OpenCode"
 }
 
 fun AgentKind.accent(): Color = when (this) {
     AgentKind.AGY -> AgyAccent
     AgentKind.CLAUDE -> ClaudeAccent
     AgentKind.HERMES -> HermesAccent
+    AgentKind.OPENCODE -> OpenCodeAccent
 }
 
 /**
