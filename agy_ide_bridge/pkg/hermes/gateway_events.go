@@ -31,8 +31,27 @@ const modelsConnectBudget = 20 * time.Second
 // scanBatchBudget bounds one provider's whole scan-batch. Per-model deadlines
 // bound a probe; this bounds the sum, so a 300-model catalog on a dead endpoint
 // answers (with "budget exhausted" for whatever was not reached) instead of
-// holding the HTTP request open for hours.
-var scanBatchBudget = 10 * time.Minute
+// holding the HTTP request open for hours. Kept under the app's 15-minute scan
+// read timeout so the stream always closes before the client gives up.
+var scanBatchBudget = 12 * time.Minute
+
+// nvidiaProbeTimeout is the per-model deadline for NVIDIA's hosted NIM
+// endpoint. Queueing there routinely exceeds the 15s the app asks for (82s
+// measured for minimax-m3.1-flash, over 100s for gpt-oss-20b) while the model
+// still answers. Other providers keep the app's shorter deadline.
+const nvidiaProbeTimeout = 60 * time.Second
+
+// scanProbeTimeout returns the deadline for one model: the app's request,
+// raised to nvidiaProbeTimeout for the NVIDIA endpoint. A nil provider means
+// the probe goes through Hermes, which keeps the requested deadline.
+func scanProbeTimeout(provider *appProvider, requested time.Duration) time.Duration {
+	if provider != nil &&
+		strings.Contains(strings.ToLower(provider.BaseURL), "integrate.api.nvidia.com") &&
+		requested < nvidiaProbeTimeout {
+		return nvidiaProbeTimeout
+	}
+	return requested
+}
 
 // routeGatewayEvent fans one gateway event out to the bridge session that
 // owns the gateway session it names.
@@ -617,7 +636,7 @@ func (m *Manager) handleModelScan(w http.ResponseWriter, r *http.Request) {
 	}
 	const probeTimeout = 30 * time.Second
 	if p := findAppProvider(m.homeDir, body.ProviderID); p != nil && p.BaseURL != "" {
-		latency, errMsg := probeOpenAICompatible(p.BaseURL, p.APIKey, body.Model, probeTimeout)
+		latency, errMsg := probeOpenAICompatible(p.BaseURL, p.APIKey, body.Model, scanProbeTimeout(p, probeTimeout))
 		writeJSON(w, http.StatusOK, scanResult(latency, errMsg))
 		return
 	}
@@ -720,6 +739,7 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 		timeout = 20 * time.Second
 	}
 	provider := findAppProvider(m.homeDir, body.ProviderID)
+	timeout = scanProbeTimeout(provider, timeout)
 	results := make(map[string]obj, len(body.Models))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -730,10 +750,11 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	// go green on the app's key while the real turn dies on an empty
 	// NVIDIA_API_KEY in the container's .env.
 	direct := provider != nil && provider.BaseURL != ""
-	// Five at a time, like Mobile-Harness. 24 concurrent probes tripped
-	// OpenRouter's per-key limiter and 12 of 13 models came back 429, which the
-	// app then reported as "broken" — the scan was the problem, not the models.
-	limit := make(chan struct{}, 5)
+	// Eight at a time: an 84-model NVIDIA catalog at its 60s deadline still
+	// fits the budget, and it stays below the 24 concurrent probes that once
+	// tripped OpenRouter's per-key limiter and made 12 of 13 models look
+	// broken (the 429 retry in probeOpenAICompatible covers the rest).
+	limit := make(chan struct{}, 8)
 	gatewayProvider := body.ProviderID
 	if direct {
 		gatewayProvider = ""
@@ -749,13 +770,21 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	// which the single-shot answer could never do.
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	enc := json.NewEncoder(w)
-	flusher := w.(http.Flusher)
+	// Not every ResponseWriter is a Flusher: test recorders and logging
+	// middleware wrappers may not be. Degrade to plain NDJSON instead of
+	// panicking the whole batch.
+	flusher, _ := w.(http.Flusher)
+	flush := func() {
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 	streamDone := make(chan struct{})
 	go func() {
 		defer close(streamDone)
 		emit := func(ev obj) {
 			enc.Encode(ev)
-			flusher.Flush()
+			flush()
 		}
 		emit(obj{"type": "scan-start", "provider_id": body.ProviderID, "models": len(body.Models)})
 		sent := make(map[string]bool, len(body.Models))
