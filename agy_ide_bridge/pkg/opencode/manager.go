@@ -154,11 +154,16 @@ func (m *Manager) command(ctx context.Context, bin string, args ...string) (*exe
 		if runtime.GOARCH == "amd64" {
 			loader = filepath.Join(lib, "ld-linux-x86-64.so.2")
 		}
-		if _, err := os.Stat(loader); err != nil {
-			return nil, fmt.Errorf("opencode needs glibc, but the app's glibc runtime is missing (%s): reopen the app to restore it", loader)
+		// The bundled loader only helps when its prefix is visible (Termux-host mode: the official
+		// OpenCode build runs against the loader in $PREFIX/glibc/lib). Inside the app's Ubuntu
+		// container $PREFIX points at a host directory the container cannot see, but the container's
+		// own ld-linux runs the same binary natively — so a missing loader means "exec normally",
+		// not "unavailable".
+		if _, err := os.Stat(loader); err == nil {
+			cmd = exec.CommandContext(ctx, loader, append([]string{"--library-path", lib, bin}, args...)...)
 		}
-		cmd = exec.CommandContext(ctx, loader, append([]string{"--library-path", lib, bin}, args...)...)
-	} else {
+	}
+	if cmd == nil {
 		cmd = exec.CommandContext(ctx, bin, args...)
 	}
 	env := make([]string, 0, len(os.Environ())+4)
