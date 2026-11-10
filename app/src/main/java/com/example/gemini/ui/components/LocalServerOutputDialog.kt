@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -165,6 +166,28 @@ fun LocalServerOutputDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        // Copy Button: copies the whole server log shown below
+                        IconButton(
+                            onClick = {
+                                val text = serverSession?.terminalSession?.emulator?.screen?.getTranscriptText() ?: ""
+                                if (text.isBlank()) {
+                                    AppToastHelper.showToast("The log is empty", ChatToastType.INFO)
+                                } else {
+                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Server log", text))
+                                    AppToastHelper.showToast("Log copied", ChatToastType.SUCCESS)
+                                }
+                            },
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy log",
+                                tint = textPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
                         // Restart / Start Button
                         IconButton(
                             onClick = { LocalServerManager.restartServer(context) },
