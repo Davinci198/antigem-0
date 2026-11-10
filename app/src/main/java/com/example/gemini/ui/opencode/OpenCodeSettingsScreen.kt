@@ -117,6 +117,8 @@ fun OpenCodeSettingsGroup(backend: OpenCodeChatBackend, cardBg: Color, onOpen: (
         com.example.gemini.ui.settings.SettingsRowItem(icon, OpenCodeAccent, page.title, value, valueColor) { onOpen(page) }
     com.example.gemini.ui.settings.SettingsRowList(
         cardBg = cardBg,
+        // shown inside MainSettingsMenu, which already scrolls: no second scroll/fill here or Compose crashes
+        nestedScroll = true,
         groups = listOf(
             listOf(row(OpenCodeSettingsPage.SERVER, Icons.Outlined.Dns,
                 if (state == OpenCodeState.READY) status?.version ?: state.label else state.label,
