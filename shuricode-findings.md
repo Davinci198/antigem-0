@@ -45,3 +45,29 @@ finished 2026-11-07 15:29 UTC): 14 findings — 4 to fix, 9 ignored, 0 rotate, 0
 - Fixes implemented on branch `fix/suricode-findings`.
 - A fix counts as confirmed only when a later scan stops reporting it; the scan runs on
   `master`, so confirmation requires these commits to land there.
+
+## 2026-11-10 — scan run `6956b674-dd87-40b7-bd53-1234e5b9e40c`
+
+Branch `master`, commit `d7869ee` (Suricode scans the default branch, so this run saw
+master's state even though it was triggered by pushing `3d3ab51` to
+`feat/model-picker-search-filters`), finished 2026-11-10 07:22 UTC.
+Result: 0 critical, 1 fix verdict — pre-existing on master, not introduced by either push.
+
+1. **[fix/config] Disable cache restores in the release workflow** — high
+   - File: `.github/workflows/release.yml`
+   - Triage id `89c36d25-41d7-4d5a-a9b2-3f4cfdf0d7b4`; identity
+     `14d0912c79657851e6b3bd5903dc6da746244fc2aeb598db1b8bba1679ca1f48`.
+   - Reason: the release job publishes with `softprops/action-gh-release` and
+     `GITHUB_TOKEN` while `actions/setup-go` (v5) restores the Go build cache by
+     default and `gradle/actions/setup-gradle` (v4) restores the Gradle cache by
+     default — zizmor cache-poisoning: a publishing job must not read earlier CI
+     build state.
+   - Constraint: keep the existing Java, Go, Gradle, and release upload steps, but
+     disable cache usage for this release job.
+   - Implemented 2026-11-10 with user approval: branch `fix/release-workflow-cache`
+     (commit `2b78e07`, off master `75a8f59`, worktree `~/dev/antigem-release-cache`),
+     PR #2 into master (`version.json` untouched, no version bump). Merged
+     2026-11-10 (merge commit `5bddeb0`); new master mirrored to the private CI
+     repo `Davinci198/antigem-0`. Confirmation pending: Suricode must stop
+     reporting it in a later scan — Suricode MCP currently disabled, so the
+     confirmation scan waits until it is re-enabled.
