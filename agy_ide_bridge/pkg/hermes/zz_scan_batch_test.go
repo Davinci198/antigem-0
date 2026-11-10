@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -120,6 +121,83 @@ func TestScanBatchReportsUnreachedModels(t *testing.T) {
 		}
 		if got.OK || got.Err == "" {
 			t.Errorf("%s = %+v, want ok=false with a reason", model, got)
+		}
+	}
+}
+
+// A ResponseWriter without Flush (the server's logging wrapper used to be one)
+// must still get the NDJSON stream instead of panicking the whole batch.
+type plainWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	code   int
+}
+
+func (w *plainWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *plainWriter) WriteHeader(code int) {
+	if w.code == 0 {
+		w.code = code
+	}
+}
+
+func (w *plainWriter) Write(p []byte) (int, error) {
+	if w.code == 0 {
+		w.code = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+func TestScanBatchWithoutFlusher(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	home := t.TempDir()
+	writeAppProviders(t, home, srv.URL)
+
+	m := &Manager{homeDir: home}
+	w := &plainWriter{}
+	body := `{"provider_id":"probe","timeout_ms":2000,"models":["m1","m2"]}`
+	m.handleModelScanBatch(w, httptest.NewRequest(http.MethodPost, "/models/scan-batch", strings.NewReader(body)))
+
+	if w.code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.code, w.body.String())
+	}
+	verdicts := parseScanStream(t, w.body.String())
+	for _, model := range []string{"m1", "m2"} {
+		got, ok := verdicts[model]
+		if !ok || !got.OK {
+			t.Errorf("%s = %+v (present %v), want ok; body %s", model, got, ok, w.body.String())
+		}
+	}
+}
+
+// NVIDIA's hosted endpoint needs a longer per-model deadline; every other
+// provider keeps the app's request so a large catalog is not held open.
+func TestScanProbeTimeoutRaisesOnlyNvidia(t *testing.T) {
+	const requested = 15 * time.Second
+	cases := []struct {
+		name     string
+		provider *appProvider
+		request  time.Duration
+		want     time.Duration
+	}{
+		{"nvidia", &appProvider{BaseURL: "https://integrate.api.nvidia.com/v1"}, requested, nvidiaProbeTimeout},
+		{"nvidia uppercase", &appProvider{BaseURL: "https://INTEGRATE.API.NVIDIA.COM"}, requested, nvidiaProbeTimeout},
+		{"openrouter", &appProvider{BaseURL: "https://openrouter.ai/api"}, requested, requested},
+		{"hermes preset", nil, requested, requested},
+		{"already longer", &appProvider{BaseURL: "https://integrate.api.nvidia.com"}, 90 * time.Second, 90 * time.Second},
+	}
+	for _, tc := range cases {
+		if got := scanProbeTimeout(tc.provider, tc.request); got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.name, got, tc.want)
 		}
 	}
 }

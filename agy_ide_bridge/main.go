@@ -79,6 +79,16 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+// Flush forwards to the wrapped writer. Streaming handlers (the model scan
+// NDJSON stream) type-assert their ResponseWriter to http.Flusher; without
+// this method the logging wrapper hides the underlying Flusher, the assertion
+// panics and every scan batch answers 500.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // formatHumanCrash converts raw runtime panics and stacks into human-readable diagnostics
 func formatHumanCrash(p interface{}, rawStack []byte) (reason string, location string) {
 	reason = fmt.Sprintf("%v", p)
