@@ -27,6 +27,9 @@ android {
         targetSdk = 28
         versionCode = appVersionCode
         versionName = appVersionName
+        // Only arm64 runs AntiGem (its glibc, proot and IDE bridge are arm64): leave the other ABIs' copies of
+        // dependency libraries out of the APK
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     signingConfigs {
@@ -109,7 +112,7 @@ android {
     }
 
     androidResources {
-        noCompress += listOf("gz", "tgz", "tar.gz", "tar")
+        noCompress += listOf("gz", "tgz", "tar.gz", "tar", "xz")
     }
 
     packaging {
@@ -122,6 +125,9 @@ android {
         excludes += "META-INF/DEPENDENCIES"
         excludes += "META-INF/LICENSE*"
         excludes += "META-INF/NOTICE*"
+        // jcodings (pulled in by the editor's TextMate highlighting through joni) ships character-set converters
+        // (Big5, EUC-JP, GBK…, 1.1 MB) that regex matching never uses; its Unicode tables (tables/CR_*) stay
+        excludes += "tables/Transcoder_*"
       }
     }
 
@@ -233,19 +239,38 @@ wire {
   }
 }
 
+// The bridge is built into build/ and shipped xz-compressed (13 MB -> 3.8 MB in the APK); the app unpacks it into the
+// terminal's bin/ (LocalServerManager). Preset 6 compresses as well as -9e here, with an 8 MB dictionary, so unpacking
+// needs little memory.
+val agyIdeBridgeRaw = layout.buildDirectory.file("intermediates/agyIdeBridge/agy_ide_bridge")
 val buildAgyIdeBridge = tasks.register<Exec>("buildAgyIdeBridge") {
-  val binDir = layout.projectDirectory.dir("src/main/assets/bin")
   val bridgeSourceDir = layout.projectDirectory.dir("../agy_ide_bridge")
+  val rawFile = agyIdeBridgeRaw.get().asFile
 
   doFirst {
-    binDir.asFile.mkdirs()
+    rawFile.parentFile.mkdirs()
   }
 
   workingDir = bridgeSourceDir.asFile
   environment("GOOS", "android")
   environment("GOARCH", "arm64")
   environment("CGO_ENABLED", "0")
-  commandLine("go", "build", "-ldflags=-s -w", "-o", binDir.file("agy_ide_bridge").asFile.absolutePath, "main.go")
+  commandLine("go", "build", "-ldflags=-s -w", "-o", rawFile.absolutePath, "main.go")
+}
+
+val compressAgyIdeBridge = tasks.register<Exec>("compressAgyIdeBridge") {
+  dependsOn(buildAgyIdeBridge)
+  val binDir = layout.projectDirectory.dir("src/main/assets/bin").asFile
+  val rawFile = agyIdeBridgeRaw.get().asFile
+
+  doFirst {
+    binDir.mkdirs()
+    // the APK ships only the .xz: an uncompressed copy left here by an older build would be packaged too
+    // (build-standard.yml has to be pointed at build/intermediates/agyIdeBridge to keep publishing the binary)
+    File(binDir, "agy_ide_bridge").delete()
+  }
+
+  commandLine("sh", "-c", "xz -6 -T1 -c \"$1\" > \"$2\"", "sh", rawFile.absolutePath, File(binDir, "agy_ide_bridge.xz").absolutePath)
 }
 
 val copyScriptsToAssets = tasks.register<Copy>("copyScriptsToAssets") {
@@ -274,7 +299,7 @@ val copyScriptsToAssets = tasks.register<Copy>("copyScriptsToAssets") {
 }
 
 tasks.named("preBuild") {
-  dependsOn(buildAgyIdeBridge, copyScriptsToAssets)
+  dependsOn(compressAgyIdeBridge, copyScriptsToAssets)
 }
 
 
