@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"gemini-server/pkg/ws"
 )
 
 var sessionIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     func(r *http.Request) bool { return ws.AllowedOrigin(r.Header.Get("Origin")) },
 	ReadBufferSize:  64 << 10,
 	WriteBufferSize: 64 << 10,
 }
