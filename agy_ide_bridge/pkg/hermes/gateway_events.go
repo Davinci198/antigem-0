@@ -28,6 +28,12 @@ import (
 // gateway start keeps going in the background instead.
 const modelsConnectBudget = 20 * time.Second
 
+// scanBatchBudget bounds one provider's whole scan-batch. Per-model deadlines
+// bound a probe; this bounds the sum, so a 300-model catalog on a dead endpoint
+// answers (with "budget exhausted" for whatever was not reached) instead of
+// holding the HTTP request open for hours.
+var scanBatchBudget = 10 * time.Minute
+
 // routeGatewayEvent fans one gateway event out to the bridge session that
 // owns the gateway session it names.
 func (m *Manager) routeGatewayEvent(params map[string]interface{}) {
@@ -693,7 +699,12 @@ func probeOpenAICompatible(baseURL, apiKey, model string, timeout time.Duration)
 // the bridge, where a cold model costs one probe instead of a bridge hop.
 //
 // Request: {"provider_id":"nvidia","models":["a","b",...],"timeout_ms":15000}
-// Response: {"results":{"<model>":{"ok":true,"latency_ms":1234}}}
+// Response: an NDJSON stream of scan-probe events, flushed as soon as each
+// model is verified, followed by a scan-done event. The whole batch is bounded:
+// whatever the per-model deadline says, the call answers within scanBatchBudget
+// and marks the probed-nothing models as such. Without that bound a big
+// catalog on a dead endpoint keeps the HTTP request open for hours and the app
+// client times out with no verdicts at all.
 func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ProviderID string   `json:"provider_id"`
@@ -727,6 +738,85 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	if direct {
 		gatewayProvider = ""
 	}
+	deadline := time.Now().Add(scanBatchBudget)
+
+	// The response is an NDJSON stream flushed as each model is verified, so
+	// the app shows live progress instead of 0→300 in one jump. Only the
+	// stream goroutine writes to the ResponseWriter (json.Encoder and Flush
+	// are not safe from concurrent writes): workers deposit verdicts under mu
+	// and the stream picks them up on its next tick. A worker stuck past its
+	// own timeout therefore delays nothing — the other verdicts still arrive,
+	// which the single-shot answer could never do.
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	enc := json.NewEncoder(w)
+	flusher := w.(http.Flusher)
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		emit := func(ev obj) {
+			enc.Encode(ev)
+			flusher.Flush()
+		}
+		emit(obj{"type": "scan-start", "provider_id": body.ProviderID, "models": len(body.Models)})
+		sent := make(map[string]bool, len(body.Models))
+		flushNew := func() {
+			mu.Lock()
+			events := make([]obj, 0, len(results))
+			for model, res := range results {
+				if sent[model] {
+					continue
+				}
+				sent[model] = true
+				ev := obj{"type": "scan-probe", "model": model}
+				for k, v := range res {
+					ev[k] = v
+				}
+				events = append(events, ev)
+			}
+			mu.Unlock()
+			for _, ev := range events {
+				emit(ev)
+			}
+		}
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		bail := time.After(scanBatchBudget + 5*time.Second)
+		for {
+			select {
+			case <-bail:
+				// A probe hung past its own timeout: close the batch anyway.
+				// Models it never reached are reported as failures here, so
+				// the app records a reason instead of waiting on the EOF.
+				flushNew()
+				for _, model := range body.Models {
+					if model == "" || sent[model] {
+						continue
+					}
+					sent[model] = true
+					emit(obj{"type": "scan-probe", "model": model, "ok": false, "latency_ms": int64(0), "error": "scan budget exhausted"})
+				}
+				emit(obj{"type": "scan-done", "provider_id": body.ProviderID, "models": len(sent)})
+				return
+			case <-tick.C:
+				flushNew()
+				allSent := true
+				for _, model := range body.Models {
+					if model == "" {
+						continue
+					}
+					if !sent[model] {
+						allSent = false
+						break
+					}
+				}
+				if allSent {
+					emit(obj{"type": "scan-done", "provider_id": body.ProviderID, "models": len(sent)})
+					return
+				}
+			}
+		}
+	}()
+
 	for _, model := range body.Models {
 		if model == "" {
 			continue
@@ -736,6 +826,14 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			limit <- struct{}{}
 			defer func() { <-limit }()
+			// Past the batch budget the probe is not worth starting: it would
+			// only keep the response open past what the app waits for.
+			if time.Now().After(deadline) {
+				mu.Lock()
+				results[model] = scanResult(0, "scan budget exhausted")
+				mu.Unlock()
+				return
+			}
 			var latency int64
 			var errMsg string
 			if direct {
@@ -752,6 +850,5 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 			mu.Unlock()
 		}(model)
 	}
-	wg.Wait()
-	writeJSON(w, http.StatusOK, obj{"results": results})
+	<-streamDone
 }
