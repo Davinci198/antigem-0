@@ -101,7 +101,13 @@ data class ChatAttachment(
     val url: String? = null,
     val durationSeconds: Int = 0,
     val mimeType: String? = null,
-    val base64: String? = null
+    val base64: String? = null,
+    /**
+     * A file the agent opens in place: [path] is its real path on the agent's machine and it goes to the agent only as a
+     * line in the message's hidden `<attached-files>` list (see AttachedFiles). An image may also carry [base64], a
+     * shrunk copy the model sees directly. Never uploaded or inlined by the backends.
+     */
+    val reference: Boolean = false
 )
 
 @Serializable
@@ -124,7 +130,9 @@ data class Conversation(
     val subagentRole: String? = null,
     val subagentTypeName: String? = null,
     val nestingDepth: Int = 0,
-    val agent: AgentKind = AgentKind.AGY
+    val agent: AgentKind = AgentKind.AGY,
+    /** Archived: listed only in the sidebar's archive view. */
+    val archived: Boolean = false
 )
 
 enum class ModelFamily {
