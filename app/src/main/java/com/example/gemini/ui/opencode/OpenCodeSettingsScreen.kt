@@ -372,7 +372,7 @@ fun OpenCodeSettingsScreen(
                 Icon(Icons.Outlined.Add, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Add manually")
             }
         }
-        if (page == OpenCodeSettingsPage.MCP) OpenCodeMcpPage(backend, onOpenRea, onOpenReaGroups)
+        if (page == OpenCodeSettingsPage.MCP) OpenCodeMcpPage(backend)
         Spacer(Modifier.height(24.dp))
     }
 

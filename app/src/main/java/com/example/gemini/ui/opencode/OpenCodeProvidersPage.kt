@@ -116,6 +116,14 @@ private fun methodIcon(m: OpenCodeAuth.Method): ImageVector = when {
     else -> Icons.Outlined.OpenInBrowser
 }
 
+/**
+ * Upstream's sign-in flow branches on `AuthPreferences.currentRemoteMode`: the app talking to a bridge on another
+ * machine, where a browser on the phone cannot reach the server's 127.0.0.1 callback. This fork always runs the bridge
+ * on the phone, so that flag is pinned here — every branch stays in the file, exactly as upstream wrote it, and always
+ * takes the on-the-phone path.
+ */
+private const val REMOTE_BRIDGE = false
+
 private fun methodHint(m: OpenCodeAuth.Method, remote: Boolean): String = when {
     m.isKey -> "Paste the provider's API key" + (m.envNames.firstOrNull()?.let { " (or set $it on the server)" } ?: "")
     m.isExternal -> "Uses credentials already set up on the server"
@@ -397,10 +405,9 @@ private fun AllProvidersSheet(list: List<OpenCodeAuth.Integration>, onDismiss: (
 private fun ProviderSignInSheet(backend: OpenCodeChatBackend, integ: OpenCodeAuth.Integration, onDismiss: () -> Unit, onConnected: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    // This fork always talks to the bridge on the phone (upstream's remote/VPS mode is not here), so the sign-in order
-    // is upstream's on-the-phone one: the browser flow first after a device code.
+    // upstream's order; REMOTE_BRIDGE makes this the on-the-phone one (see the note above methodHint)
     val methods = integ.signInMethods.sortedBy { m ->
-        when { m.isOAuth && m.looksLikeDeviceCode -> 0; m.isOAuth -> 0; m.isExternal -> 1; else -> 3 }
+        when { m.isOAuth && m.looksLikeDeviceCode -> 0; m.isOAuth -> if (REMOTE_BRIDGE) 2 else 0; m.isExternal -> 1; else -> 3 }
     }
     var method by remember { mutableStateOf(methods.singleOrNull()) }
     val answers = remember { mutableStateMapOf<String, String>() }
@@ -477,7 +484,7 @@ private fun ProviderSignInSheet(backend: OpenCodeChatBackend, integ: OpenCodeAut
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(OpenCodeAuth.methodTitle(opt), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                                    Text(methodHint(opt, remote), fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                    Text(methodHint(opt, REMOTE_BRIDGE), fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                                 }
                             }
                         }
@@ -546,7 +553,7 @@ private fun ProviderSignInSheet(backend: OpenCodeChatBackend, integ: OpenCodeAut
                                 busy = false
                             }
                         }, enabled = pasted.isNotBlank() && !busy, shape = RoundedCornerShape(12.dp)) { Text("Submit code") }
-                    } else if (a.returnsToLoopback && remote) {
+                    } else if (a.returnsToLoopback && REMOTE_BRIDGE) {
                         // server mode: the browser lands on this phone's 127.0.0.1; its address goes to the server
                         Spacer(Modifier.height(12.dp))
                         Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f), modifier = Modifier.fillMaxWidth()) {
@@ -588,7 +595,7 @@ private fun ProviderSignInSheet(backend: OpenCodeChatBackend, integ: OpenCodeAut
                         Text(OpenCodeAuth.methodTitle(m), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.weight(1f))
                         if (methods.size > 1) TextButton(onClick = { method = null; failed = null }) { Text("Other ways") }
                     }
-                    Text(methodHint(m, remote), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Text(methodHint(m, REMOTE_BRIDGE), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     Spacer(Modifier.height(10.dp))
                     AuthForm(m.form, answers)
                     if (m.isKey) {
