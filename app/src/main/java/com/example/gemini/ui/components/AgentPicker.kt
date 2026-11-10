@@ -110,6 +110,19 @@ fun ClaudeBadge(modifier: Modifier = Modifier) {
     }
 }
 
+/** Small badge marking an OpenCode conversation in lists. */
+@Composable
+fun OpenCodeBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(OpenCodeAccent.copy(alpha = 0.16f))
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+    ) {
+        Text(text = "OpenCode", fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = OpenCodeAccent)
+    }
+}
+
 /** Small badge marking a Hermes conversation in lists. */
 @Composable
 fun HermesBadge(modifier: Modifier = Modifier) {

@@ -57,6 +57,7 @@ class AgentPreferences(context: Context) {
                 if (AgentKind.AGY !in enabled) append(" --no-hub")
                 if (AgentKind.CLAUDE !in enabled) append(" --no-claude")
                 if (AgentKind.HERMES !in enabled) append(" --no-hermes")
+                if (AgentKind.OPENCODE !in enabled) append(" --no-opencode")
             }
         }
     }

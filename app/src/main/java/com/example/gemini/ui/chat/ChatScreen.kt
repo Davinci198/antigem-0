@@ -158,6 +158,21 @@ fun ChatScreen(
     val newChatAgent by viewModel.newChatAgent.collectAsState()
     val isClaudeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
     val isHermesChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.HERMES
+    val isOpenCodeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.OPENCODE
+    val openCodeBackend = viewModel.openCodeBackend
+    val openCodePending by openCodeBackend.pendingPermissions.collectAsState()
+    val openCodeState by openCodeBackend.state.collectAsState()
+    val openCodeStatus by openCodeBackend.status.collectAsState()
+    val openCodeModelsError by openCodeBackend.modelsError.collectAsState()
+    val openCodeConnected by openCodeBackend.connectedProviders.collectAsState()
+    val openCodeModelCount = openCodeBackend.availableModels.collectAsState().value.size
+    // the OpenCode page Settings opens on: Server & install for an Install button, Providers to sign in / add a key
+    var openCodeSettingsPage by remember { mutableStateOf<com.example.gemini.ui.opencode.OpenCodeSettingsPage?>(null) }
+    LaunchedEffect(Unit) {
+        openCodeBackend.toasts.collect {
+            com.example.gemini.ui.components.AppToastHelper.showToast(it, com.example.gemini.ui.components.ChatToastType.INFO)
+        }
+    }
     val hermesBackend = viewModel.hermesBackend
     val hermesModels by hermesBackend.models.collectAsState()
     val hermesSelectedModelId by hermesBackend.selectedModelId.collectAsState()
@@ -294,6 +309,13 @@ fun ChatScreen(
     var showRawPayloadDialog by remember { mutableStateOf<String?>(null) }
     var showChatTelemetryDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    // an error card's "Reconnect in Settings" (an OpenCode account the provider rejected)
+    LaunchedEffect(Unit) {
+        com.example.gemini.ui.opencode.OpenCodeUiEvents.openProviders.collect {
+            openCodeSettingsPage = com.example.gemini.ui.opencode.OpenCodeSettingsPage.PROVIDERS
+            showSettingsDialog = true
+        }
+    }
     var showAttachmentSelector by remember { mutableStateOf(false) }
     var showProjectPickerDialog by remember { mutableStateOf(false) }
     var showGitCloneDialog by remember { mutableStateOf(false) }
@@ -405,13 +427,28 @@ fun ChatScreen(
             onRetry = recheckClaude
         )
     } else null
+    val openCodeEntry = if (com.example.gemini.domain.model.AgentKind.OPENCODE in enabledAgents) {
+        com.example.gemini.ui.agents.openCodeStatusEntry(
+            state = openCodeState,
+            status = openCodeStatus,
+            serverRestarting = serverRestarting,
+            // installs right away; Settings → OpenCode shows the progress
+            onSetup = {
+                viewModel.openCodeBackend.startCliJob("install")
+                openCodeSettingsPage = com.example.gemini.ui.opencode.OpenCodeSettingsPage.SERVER
+                showSettingsDialog = true
+            },
+            onRestartServer = restartLocalServer,
+            onRetry = { viewModel.openCodeBackend.retryConnections() }
+        )
+    } else null
     val hermesEntry = if (com.example.gemini.domain.model.AgentKind.HERMES in enabledAgents) {
         com.example.gemini.ui.agents.hermesStatusEntry(
             serverRestarting = serverRestarting,
             onRestartServer = restartLocalServer
         )
     } else null
-    val agentEntries = listOfNotNull(agyEntry, claudeEntry, hermesEntry)
+    val agentEntries = listOfNotNull(agyEntry, claudeEntry, hermesEntry, openCodeEntry)
 
     // Slash commands Claude's CLI only shows in a terminal: the app opens its own screen instead
     val handleClaudeCommand: (com.example.gemini.data.agent.claude.ClaudeAppCommand) -> Unit = { cmd ->
@@ -515,7 +552,7 @@ fun ChatScreen(
     val pluginActionErrorMessage by viewModel.pluginActionErrorMessage.collectAsState()
 
     var allSlashCommands by remember { mutableStateOf(com.example.gemini.data.remote.SlashCommandsCache.getCachedSync()) }
-    val effectiveSlashCommands = if (isClaudeChat) claudeSlashCommands else allSlashCommands
+    val effectiveSlashCommands = if (isClaudeChat) claudeSlashCommands else if (isOpenCodeChat) emptyList() else allSlashCommands
 
     LaunchedEffect(agyHubUrl, systemConnectionState) {
         if (systemConnectionState.isHubOnline) {
@@ -775,7 +812,7 @@ fun ChatScreen(
 
     // The Claude Code-style working row: under the reply for as long as the agent works, but not while it waits for
     // the user (an approval or a question)
-    val waitingForUser = (isClaudeChat && claudePending.isNotEmpty()) ||
+    val waitingForUser = (isClaudeChat && claudePending.isNotEmpty()) || (isOpenCodeChat && openCodePending.isNotEmpty()) ||
         lastToolCalls.any { it.status == "PENDING_APPROVAL" || it.status == "AWAITING_CHOICE" }
     val showWorkingRow = workingAnimationEnabled && (isRunningOrStreaming || holdingTail) && !waitingForUser && !footerShown
 
@@ -788,6 +825,15 @@ fun ChatScreen(
                 else -> "Choose model"
             },
             family = com.example.gemini.domain.model.ModelFamily.CLAUDE
+        )
+        isOpenCodeChat -> enabledModels.find { it.id == selectedModelId } ?: AiModel(
+            id = selectedModelId.ifBlank { "default" },
+            displayName = when {
+                isRefreshingModels -> "Loading models…"
+                openCodeModelsError != null -> "No models"
+                selectedModelId.isNotBlank() -> selectedModelId.substringAfter('/')
+                else -> "Choose model"
+            }
         )
         isHermesChat -> {
             // the pill shows the picked model: a preset id, "@provider/model"
@@ -1034,12 +1080,16 @@ fun ChatScreen(
                         claude = claudeEntry,
                         agyAuth = agyAuthInfo,
                         claudeStatus = claudeStatus,
+                        openCode = openCodeEntry,
                         onClick = { showAccountsDialog = true }
                     )
                 },
                 claudeActions = remember(viewModel) {
                     com.example.gemini.ui.drawer.ClaudeDrawerActions(
-                        loadMessages = { id -> viewModel.loadClaudeMessages(id) },
+                        loadMessages = { id ->
+                            if (viewModel.openCodeBackend.conversations.value.any { it.id == id }) viewModel.loadOpenCodeMessages(id)
+                            else viewModel.loadClaudeMessages(id)
+                        },
                         rename = { id, title -> viewModel.renameConversation(id, title) },
                         restart = { id, onDone -> viewModel.claudeBackend.restartChat(id, onDone) }
                     )
@@ -1479,7 +1529,24 @@ fun ChatScreen(
                                         onServerLogs = { showLocalServerOutputDialog = true },
                                         serverStarting = serverRestarting
                                     )
-                                } else when (if (isClaudeChat) null else systemConnectionState.status) {
+                                } else if (isOpenCodeChat && openCodeState != com.example.gemini.data.agent.opencode.OpenCodeState.READY) {
+                                    com.example.gemini.ui.agents.AgentSetupPrompt(
+                                        agent = com.example.gemini.domain.model.AgentKind.OPENCODE,
+                                        title = when (openCodeState) {
+                                            com.example.gemini.data.agent.opencode.OpenCodeState.CHECKING -> "Starting OpenCode…"
+                                            com.example.gemini.data.agent.opencode.OpenCodeState.NOT_INSTALLED -> "OpenCode is not installed"
+                                            else -> "OpenCode is unavailable"
+                                        },
+                                        message = if (openCodeState == com.example.gemini.data.agent.opencode.OpenCodeState.CHECKING)
+                                            "Waiting for the server to come up. This takes a few seconds after the app opens."
+                                        else openCodeEntry?.detail ?: openCodeState.label,
+                                        statusColor = openCodeEntry?.color,
+                                        actionLabel = openCodeEntry?.action?.label,
+                                        onAction = { openCodeEntry?.action?.onClick?.invoke() },
+                                        secondaryLabel = if (openCodeState == com.example.gemini.data.agent.opencode.OpenCodeState.CHECKING) null else "Server logs",
+                                        onSecondary = { showLocalServerOutputDialog = true }
+                                    )
+                                } else when (if (isClaudeChat || isOpenCodeChat) null else systemConnectionState.status) {
                                     com.example.gemini.data.remote.SystemStatus.CHECKING_AUTH -> {
                                         com.example.gemini.ui.components.NewChatCheckingAuthPromptCard()
                                     }
@@ -1682,7 +1749,7 @@ fun ChatScreen(
                                     if (showWorkingRow) {
                                         item(key = "working_spinner", contentType = "working_spinner") {
                                             com.example.gemini.ui.components.AgentWorkingSpinner(
-                                                color = if (isClaudeChat) com.example.gemini.ui.components.ClaudeAccent else com.example.gemini.ui.components.AgyAccent,
+                                                color = if (isClaudeChat) com.example.gemini.ui.components.ClaudeAccent else if (isOpenCodeChat) com.example.gemini.ui.components.OpenCodeAccent else com.example.gemini.ui.components.AgyAccent,
                                                 compacting = isClaudeChat && claudeCompacting,
                                                 // leaves in the frame the reply's footer arrives, which fades in in its place
                                                 modifier = Modifier.animateItem(fadeInSpec = tween(180), placementSpec = null, fadeOutSpec = null)
@@ -2005,8 +2072,10 @@ fun ChatScreen(
                 }
 
                 // Agent prompts docked above the input (both agents): permission requests, then questions
-                val approvalItems = remember(pendingApprovals, claudePending, isClaudeChat) {
-                    if (isClaudeChat) {
+                val approvalItems = remember(pendingApprovals, claudePending, openCodePending, isClaudeChat, isOpenCodeChat) {
+                    if (isOpenCodeChat) {
+                        com.example.gemini.ui.opencode.openCodeApprovalItems(openCodePending, openCodeBackend)
+                    } else if (isClaudeChat) {
                         com.example.gemini.ui.claude.claudeApprovalItems(claudePending, claudeBackend)
                     } else {
                         com.example.gemini.ui.agents.agyApprovalItems(
@@ -2026,12 +2095,16 @@ fun ChatScreen(
                 ) {
                     com.example.gemini.ui.agents.AgentApprovalPanel(
                         items = approvalItems.ifEmpty { lastApprovalItems[0] },
-                        onAllowAll = if (isClaudeChat) {
+                        onAllowAll = if (isOpenCodeChat) {
+                            { openCodePending.forEach { openCodeBackend.replyPermission(it.id, "once") } }
+                        } else if (isClaudeChat) {
                             { claudePending.filter { it.toolName != "ExitPlanMode" }.forEach { claudeBackend.approveToolAlways(it.toolUseId, -1) } }
                         } else {
                             { viewModel.approveAllPendingTools(pendingApprovals) }
                         },
-                        onDenyAll = if (isClaudeChat) {
+                        onDenyAll = if (isOpenCodeChat) {
+                            { openCodePending.forEach { openCodeBackend.replyPermission(it.id, "reject") } }
+                        } else if (isClaudeChat) {
                             { claudePending.forEach { claudeBackend.rejectToolById(it.toolUseId, null) } }
                         } else {
                             { viewModel.rejectAllPendingTools(pendingApprovals) }
@@ -2039,9 +2112,9 @@ fun ChatScreen(
                     )
                 }
 
-                val pendingQuestion = remember(messages, isClaudeChat) {
+                val pendingQuestion = remember(messages, isClaudeChat, isOpenCodeChat) {
                     com.example.gemini.ui.agents.findPendingQuestion(
-                        if (isClaudeChat) com.example.gemini.domain.model.AgentKind.CLAUDE else com.example.gemini.domain.model.AgentKind.AGY,
+                        if (isOpenCodeChat) com.example.gemini.domain.model.AgentKind.OPENCODE else if (isClaudeChat) com.example.gemini.domain.model.AgentKind.CLAUDE else com.example.gemini.domain.model.AgentKind.AGY,
                         messages
                     )
                 }
@@ -2080,12 +2153,19 @@ fun ChatScreen(
                     }
                     com.example.gemini.ui.claude.ClaudeControlsStrip(claudeBackend, viewModel.claudePrefs)
                 }
+                if (isOpenCodeChat) {
+                    com.example.gemini.ui.opencode.OpenCodeControlsStrip(openCodeBackend)
+                }
 
                 // Chat Input Bar with Bottom Model & Thinking Selector Pills (Claude Android Style)
                 ChatInputBar(
-                    isOnline = if (isClaudeChat) !claudeState.isBlocking else systemConnectionState.canSend,
-                    isAuth = if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else systemConnectionState.isAuth,
-                    offlineMessage = if (isClaudeChat) when (claudeState) {
+                    isOnline = if (isOpenCodeChat) !openCodeState.isBlocking else if (isClaudeChat) !claudeState.isBlocking else systemConnectionState.canSend,
+                    isAuth = if (isOpenCodeChat) true else if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else systemConnectionState.isAuth,
+                    offlineMessage = if (isOpenCodeChat) when (openCodeState) {
+                        com.example.gemini.data.agent.opencode.OpenCodeState.NOT_INSTALLED -> "OpenCode is not installed on the server. See Settings → OpenCode."
+                        com.example.gemini.data.agent.opencode.OpenCodeState.DISABLED, com.example.gemini.data.agent.opencode.OpenCodeState.OUTDATED -> "Restart the server to use OpenCode."
+                        else -> "The server is offline. Start it to send messages."
+                    } else if (isClaudeChat) when (claudeState) {
                         com.example.gemini.data.agent.claude.ClaudeStatus.NOT_INSTALLED -> "Claude Code is not installed. Set it up in Settings."
                         com.example.gemini.data.agent.claude.ClaudeStatus.BRIDGE_OUTDATED -> "Restart the local server to use Claude Code."
                         else -> "The local server is offline. Start it to send messages."
@@ -2164,6 +2244,11 @@ fun ChatScreen(
             account = viewModel.claudeAccount,
             onDismiss = { showModelSelector = false }
         )
+    } else if (showModelSelector && isOpenCodeChat) {
+        com.example.gemini.ui.opencode.OpenCodeModelSheet(
+            openCodeBackend,
+            onOpenSettings = { openCodeSettingsPage = com.example.gemini.ui.opencode.OpenCodeSettingsPage.PROVIDERS; showSettingsDialog = true }
+        ) { showModelSelector = false }
     } else if (showModelSelector) {
         ModelSelectorBottomSheet(
             selectedModelId = selectedModelId,
@@ -2348,12 +2433,15 @@ fun ChatScreen(
             onOpenNetworkInspector = { showNetworkInspectorDialog = true },
             claude = claudeSettingsDeps,
             initialClaudePage = claudeSettingsPage,
+            openCode = viewModel.openCodeBackend,
+            initialOpenCodePage = openCodeSettingsPage,
             enabledAgents = enabledAgents,
             isApplyingAgents = isApplyingAgents,
             onApplyAgents = { viewModel.applyAgents(it) },
             onDismiss = {
                 showSettingsDialog = false
                 claudeSettingsPage = null
+                openCodeSettingsPage = null
             }
         )
     }
@@ -2388,6 +2476,17 @@ fun ChatScreen(
             onClaudeSettings = {
                 scope.launch { drawerState.close() }
                 openClaudeSetup()
+            },
+            openCode = openCodeEntry,
+            openCodeFacts = listOfNotNull(
+                openCodeStatus?.version?.let { "OpenCode $it" },
+                openCodeConnected.takeIf { it.isNotEmpty() }?.let { if (it.size <= 2) it.joinToString(", ") else "${it.size} providers" },
+                openCodeModelCount.takeIf { it > 0 }?.let { "$it models" }
+            ),
+            onOpenCodeSettings = {
+                scope.launch { drawerState.close() }
+                openCodeSettingsPage = com.example.gemini.ui.opencode.OpenCodeSettingsPage.PROVIDERS
+                showSettingsDialog = true
             },
             onDismiss = { showAccountsDialog = false }
         )
