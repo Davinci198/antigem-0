@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.DropdownMenu
@@ -283,13 +284,14 @@ fun AgentActionPill(text: String, color: Color, onClick: () -> Unit) {
 }
 
 /**
- * Top-bar status: the (split) dot; tapping opens each agent's state with its fix (sign in, set up, restart)
- * and the server logs.
+ * Top-bar status: the (split) dot; tapping opens each agent's state with its fix (sign in, set up, restart),
+ * the server logs and, with [onRestartServer], a restart of the server (many did not find it inside the logs).
  */
 @Composable
 fun AgentStatusIndicator(
     entries: List<AgentStatusEntry>,
     onOpenServerLogs: () -> Unit,
+    onRestartServer: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var open by remember { mutableStateOf(false) }
@@ -345,6 +347,22 @@ fun AgentStatusIndicator(
                 Spacer(Modifier.width(10.dp))
                 Text("Server logs", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f), modifier = Modifier.size(18.dp))
+            }
+            if (onRestartServer != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            open = false
+                            onRestartServer()
+                        }
+                        .padding(horizontal = 16.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Outlined.RestartAlt, null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text("Restart server", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                }
             }
         }
     }

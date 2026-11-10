@@ -1256,7 +1256,8 @@ fun ChatScreen(
                             // upper half Antigravity, lower half Claude Code (one solid dot when they agree)
                             com.example.gemini.ui.agents.AgentStatusIndicator(
                                 entries = agentEntries,
-                                onOpenServerLogs = { showLocalServerOutputDialog = true }
+                                onOpenServerLogs = { showLocalServerOutputDialog = true },
+                                onRestartServer = { com.example.gemini.data.local.LocalServerManager.restartServer(context) }
                             )
                         }
                         IconButton(onClick = onNavigateToBrowser) {
@@ -1354,7 +1355,35 @@ fun ChatScreen(
                             }
                         }
                     } else if (!isClaudeChat && isServerInitializing && messages.isEmpty()) {
-                        com.example.gemini.ui.components.EngineWarmingUpView()
+                        if (isFreshNewChat && enabledAgents.size > 1) {
+                            // a new chat keeps its agent picker while Antigravity starts (Claude can be picked and used
+                            // meanwhile); before, the whole view was replaced and the picker vanished until the hub was up
+                            BoxWithConstraints(
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                val minHeight = maxHeight
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .verticalScroll(emptyScrollState)
+                                        .heightIn(min = minHeight)
+                                        .padding(horizontal = 24.dp, vertical = 24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    com.example.gemini.ui.components.AgentPicker(
+                                        selected = currentConv?.agent ?: newChatAgent,
+                                        onSelect = { viewModel.setNewChatAgent(it) },
+                                        modifier = Modifier.padding(bottom = 20.dp),
+                                        agents = enabledAgents,
+                                        statusColors = agentEntries.associate { it.agent to it.color }
+                                    )
+                                    com.example.gemini.ui.components.EngineWarmingUpView()
+                                }
+                            }
+                        } else {
+                            com.example.gemini.ui.components.EngineWarmingUpView()
+                        }
                     } else if (!conversationError.isNullOrBlank() && messages.isEmpty() && (isExistingConversation || currentConv != null)) {
                         Column(
                             modifier = Modifier
