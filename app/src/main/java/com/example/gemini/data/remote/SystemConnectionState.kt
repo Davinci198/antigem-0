@@ -69,10 +69,14 @@ sealed class SystemConnectionState {
         val error: String? = null,
         override val isAuth: Boolean = true,
         val isAuthChecking: Boolean = false,
-        val hasCsrfToken: Boolean = false
+        val hasCsrfToken: Boolean = false,
+        /** Antigravity is switched on in Settings: its hub must come up for the system to be usable. Off: the
+         * bridge alone is the system — a hub that never starts is expected, not an outage. */
+        val hubExpected: Boolean = true
     ) : SystemConnectionState() {
         override val status: SystemStatus
             get() = when {
+                !hubExpected -> SystemStatus.READY
                 error != null || hubStatus == "error" -> SystemStatus.ERROR
                 hubStatus == "stopped" -> SystemStatus.OFFLINE
                 hubStatus == "starting" || hubStatus == "idle" -> SystemStatus.STARTING
@@ -98,7 +102,8 @@ sealed class SystemConnectionState {
         get() = this is Connected
 
     val isHubOnline: Boolean
-        get() = status == SystemStatus.READY || status == SystemStatus.CHECKING_AUTH || status == SystemStatus.UNAUTHENTICATED || status == SystemStatus.ACQUIRING_CSRF
+        get() = this is Connected && hubExpected &&
+            (status == SystemStatus.READY || status == SystemStatus.CHECKING_AUTH || status == SystemStatus.UNAUTHENTICATED || status == SystemStatus.ACQUIRING_CSRF)
 
     val isReady: Boolean
         get() = status == SystemStatus.READY

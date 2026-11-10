@@ -203,6 +203,16 @@ class AgyBridgeService(
     private var currentHubStatus: String = "idle"
     private var currentHubError: String? = null
 
+    /** Antigravity is one of the agents the app runs; off, a stopped hub is normal and the bridge alone is the system. */
+    @Volatile var hubExpected: Boolean = true
+        private set
+
+    fun setHubExpected(expected: Boolean) {
+        if (hubExpected == expected) return
+        hubExpected = expected
+        recomputeSystemConnectionState()
+    }
+
     fun recomputeSystemConnectionState() {
         if (!isBridgeConnected) {
             _systemConnectionState.value = SystemConnectionState.Offline
@@ -214,7 +224,8 @@ class AgyBridgeService(
             error = currentHubError,
             isAuth = currentAuthState,
             isAuthChecking = currentAuthChecking,
-            hasCsrfToken = hasCsrf
+            hasCsrfToken = hasCsrf,
+            hubExpected = hubExpected
         )
     }
 
