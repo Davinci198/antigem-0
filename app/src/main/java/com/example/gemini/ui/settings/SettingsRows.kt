@@ -46,13 +46,15 @@ fun SettingsRowList(
     groups: List<List<SettingsRowItem>>,
     cardBg: Color,
     modifier: Modifier = Modifier,
-    scrollState: ScrollState = rememberScrollState()
+    scrollState: ScrollState = rememberScrollState(),
+    // true when the host already scrolls (MainSettingsMenu): a second verticalScroll/fillMaxSize inside the host's
+    // infinite-height constraints is exactly the "vertically scrollable component measured with infinity max height" crash
+    nestedScroll: Boolean = false
 ) {
     // plain vertical scroll: this fork has no bouncy overscroll helper (upstream's BouncyOverscroll.kt is a separate
     // Compose-Foundation API import and nothing here needs it)
     Column(
-        modifier.fillMaxSize()
-            .verticalScroll(scrollState)
+        modifier = (if (nestedScroll) modifier else modifier.fillMaxSize().verticalScroll(scrollState))
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
