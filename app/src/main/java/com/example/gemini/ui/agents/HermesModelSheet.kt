@@ -101,6 +101,10 @@ fun HermesModelSheet(
 
     var search by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(ScanFilter.ALL) }
+    // smart default: after a scan a 300-model list is useless with the dead
+    // ones mixed in, so "Working" is the sensible default; when everything is
+    // dead ALL is the only filter that still shows a row, and its error reasons
+    // are what the user needs to see.
     // Providers whose models are folded away. Expanded by default: the header
     // carries the provider name the flat list used to repeat on every row.
     var collapsedProviders by remember { mutableStateOf(setOf<String>()) }
@@ -113,9 +117,15 @@ fun HermesModelSheet(
         }
     }
 
-    LaunchedEffect(Unit) { backend.refreshModels() }
+    // The sheet is re-created every time it opens, so remember{} never survives
+    // past one open; pick a smart default from the current scan instead: WORKING
+    // after a scan if any model answers, ALL when everything is dead so the user
+    // can still see the reasons.
+    LaunchedEffect(Unit) {
+        filter = if (health.values.any { it.ok }) ScanFilter.WORKING else ScanFilter.ALL
+    }
 
-    // the entries recompute whenever the picker payload changes; the scan
+    LaunchedEffect(Unit) { backend.refreshModels() }
     // results stay keyed by provider|model, so they survive reordering
     val allEntries = if (models != null) backend.modelEntries() else emptyList()
     val rows = allEntries.map { e ->

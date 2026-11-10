@@ -115,10 +115,15 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
     }
 
     /** The verdicts of one provider, keyed by model id (the shared catalog uses these). */
-    fun verdictsFor(providerId: String): Map<String, ClaudeProviderTestResult> =
-        verdicts.entries
-            .filter { it.key.startsWith("$providerId@") }
-            .associate { it.key.substringAfter('@') to it.value }
+    fun verdictsFor(providerId: String): Map<String, ClaudeProviderTestResult> {
+        val prefix = "$providerId@"
+        return verdicts.entries
+            .filter { it.key.startsWith(prefix) }
+            .associate {
+                val idx = it.key.indexOf('@', prefix.length)
+                it.key.substring(prefix.length, idx) to it.value
+            }
+    }
 
     /**
      * Drops one provider's verdicts before a forced rescan, leaving every other

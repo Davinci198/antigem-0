@@ -172,11 +172,9 @@ fun ProvidersPage(deps: ClaudeSettingsDeps) {
     val results = remember { mutableStateMapOf<String, ClaudeProviderTestResult>() }
     var keyFor by remember { mutableStateOf<ClaudeProvider?>(null) }
     var quickAdd by remember { mutableStateOf(false) }
-    val scanning = remember { mutableStateMapOf<String, Boolean>() }
-    val latency = remember { mutableStateMapOf<String, ClaudeProviderTestResult>() }
-    val latencyFastest = remember { mutableStateMapOf<String, String>() }
-    LaunchedEffect(Unit) { backend.refreshProviders() }
+    val store = ModelScanStore.shared(context)
     val muted = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+    LaunchedEffect(Unit) { backend.refreshProviders() }
 
     Text("Other Anthropic-compatible APIs", fontWeight = FontWeight.Bold, fontSize = 14.sp)
     Text(
@@ -238,9 +236,9 @@ fun ProvidersPage(deps: ClaudeSettingsDeps) {
             p = p,
             testing = testing[p.id] == true,
             result = results[p.id],
-            scanning = scanning[p.id] == true,
-            latencyFor = { m -> latency["${p.id}@$m"] },
-            fastestModel = latencyFastest[p.id],
+            scanning = store.scanning[p.id] == true,
+            latencyFor = { m -> store.verdict(p.id, m) },
+            fastestModel = store.fastest[p.id],
             onEdit = { editing = p },
             onDelete = { toDelete = p },
             onAddKey = { keyFor = p },
@@ -256,15 +254,12 @@ fun ProvidersPage(deps: ClaudeSettingsDeps) {
                 if (p.models.isEmpty()) {
                     Toast.makeText(context, "No models yet: open Edit to add model ids or fetch the provider's list.", Toast.LENGTH_LONG).show()
                 } else {
-                    scanning[p.id] = true
-                    latencyFastest.remove(p.id)
-                    latency.keys.removeAll { it.startsWith("${p.id}@") }
+                    store.beginScan(p)
                     backend.scanProviderLatency(
                         p, p.models,
-                        onProgress = { model, res -> latency["${p.id}@$model"] = res },
+                        onProgress = { model, res -> store.recordProgress(p.id, model, res) },
                         onFinished = { answered, fastest ->
-                            scanning[p.id] = false
-                            if (fastest != null) latencyFastest[p.id] = fastest.model
+                            store.finishScan(p, fastest?.model)
                             val msg = if (answered == 0) {
                                 "No model answered (check the API key)"
                             } else {

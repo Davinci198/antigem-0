@@ -46,6 +46,23 @@ private const val MAX_WS_RETRIES = 3
 /** How long sendMessage waits for the stream socket to open before sending anyway. */
 private const val WS_OPEN_TIMEOUT_MS = 5_000L
 
+/**
+ * How long one provider's `scan-batch` may take before the app gives up on the
+ * answer. The bridge probes the whole provider before it replies, so this is the
+ * ceiling for "slow endpoint, large catalog", not for one model. On expiry the
+ * models get an error verdict instead of staying silently unscanned.
+ */
+private const val SCAN_READ_TIMEOUT_SECONDS = 15L * 60L
+
+/** The verdict shown for models whose batch never delivered a real answer. */
+private fun scanFailureVerdict(reason: String) = HermesModelHealth(
+    ok = false,
+    latencyMs = 0L,
+    error = reason,
+    status = 0,
+    transient = true,
+)
+
 /** One provider row of Hermes' own model picker (the gateway's model.options). */
 data class HermesPresetProvider(val slug: String, val name: String, val models: List<String>)
 
@@ -92,6 +109,13 @@ data class HermesModelHealth(
     val error: String? = null,
     /** HTTP status parsed from the error, so a 429 is amber and not a dead model. */
     val status: Int = 0,
+    /**
+     * True when this verdict is about the *scan*, not the model: the batch never
+     * answered, or the bridge left the model out. Shown like any other failure so
+     * a broken scan is visible, but never written to the shared store and never
+     * treated as verified — the model is probed again on the next scan.
+     */
+    val transient: Boolean = false,
 )
 
 /**
@@ -356,9 +380,11 @@ class HermesChatBackend(
                 sharedScanStore.clearProviders(targets.map { it.providerId }.toSet())
             }
             // Resume: models verified by an earlier scan keep their verdict and
-            // are not probed again; only missing entries are tested.
+            // are not probed again; only missing entries are tested. A verdict
+            // that says "the scan itself failed" is not a verdict about the
+            // model, so those are re-probed rather than trusted.
             val alreadyKnown = _modelHealth.value
-            val pending = targets.filter { alreadyKnown[it.key] == null }
+            val pending = targets.filter { entry -> alreadyKnown[entry.key].let { it == null || it.transient } }
             _scanProgress.value = (targets.size - pending.size) to targets.size
             if (pending.isEmpty()) {
                 _isScanning.value = false
@@ -370,26 +396,30 @@ class HermesChatBackend(
             val pendingByProvider = pending.groupBy { it.providerId }
             val done = java.util.concurrent.atomic.AtomicInteger(targets.size - pending.size)
             val sid = activeSession ?: "default"
+            // A batch that never answered is a fact about the scan, not the
+            // models: the failure is shown so it cannot pass unnoticed, but it
+            // stays out of the shared store and is not treated as verified.
+            fun recordScanFailure(entries: List<HermesModelEntry>, reason: String) {
+                entries.forEach { entry ->
+                    _modelHealth.value = _modelHealth.value + (entry.key to scanFailureVerdict(reason))
+                    _scanProgress.value = done.incrementAndGet() to targets.size
+                }
+            }
             coroutineScope {
                 pendingByProvider.map { (providerId, entries) ->
                     async {
-                        val payload = JSONObject()
-                            .put("provider_id", providerId)
-                            .put("timeout_ms", 15000)
-                            .put("models", org.json.JSONArray(entries.map { it.modelId }))
-                            .toString()
-                        val results = runCatching {
-                            JSONObject(postBridge("/sessions/$sid/models/scan-batch", payload))
-                                .optJSONObject("results")
-                        }.getOrNull()
                         val byModel = entries.associateBy { it.modelId }
-                        results?.keys()?.forEach { modelId ->
-                            val o = results.optJSONObject(modelId) ?: return@forEach
-                            val entry = byModel[modelId] ?: return@forEach
-                            val error = o.optString("error").takeIf { it.isNotBlank() }
+                        val answered = HashSet<String>()
+                        // The bridge streams one scan-probe event per model as the
+                        // probe finishes; every verdict is applied the moment it
+                        // arrives, so progress moves in steps instead of jumping
+                        // 0→300 the instant the whole provider is done.
+                        fun applyVerdict(modelId: String, ok: Boolean, latencyMs: Long, error: String?) {
+                            val entry = byModel[modelId] ?: return
+                            if (!answered.add(modelId)) return
                             val verdict = HermesModelHealth(
-                                ok = o.optBoolean("ok", false),
-                                latencyMs = o.optLong("latency_ms", 0L),
+                                ok = ok,
+                                latencyMs = latencyMs,
                                 error = error,
                                 status = httpStatusOf(error),
                             )
@@ -409,6 +439,19 @@ class HermesChatBackend(
                             )
                             _scanProgress.value = done.incrementAndGet() to targets.size
                         }
+                        val stream = runCatching {
+                            streamScanBatch(sid, providerId, entries.map { it.modelId }) { modelId, ok, latencyMs, error ->
+                                applyVerdict(modelId, ok, latencyMs, error)
+                            }
+                        }
+                        // A stream that broke mid-way and a model the bridge never
+                        // probed are both facts about the scan, not the models:
+                        // shown with a reason, kept out of the shared store, and
+                        // re-probed on the next scan.
+                        val reason = stream.exceptionOrNull()
+                            ?.let { "scan failed: " + (it.message ?: "the bridge returned no results") }
+                            ?: "scan failed: no result for this model"
+                        recordScanFailure(entries.filter { it.modelId !in answered }, reason)
                     }
                 }.awaitAll()
             }
@@ -527,6 +570,22 @@ class HermesChatBackend(
         bridge.client.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /**
+     * Client for the scan-batch call only.
+     *
+     * The bridge fans a whole provider out server-side and answers once every
+     * probe is done, so a big catalog on a slow endpoint takes minutes. The
+     * shared [AgyBridgeService.client] cuts the read at 30s; the cut died inside
+     * `runCatching{}.getOrNull()` and the provider came back with no verdicts at
+     * all — silently, and again on every later scan. Give that one call its own
+     * ceiling; every probe still carries its own `timeout_ms`.
+     */
+    private val scanClient: OkHttpClient by lazy {
+        bridge.client.newBuilder()
+            .readTimeout(SCAN_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .build()
     }
 
@@ -732,10 +791,70 @@ class HermesChatBackend(
         _startupStatus.value = null
     }
 
-    private suspend fun postBridge(path: String, json: String): String = withContext(Dispatchers.IO) {
+    private suspend fun postBridge(
+        path: String,
+        json: String,
+        client: OkHttpClient = bridge.client,
+    ): String = withContext(Dispatchers.IO) {
         val body = json.toRequestBody("application/json".toMediaType())
         val req = Request.Builder().url(url(path)).post(body).build()
-        bridge.client.newCall(req).execute().use { it.body?.string().orEmpty() }
+        client.newCall(req).execute().use { it.body?.string().orEmpty() }
+    }
+
+    /**
+     * POST that fails loudly on a non-2xx answer. The plain [postBridge] returns
+     * the bridge's error body as if it were the payload, which the scan path
+     * turned into "no results" — indistinguishable from a dead endpoint. Here the
+     * status and the bridge's own message survive into the thrown exception.
+     */
+    /**
+     * Streams one provider's `scan-batch` and reports each verdict the moment
+     * the bridge flushes it, so the picker shows live progress — the old
+     * single-shot answer jumped 0→300 only after the whole provider finished.
+     * The stream is one JSON object per line: scan-start, then scan-probe
+     * (model/ok/latency_ms/error) per verdict, then scan-done. A model the
+     * stream never reports is the caller's problem: it marks it a scan failure,
+     * not a verdict about the model.
+     */
+    private suspend fun streamScanBatch(
+        sid: String,
+        providerId: String,
+        models: List<String>,
+        onProbe: (modelId: String, ok: Boolean, latencyMs: Long, error: String?) -> Unit,
+    ) {
+        val payload = JSONObject()
+            .put("provider_id", providerId)
+            .put("timeout_ms", 15000)
+            .put("models", org.json.JSONArray(models))
+            .toString()
+        val body = payload.toRequestBody("application/json".toMediaType())
+        val req = Request.Builder().url(url("/sessions/$sid/models/scan-batch")).post(body).build()
+        withContext(Dispatchers.IO) {
+            scanClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val text = resp.body?.string().orEmpty()
+                    val detail = runCatching { JSONObject(text).optString("error") }
+                        .getOrNull()?.takeIf { it.isNotBlank() }
+                    throw java.io.IOException(
+                        "bridge HTTP ${resp.code}" + (detail?.let { ": $it" } ?: "")
+                    )
+                }
+                val source = resp.body?.source()
+                    ?: throw java.io.IOException("the bridge returned no scan stream")
+                while (true) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank()) continue
+                    val ev = runCatching { JSONObject(line) }.getOrNull() ?: continue
+                    if (ev.optString("type") != "scan-probe") continue
+                    onProbe(
+                        ev.optString("model"),
+                        ev.optBoolean("ok", false),
+                        ev.optLong("latency_ms", 0L),
+                        ev.optString("error").takeIf { it.isNotBlank() },
+                    )
+                }
+            }
+        }
     }
 
     private suspend fun getBridge(path: String): String = withContext(Dispatchers.IO) {

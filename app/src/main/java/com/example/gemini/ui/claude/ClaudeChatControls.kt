@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -305,6 +308,83 @@ fun ClaudeModelSheet(
         backend.refreshProviders()
     }
 
+    // Declared here rather than inside the sheet body: LazyColumn's item slots
+    // are a LazyListScope, not a composable, so the row composable has to live
+    // in the composable function where it can still capture the sheet state.
+    @Composable
+    fun ModelRow(
+        value: String,
+        name: String,
+        desc: String,
+        warnDesc: Boolean = false,
+        probe: ClaudeProviderTestResult? = null,
+        kind: ScanKind? = null
+    ) {
+        val isSel = value == selected
+        Surface(
+            onClick = {
+                backend.selectModel(value)
+                onDismiss()
+            },
+            shape = RoundedCornerShape(14.dp),
+            color = cardColor,
+            border = BorderStroke(if (isSel) 1.5.dp else 1.dp, if (isSel) ClaudeAccent.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (kind != null) {
+                    Box(
+                        Modifier.padding(end = 9.dp).size(8.dp).clip(CircleShape).background(
+                            when (kind) {
+                                ScanKind.OK -> ScanGreen
+                                ScanKind.THROTTLED, ScanKind.CREDITS, ScanKind.TIMEOUT -> ScanAmber
+                                else -> ScanRed
+                            }
+                        )
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(name, fontWeight = if (isSel) FontWeight.Bold else FontWeight.SemiBold, fontSize = 14.sp)
+                    if (desc.isNotBlank()) {
+                        Text(
+                            desc, fontSize = 12.sp, lineHeight = 16.sp,
+                            color = if (warnDesc) com.example.gemini.theme.QuotaAmber else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+                if (isSel) {
+                    Spacer(Modifier.width(8.dp))
+                    Row(
+                        Modifier.clip(RoundedCornerShape(6.dp)).background(ClaudeAccent.copy(alpha = 0.15f)).padding(horizontal = 7.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Check, null, tint = ClaudeAccent, modifier = Modifier.size(12.dp))
+                        Spacer(Modifier.width(3.dp))
+                        Text("Active", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = ClaudeAccent)
+                    }
+                }
+                // the scan verdict, so a picked model is not a blind pick
+                probe?.let { r ->
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        when {
+                            r.ok -> "%.1fs".format(r.latency_ms / 1000.0)
+                            r.status > 0 -> "HTTP ${r.status}"
+                            else -> "failed"
+                        },
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = when {
+                            r.ok -> ScanGreen
+                            kind == ScanKind.THROTTLED || kind == ScanKind.CREDITS || kind == ScanKind.TIMEOUT -> ScanAmber
+                            else -> ScanRed
+                        }
+                    )
+                }
+            }
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
         sheetState = scanSheetState,
@@ -340,8 +420,11 @@ fun ClaudeModelSheet(
                 onClose = { closeSheet() },
             )
         } else {
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(bottom = 22.dp).navigationBarsPadding()
+        // LazyColumn, not Column(verticalScroll): a 300-model provider list used
+        // to compose every Surface row on every sheet open, which showed as a
+        // visible lag before the picker appeared.
+        LazyColumn(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 22.dp).navigationBarsPadding()
         ) {
             // Claude's own models need the Claude login; the providers' models only their key
             val signedOut = accountState == com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT
@@ -383,6 +466,7 @@ fun ClaudeModelSheet(
                 if (matching.isEmpty()) null else p to matching
             }
 
+            item {
             AgentSheetHeader(
                 AgentKind.CLAUDE,
                 "Select model",
@@ -449,122 +533,57 @@ fun ClaudeModelSheet(
                 onFilterChange = { pickerFilter = it },
                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
             )
-
-            @Composable
-            fun ModelRow(
-                value: String,
-                name: String,
-                desc: String,
-                warnDesc: Boolean = false,
-                probe: ClaudeProviderTestResult? = null,
-                kind: ScanKind? = null
-            ) {
-                val isSel = value == selected
-                Surface(
-                    onClick = {
-                        backend.selectModel(value)
-                        onDismiss()
-                    },
-                    shape = RoundedCornerShape(14.dp),
-                    color = cardColor,
-                    border = BorderStroke(if (isSel) 1.5.dp else 1.dp, if (isSel) ClaudeAccent.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (kind != null) {
-                            Box(
-                                Modifier.padding(end = 9.dp).size(8.dp).clip(CircleShape).background(
-                                    when (kind) {
-                                        ScanKind.OK -> ScanGreen
-                                        ScanKind.THROTTLED, ScanKind.CREDITS, ScanKind.TIMEOUT -> ScanAmber
-                                        else -> ScanRed
-                                    }
-                                )
-                            )
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text(name, fontWeight = if (isSel) FontWeight.Bold else FontWeight.SemiBold, fontSize = 14.sp)
-                            if (desc.isNotBlank()) {
-                                Text(
-                                    desc, fontSize = 12.sp, lineHeight = 16.sp,
-                                    color = if (warnDesc) com.example.gemini.theme.QuotaAmber else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                )
-                            }
-                        }
-                        if (isSel) {
-                            Spacer(Modifier.width(8.dp))
-                            Row(
-                                Modifier.clip(RoundedCornerShape(6.dp)).background(ClaudeAccent.copy(alpha = 0.15f)).padding(horizontal = 7.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Check, null, tint = ClaudeAccent, modifier = Modifier.size(12.dp))
-                                Spacer(Modifier.width(3.dp))
-                                Text("Active", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = ClaudeAccent)
-                            }
-                        }
-                        // the scan verdict, so a picked model is not a blind pick
-                        probe?.let { r ->
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                when {
-                                    r.ok -> "%.1fs".format(r.latency_ms / 1000.0)
-                                    r.status > 0 -> "HTTP ${r.status}"
-                                    else -> "failed"
-                                },
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = when {
-                                    r.ok -> ScanGreen
-                                    kind == ScanKind.THROTTLED || kind == ScanKind.CREDITS || kind == ScanKind.TIMEOUT -> ScanAmber
-                                    else -> ScanRed
-                                }
-                            )
-                        }
-                    }
-                }
             }
 
             // Claude's own rows have no verdicts, so a verdict filter only makes
             // sense for the custom providers; "All" keeps the Claude plan list.
             if (pickerFilter == ScanFilter.ALL) {
-                CollapsibleSheetSection(
-                    title = if (customSections.isEmpty()) "Model" else "Claude",
-                    trailing = if (customSections.isEmpty()) null else "your Claude plan",
-                    expanded = "claude" !in collapsedSections,
-                    onToggle = { toggleSection("claude") },
-                )
-                if ("claude" !in collapsedSections) {
-                if (signedOut) {
-                    Text(
-                        "Sign in to Claude Code (Settings → Claude Code → Account) to use Claude's models.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        modifier = Modifier.padding(horizontal = 4.dp)
+                item(key = "claude-section") {
+                    CollapsibleSheetSection(
+                        title = if (customSections.isEmpty()) "Model" else "Claude",
+                        trailing = if (customSections.isEmpty()) null else "your Claude plan",
+                        expanded = "claude" !in collapsedSections,
+                        onToggle = { toggleSection("claude") },
                     )
-                } else if (rows.isEmpty()) {
-                    Surface(shape = RoundedCornerShape(14.dp), color = cardColor, modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(18.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                            if (refreshing) {
-                                androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = ClaudeAccent)
-                                Spacer(Modifier.height(10.dp))
-                                Text("Loading Claude's models…", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Text("Claude Code is starting to list them; this can take a moment.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                            } else {
-                                Text("No models loaded", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Text(
-                                    modelsError ?: "Claude Code has not listed its models yet.",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                )
-                                Spacer(Modifier.height(10.dp))
-                                TextButton(onClick = { backend.refreshInfo(force = true) }) { Text("Try again", color = ClaudeAccent) }
+                }
+                if ("claude" !in collapsedSections && signedOut) {
+                    item(key = "claude-signed-out") {
+                        Text(
+                            "Sign in to Claude Code (Settings → Claude Code → Account) to use Claude's models.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
+                }
+                if ("claude" !in collapsedSections && !signedOut && rows.isEmpty()) {
+                    item(key = "claude-empty") {
+                        Surface(shape = RoundedCornerShape(14.dp), color = cardColor, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(18.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                if (refreshing) {
+                                    androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = ClaudeAccent)
+                                    Spacer(Modifier.height(10.dp))
+                                    Text("Loading Claude's models…", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text("Claude Code is starting to list them; this can take a moment.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                } else {
+                                    Text("No models loaded", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text(
+                                        modelsError ?: "Claude Code has not listed its models yet.",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    )
+                                    Spacer(Modifier.height(10.dp))
+                                    TextButton(onClick = { backend.refreshInfo(force = true) }) { Text("Try again", color = ClaudeAccent) }
+                                }
                             }
                         }
                     }
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    filteredRows.forEach { (value, name, desc) -> ModelRow(value, name, desc) }
-                }
+                if ("claude" !in collapsedSections) {
+                    items(filteredRows, key = { "claude/${it.first}" }) { (value, name, desc) ->
+                        ModelRow(value, name, desc)
+                        Spacer(Modifier.height(6.dp))
+                    }
                 }
             }
 
@@ -573,44 +592,49 @@ fun ClaudeModelSheet(
                 val working = store.workingCount(p)
                 val broken = store.brokenCount(p)
                 val scanned = store.scannedCount(p)
-                CollapsibleSheetSection(
-                    title = p.name,
-                    trailing = when {
-                        store.scanning[p.id] == true -> "measuring…"
-                        scanned == 0 -> "custom provider"
-                        else -> "$working working · $broken broken"
-                    },
-                    expanded = p.id !in collapsedSections,
-                    onToggle = { toggleSection(p.id) },
-                )
-                if (p.id !in collapsedSections) {
-                Row(
-                    Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        if (scanned == 0) "${p.models.size} models · not checked yet"
-                        else "$scanned of ${p.models.size} checked",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                        modifier = Modifier.weight(1f)
+                item(key = "${p.id}-section") {
+                    CollapsibleSheetSection(
+                        title = p.name,
+                        trailing = when {
+                            store.scanning[p.id] == true -> "measuring…"
+                            scanned == 0 -> "custom provider"
+                            else -> "$working working · $broken broken"
+                        },
+                        expanded = p.id !in collapsedSections,
+                        onToggle = { toggleSection(p.id) },
                     )
-                    TextButton(
-                        enabled = p.models.isNotEmpty(),
-                        onClick = {
-                            store.setFilter(p, ScanFilter.ALL)
-                            scanProvider = p
+                    if (p.id !in collapsedSections) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (scanned == 0) "${p.models.size} models · not checked yet"
+                                else "$scanned of ${p.models.size} checked",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                enabled = p.models.isNotEmpty(),
+                                onClick = {
+                                    store.setFilter(p, ScanFilter.ALL)
+                                    scanProvider = p
+                                }
+                            ) {
+                                Icon(Icons.Outlined.Speed, null, Modifier.size(15.dp), tint = ClaudeAccent)
+                                Spacer(Modifier.width(5.dp))
+                                Text(if (scanned == 0) "Scan models" else "View scan", color = ClaudeAccent, fontSize = 12.sp)
+                            }
                         }
-                    ) {
-                        Icon(Icons.Outlined.Speed, null, Modifier.size(15.dp), tint = ClaudeAccent)
-                        Spacer(Modifier.width(5.dp))
-                        Text(if (scanned == 0) "Scan models" else "View scan", color = ClaudeAccent, fontSize = 12.sp)
                     }
                 }
                 // Every model of the provider stays listed: the coloured dot and
                 // the latency tell working from broken in the main picker too.
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    shownModels.forEach { m ->
+                // One lazy slot per model, so a 300-model provider composes only
+                // what is on screen.
+                if (p.id !in collapsedSections) {
+                    items(shownModels, key = { "${p.id}/${it.id}" }) { m ->
                         val ctxLabel = m.contextLabel(p)
                         val probe = store.verdict(p.id, m.id)
                         ModelRow(
@@ -621,39 +645,44 @@ fun ClaudeModelSheet(
                             probe = probe,
                             kind = probe?.let { store.kindOf(p.id, m.id) }
                         )
+                        Spacer(Modifier.height(6.dp))
                     }
-                }
                 }
             }
 
             val anythingVisible =
                 (pickerFilter == ScanFilter.ALL && filteredRows.isNotEmpty()) || visibleSections.isNotEmpty()
             if (!anythingVisible && !signedOut && !refreshing && (query.isNotBlank() || pickerFilter != ScanFilter.ALL)) {
-                Text(
-                    when {
-                        query.isNotBlank() -> "No model matches \"$query\"."
-                        pickerFilter == ScanFilter.BROKEN -> "Nothing is broken. Switch to All to see the working models."
-                        pickerFilter == ScanFilter.WORKING -> "Nothing answered yet. Run a scan first."
-                        else -> "No model matches this filter."
-                    },
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
-                )
+                item(key = "picker-empty") {
+                    Text(
+                        when {
+                            query.isNotBlank() -> "No model matches \"$query\"."
+                            pickerFilter == ScanFilter.BROKEN -> "Nothing is broken. Switch to All to see the working models."
+                            pickerFilter == ScanFilter.WORKING -> "Nothing answered yet. Run a scan first."
+                            else -> "No model matches this filter."
+                        },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
+                    )
+                }
             }
 
             val info = models.find { it.value == selected }
             val levels = info?.supportedEffortLevels.orEmpty()
             if (levels.isNotEmpty()) {
-                SheetSectionLabel("Effort", trailing = "how hard Claude works on each reply")
-                SegmentedSelector(
-                    options = (listOf<String?>(null) + levels).map { it to effortLabel(it).replace("Extra high", "X-high") },
-                    selected = effort,
-                    accent = ClaudeAccent,
-                    onSelect = { backend.setEffort(it) }
-                )
+                item(key = "effort") {
+                    SheetSectionLabel("Effort", trailing = "how hard Claude works on each reply")
+                    SegmentedSelector(
+                        options = (listOf<String?>(null) + levels).map { it to effortLabel(it).replace("Extra high", "X-high") },
+                        selected = effort,
+                        accent = ClaudeAccent,
+                        onSelect = { backend.setEffort(it) }
+                    )
+                }
             }
 
+            item(key = "reasoning") {
             SheetSectionLabel("Reasoning")
             Surface(shape = RoundedCornerShape(14.dp), color = cardColor, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
@@ -678,6 +707,7 @@ fun ClaudeModelSheet(
                         }
                     }
                 }
+            }
             }
         }
         }
