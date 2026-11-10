@@ -47,6 +47,12 @@ jobs:
       - name: Prefetch Gradle distribution (with retries)
         run: bash scripts/prefetch_gradle.sh
 
+      # The wrapper resolves services.gradle.org, which redirects to the GitHub
+      # Releases CDN. That CDN answers 504 for minutes at a time and the wrapper
+      # has no retry of its own, so one bad minute fails the whole build.
+      - name: Prefetch Gradle distribution (with retries)
+        run: bash scripts/prefetch_gradle.sh
+
       - name: Parse version.json
         id: version
         run: |

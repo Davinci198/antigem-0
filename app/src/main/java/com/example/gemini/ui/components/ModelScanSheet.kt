@@ -61,6 +61,84 @@ data class ScanRowModel(
 )
 
 /**
+ * The search box both pickers and the scan page show. One component, so the
+ * box that finds a model inside the scan finds it in the main list too.
+ */
+@Composable
+fun ModelSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    placeholder: String = "Search models",
+) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        singleLine = true,
+        placeholder = { Text(placeholder, fontSize = 13.sp) },
+        leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(18.dp)) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(Icons.Default.Close, "Clear", Modifier.size(16.dp))
+                }
+            }
+        },
+        shape = RoundedCornerShape(12.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = accent,
+            unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+        ),
+        modifier = modifier,
+    )
+}
+
+/**
+ * The three verdict filters with their counts, shared by both agents' pickers
+ * and the scan page: "working" and "broken" mean the same thing in the main
+ * list as they do after opening the scan.
+ */
+@Composable
+fun ScanFilterChips(
+    filter: ScanFilter,
+    counts: Map<ScanFilter, Int>,
+    accent: Color,
+    onFilterChange: (ScanFilter) -> Unit,
+    modifier: Modifier = Modifier,
+    labels: Map<ScanFilter, String> = ScanFilter.entries.associateWith { it.label },
+) {
+    Row(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ScanFilter.entries.forEach { f ->
+            val isOn = filter == f
+            Surface(
+                onClick = { onFilterChange(f) },
+                shape = RoundedCornerShape(10.dp),
+                color = if (isOn) accent.copy(alpha = 0.16f)
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+                border = BorderStroke(
+                    1.dp,
+                    if (isOn) accent.copy(alpha = 0.55f)
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                ),
+            ) {
+                Text(
+                    "${labels[f] ?: f.label} ${counts[f] ?: 0}",
+                    fontSize = 11.sp,
+                    fontWeight = if (isOn) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isOn) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
  * The scan page itself: search, filters, verdicts and the scan button.
  *
  * This deliberately is not a second [androidx.compose.material3.ModalBottomSheet].
