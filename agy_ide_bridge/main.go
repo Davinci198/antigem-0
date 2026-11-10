@@ -25,6 +25,7 @@ import (
 	"gemini-server/pkg/handlers"
 	"gemini-server/pkg/hermes"
 	"gemini-server/pkg/hub"
+	"gemini-server/pkg/opencode"
 	"gemini-server/pkg/plugins"
 	"gemini-server/pkg/runlog"
 	"gemini-server/pkg/security"
@@ -50,6 +51,8 @@ Flags:
   --tz <location>           Timezone location name (e.g. Asia/Kathmandu)
   --no-hub                  Skip launching AGY Hub (run IDE server only)
   --no-claude               Disable Claude Code (no /api/claude endpoints, never runs the claude CLI)
+  --opencode-bin <path>     Custom path to the OpenCode CLI (default: opencode on PATH or ~/.opencode/bin)
+  --no-opencode             Disable OpenCode (no /api/opencode endpoints, never runs the opencode CLI)
   --hermes-bin <path>       Custom path to the Hermes Agent CLI (default: hermes on PATH)
   --no-hermes               Disable Hermes Agent (no /api/hermes endpoints, never runs the hermes CLI)
   -d, --dir <path>          Custom workspace directory
@@ -134,6 +137,8 @@ func main() {
 	var customAgyBin string
 	var customClaudeBin string
 	var noClaude bool
+	var customOpenCodeBin string
+	var noOpenCode bool
 	var customHermesBin string
 	var noHermes bool
 	var forceStart bool
@@ -176,6 +181,15 @@ func main() {
 			skipHub = true
 		case arg == "--no-claude":
 			noClaude = true
+		case strings.HasPrefix(arg, "--opencode-bin="):
+			customOpenCodeBin = strings.TrimPrefix(arg, "--opencode-bin=")
+		case arg == "--opencode-bin":
+			if i+1 < len(os.Args) {
+				customOpenCodeBin = os.Args[i+1]
+				i++
+			}
+		case arg == "--no-opencode":
+			noOpenCode = true
 		case strings.HasPrefix(arg, "--hermes-bin="):
 			customHermesBin = strings.TrimPrefix(arg, "--hermes-bin=")
 		case arg == "--hermes-bin":
@@ -329,6 +343,20 @@ func main() {
 	} else {
 		claudeMgr = claude.NewManager(cfg.HomeDir, cfg.WorkspaceDir, customClaudeBin)
 		mux.Handle("/api/claude/", claudeMgr)
+	}
+
+	// OpenCode: one `opencode serve` for all its chats, relayed under /api/opencode/x/. Off with --no-opencode,
+// which is also what the app passes when the OpenCode agent is turned off in settings, so the CLI is never run.
+	var openCodeMgr *opencode.Manager
+	if noOpenCode {
+		mux.HandleFunc("/api/opencode/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"success":false,"disabled":true,"error":"OpenCode is turned off in the app"}`))
+		})
+	} else {
+		openCodeMgr = opencode.NewManager(cfg.HomeDir, cfg.WorkspaceDir, customOpenCodeBin)
+		mux.Handle("/api/opencode/", openCodeMgr)
 	}
 
 	// Hermes Agent CLI sessions; off with --no-hermes
@@ -648,6 +676,9 @@ func main() {
 	// 2. Stop Claude Code and Hermes sessions, then the AGY Hub process group and continuous background monitor
 	if claudeMgr != nil {
 		claudeMgr.StopAll()
+	}
+	if openCodeMgr != nil {
+		openCodeMgr.StopAll()
 	}
 	if hermesMgr != nil {
 		hermesMgr.StopAll()
