@@ -243,7 +243,7 @@ func (m *HubManager) FetchCsrfToken() string {
 	defer resp.Body.Close()
 
 	if headerToken := strings.TrimSpace(resp.Header.Get("x-codeium-csrf-token")); headerToken != "" {
-		log.Printf("[FetchCsrfToken] Found token in header: %s", headerToken)
+		log.Printf("[FetchCsrfToken] Found token in header: %s", security.MaskToken(headerToken))
 		return headerToken
 	}
 
@@ -257,7 +257,7 @@ func (m *HubManager) FetchCsrfToken() string {
 	if match := csrfJSONPattern.FindStringSubmatch(bodyStr); len(match) > 1 {
 		token := strings.TrimSpace(match[1])
 		if token != "" {
-			log.Printf("[FetchCsrfToken] Extracted token via JSON pattern: %s", token)
+			log.Printf("[FetchCsrfToken] Extracted token via JSON pattern: %s", security.MaskToken(token))
 			return token
 		}
 	}
@@ -265,7 +265,7 @@ func (m *HubManager) FetchCsrfToken() string {
 	if match := csrfHTMLPattern.FindStringSubmatch(bodyStr); len(match) > 1 {
 		token := strings.TrimSpace(match[1])
 		if token != "" {
-			log.Printf("[FetchCsrfToken] Extracted token via HTML pattern: %s", token)
+			log.Printf("[FetchCsrfToken] Extracted token via HTML pattern: %s", security.MaskToken(token))
 			return token
 		}
 	}
@@ -421,7 +421,8 @@ func (m *HubManager) Start() error {
 			m.setStatusLocked(HubStatusError, errMsg)
 			return errors.New(errMsg)
 		}
-		log.Printf("\033[1;32m[Security]\033[0m In-place patched AGY binary (%s) in %v -> Active Header: %s", patchTarget, elapsed, patchedHeader)
+		// masked: this line is copied into the bridge run log, and the header name embeds the token
+		log.Printf("\033[1;32m[Security]\033[0m In-place patched AGY binary (%s) in %v -> Active Header: %s", patchTarget, elapsed, security.MaskFramedHeader(patchedHeader))
 	}
 
 	args := []string{

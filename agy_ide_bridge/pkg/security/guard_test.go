@@ -54,3 +54,17 @@ func TestRedactQueryMasksToken(t *testing.T) {
 		t.Fatalf("other params must survive untouched, got %q", got)
 	}
 }
+
+func TestMaskHelpersHideTheSecret(t *testing.T) {
+	if got := MaskToken("ihxbrh92ee7z"); got != "ihxb********" {
+		t.Fatalf("MaskToken = %q", got)
+	}
+	framed := BuildFramedHeader("ihxbrh92ee7z")
+	masked := MaskFramedHeader(framed)
+	if strings.Contains(masked, "ihxbrh92ee7z") {
+		t.Fatalf("MaskFramedHeader leaked %q", masked)
+	}
+	if masked != "x-ag************_9qx" {
+		t.Fatalf("MaskFramedHeader = %q", masked)
+	}
+}
