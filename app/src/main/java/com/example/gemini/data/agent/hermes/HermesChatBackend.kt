@@ -353,13 +353,16 @@ class HermesChatBackend(
     private val _scanProgress = MutableStateFlow(0 to 0)
     val scanProgress: StateFlow<Pair<Int, Int>> = _scanProgress.asStateFlow()
 
+    /** Provider a running scan is limited to; null while it covers the catalog. */
+    private val _scanningProvider = MutableStateFlow<String?>(null)
+    val scanningProvider: StateFlow<String?> = _scanningProvider.asStateFlow()
+
     /** One entry per probeable model, flattened from the picker payload. */
     fun modelEntries(): List<HermesModelEntry> {
         val data = _models.value ?: return emptyList()
         return mergeHermesCatalog(data.presets, data.custom)
     }
 
-    /** Probes every model with a one-word turn and records ok/latency live. */
     /**
      * Probes models with a one-word turn and records ok/latency live.
      *
@@ -367,16 +370,24 @@ class HermesChatBackend(
      * placement in the Funcționale/Defecte lists across picker visits, model
      * re-selection and app restarts. Only unscanned models are probed.
      *
-     * @param force re-probe everything (the "Testează din nou" action).
+     * @param force re-probe everything in scope (the "Testează din nou" action).
+     * @param providerId probe only this provider (a provider header's
+     *   "Testează"); null scans the whole catalog.
      */
-    fun scanModels(force: Boolean = false) {
+    fun scanModels(force: Boolean = false, providerId: String? = null) {
         if (_isScanning.value) return
-        val targets = modelEntries()
+        val targets = modelEntries().let { all ->
+            if (providerId == null) all else all.filter { it.providerId == providerId }
+        }
         if (targets.isEmpty()) return
         backendScope.launch {
             _isScanning.value = true
+            _scanningProvider.value = providerId
             if (force) {
-                _modelHealth.value = emptyMap()
+                // Only the probed models are cleared: re-checking one provider
+                // must not wipe the verdicts of every other provider.
+                val cleared = targets.map { it.key }.toSet()
+                _modelHealth.value = _modelHealth.value.filterKeys { it !in cleared }
                 sharedScanStore.clearProviders(targets.map { it.providerId }.toSet())
             }
             // Resume: models verified by an earlier scan keep their verdict and
@@ -388,6 +399,7 @@ class HermesChatBackend(
             _scanProgress.value = (targets.size - pending.size) to targets.size
             if (pending.isEmpty()) {
                 _isScanning.value = false
+                _scanningProvider.value = null
                 return@launch
             }
             // One batch per provider: the bridge fans out internally, so this is
@@ -456,6 +468,7 @@ class HermesChatBackend(
                 }.awaitAll()
             }
             _isScanning.value = false
+            _scanningProvider.value = null
         }
     }
 
