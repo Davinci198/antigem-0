@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.os.Build
-import android.widget.Toast
 import com.example.gemini.data.adb.AdbConnectManager
 import com.example.gemini.data.updater.PluginUpdateCheckWorker
 import com.example.gemini.data.updater.UpdateCheckWorker
@@ -18,15 +17,10 @@ class AntiGemApplication : Application() {
         PluginUpdateCheckWorker.schedule(this)
         // Reconnects adb when Wireless debugging turns back on (it gets a new port every time)
         AdbConnectManager.init(this)
-        // Forks build with their own key, so only official release APKs report real usage.
-        if (!BuildConfig.DEBUG && !isOfficialRelease()) {
-            Toast.makeText(
-                this,
-                "Unofficial build: analytics disabled. Developer: set your own TelemetryDeck app ID and RELEASE_CERT_SHA256 in AntiGemApplication.kt.",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
+        // Fork builds are signed with a different key, so analytics stays off for them.
+        // Return silently: the old toast nagged on every cold start and looked like a
+        // system notification.
+        if (!BuildConfig.DEBUG && !isOfficialRelease()) return
         TelemetryDeck.start(
             this,
             TelemetryDeck.Builder()
