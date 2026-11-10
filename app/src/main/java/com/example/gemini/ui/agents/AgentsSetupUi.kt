@@ -67,13 +67,18 @@ private val AGENT_OPTIONS = listOf(
         "Nous Research's autonomous agent with local toolset, skills, and persistent memory."
     ),
     AgentOption(
-        setOf(AgentKind.AGY, AgentKind.CLAUDE, AgentKind.HERMES),
+        setOf(AgentKind.OPENCODE),
+        "OpenCode",
+        "Open-source coding agent: 200+ providers with your own keys, any OpenAI-compatible API, and free models."
+    ),
+    AgentOption(
+        setOf(AgentKind.AGY, AgentKind.CLAUDE, AgentKind.HERMES, AgentKind.OPENCODE),
         "All Agents",
         "Pick the agent for each new chat. All agents share the chat list, status and accounts."
     )
 )
 
-/** Three choices: Antigravity, Claude Code, or both. */
+/** One choice per agent, plus "All Agents"; Antigravity is on by default. */
 @Composable
 fun AgentSelector(selected: Set<AgentKind>, onSelect: (Set<AgentKind>) -> Unit, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -91,10 +96,11 @@ fun AgentSelector(selected: Set<AgentKind>, onSelect: (Set<AgentKind>) -> Unit, 
                     if (option.agents.size == 1) {
                         AgentMark(option.agents.first(), size = 40.dp)
                     } else {
-                        Box(Modifier.size(width = 56.dp, height = 40.dp)) {
+                        Box(Modifier.size(width = 69.dp, height = 42.dp)) {
                             AgentMark(AgentKind.AGY, size = 30.dp)
-                            AgentMark(AgentKind.CLAUDE, size = 30.dp, modifier = Modifier.offset(x = 13.dp, y = 5.dp))
-                            AgentMark(AgentKind.HERMES, size = 30.dp, modifier = Modifier.offset(x = 26.dp, y = 10.dp))
+                            AgentMark(AgentKind.CLAUDE, size = 30.dp, modifier = Modifier.offset(x = 13.dp, y = 4.dp))
+                            AgentMark(AgentKind.HERMES, size = 30.dp, modifier = Modifier.offset(x = 26.dp, y = 8.dp))
+                            AgentMark(AgentKind.OPENCODE, size = 30.dp, modifier = Modifier.offset(x = 39.dp, y = 12.dp))
                         }
                     }
                     Spacer(Modifier.width(12.dp))
@@ -133,10 +139,12 @@ fun AgentChoiceDialog(onConfirm: (Set<AgentKind>) -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp)
         ) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.size(width = 86.dp, height = 56.dp)) {
-                    AgentMark(AgentKind.AGY, size = 42.dp)
-                    AgentMark(AgentKind.CLAUDE, size = 42.dp, modifier = Modifier.offset(x = 22.dp, y = 7.dp))
-                    AgentMark(AgentKind.HERMES, size = 42.dp, modifier = Modifier.offset(x = 44.dp, y = 14.dp))
+                // one mark per agent, stepping down the row; four marks stay inside the card at 36 dp
+                Box(Modifier.size(width = 96.dp, height = 54.dp)) {
+                    AgentMark(AgentKind.AGY, size = 36.dp)
+                    AgentMark(AgentKind.CLAUDE, size = 36.dp, modifier = Modifier.offset(x = 20.dp, y = 6.dp))
+                    AgentMark(AgentKind.HERMES, size = 36.dp, modifier = Modifier.offset(x = 40.dp, y = 12.dp))
+                    AgentMark(AgentKind.OPENCODE, size = 36.dp, modifier = Modifier.offset(x = 60.dp, y = 18.dp))
                 }
                 Spacer(Modifier.height(14.dp))
                 Text("Choose your agent", fontSize = 20.sp, fontWeight = FontWeight.Bold)

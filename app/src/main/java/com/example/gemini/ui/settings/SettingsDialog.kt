@@ -96,7 +96,8 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     DATA_PROTECTION("Data Loss Protection", "Uninstall shield & App Info clear data protection"),
     COMMANDS("Commands & Permissions", "Auto-run policy, sandbox mode, and tool approvals"),
     CLAUDE("Claude Code", "Account, models, permissions, MCP, plugins & memory"),
-    AGENTS("Agents", "Run Antigravity, Claude Code or both"),
+    OPENCODE("OpenCode", "Server, providers, custom OpenAI-compatible endpoints & approvals"),
+    AGENTS("Agents", "Run Antigravity, Claude Code, Hermes or OpenCode"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
     ADB_CONNECT("ADB Connect", "Connect the terminal's adb to this phone over Wireless debugging"),
@@ -237,6 +238,9 @@ fun SettingsDialog(
     onOpenNetworkInspector: () -> Unit = {},
     claude: com.example.gemini.ui.claude.ClaudeSettingsDeps? = null,
     initialClaudePage: com.example.gemini.ui.claude.ClaudeSettingsPage? = null,
+    openCode: com.example.gemini.data.agent.opencode.OpenCodeChatBackend? = null,
+    /** Opens on this OpenCode page (e.g. Server & install from an Install button). */
+    initialOpenCodePage: com.example.gemini.ui.opencode.OpenCodeSettingsPage? = null,
     enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = setOf(com.example.gemini.domain.model.AgentKind.AGY),
     isApplyingAgents: Boolean = false,
     onApplyAgents: (Set<com.example.gemini.domain.model.AgentKind>) -> Unit = {},
@@ -244,8 +248,16 @@ fun SettingsDialog(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var currentSection by remember { mutableStateOf(if (initialClaudePage != null && claude != null) SettingsSection.CLAUDE else SettingsSection.MAIN) }
+    var currentSection by remember { mutableStateOf(if (initialClaudePage != null && claude != null) SettingsSection.CLAUDE else if (initialOpenCodePage != null && openCode != null) SettingsSection.OPENCODE else SettingsSection.MAIN) }
     var claudePage by remember { mutableStateOf(initialClaudePage ?: com.example.gemini.ui.claude.ClaudeSettingsPage.ACCOUNT) }
+    var openCodePage by remember { mutableStateOf(initialOpenCodePage ?: com.example.gemini.ui.opencode.OpenCodeSettingsPage.SERVER) }
+    // a page asked for while the dialog is already open (an Install button, the model picker, "Providers & settings")
+    LaunchedEffect(initialOpenCodePage) {
+        if (initialOpenCodePage != null && openCode != null) {
+            openCodePage = initialOpenCodePage
+            currentSection = SettingsSection.OPENCODE
+        }
+    }
     // Hoisted so the main list keeps its position while a sub-section is open
     val mainMenuScrollState = rememberScrollState()
 
@@ -276,11 +288,12 @@ fun SettingsDialog(
             // Top App Bar
             TopAppBar(
                 title = {
-                    // a Claude Code page names itself here (it has no header of its own)
+                    // an agent page names itself here (it has no header of its own)
                     val isClaudePage = currentSection == SettingsSection.CLAUDE && claude != null
+                    val isOpenCodePage = currentSection == SettingsSection.OPENCODE && openCode != null
                     Column {
                         Text(
-                            text = if (isClaudePage) "Claude Code · ${claudePage.title}" else currentSection.title,
+                            text = if (isClaudePage) "Claude Code · ${claudePage.title}" else if (isOpenCodePage) "OpenCode · ${openCodePage.title}" else currentSection.title,
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -289,7 +302,7 @@ fun SettingsDialog(
                         )
                         if (currentSection != SettingsSection.MAIN) {
                             Text(
-                                text = if (isClaudePage) claudePage.subtitle else currentSection.subtitle,
+                                text = if (isClaudePage) claudePage.subtitle else if (isOpenCodePage) openCodePage.subtitle else currentSection.subtitle,
                                 fontSize = 11.5.sp,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                                 maxLines = 1,
@@ -368,6 +381,14 @@ fun SettingsDialog(
                         cardBorder = cardBorder,
                         scrollState = mainMenuScrollState,
                         enabledAgents = enabledAgents,
+                        openCodeGroup = openCode?.let { backend ->
+                            {
+                                com.example.gemini.ui.opencode.OpenCodeSettingsGroup(backend, cardBg) { page ->
+                                    openCodePage = page
+                                    currentSection = SettingsSection.OPENCODE
+                                }
+                            }
+                        },
                         claudeGroup = claude?.let { deps ->
                             {
                                 com.example.gemini.ui.claude.ClaudeSettingsGroup(deps) { page ->
@@ -547,6 +568,10 @@ fun SettingsDialog(
                     SettingsSection.CLAUDE -> if (claude != null) {
                         com.example.gemini.ui.claude.ClaudeSettingsScreen(claude, claudePage) { currentSection = SettingsSection.MAIN }
                     }
+                    SettingsSection.OPENCODE -> if (openCode != null) {
+                        // the dialog's header is this screen's Back button, as for the other agent pages
+                        com.example.gemini.ui.opencode.OpenCodeSettingsScreen(openCode, openCodePage)
+                    }
                     SettingsSection.UTILITIES -> UtilitiesSubScreen(
                         cardBg = cardBg,
                         cardBorder = cardBorder,
@@ -589,12 +614,14 @@ private fun MainSettingsMenu(
     cardBorder: BorderStroke,
     scrollState: androidx.compose.foundation.ScrollState,
     claudeGroup: (@Composable () -> Unit)? = null,
+    openCodeGroup: (@Composable () -> Unit)? = null,
     enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = setOf(com.example.gemini.domain.model.AgentKind.AGY),
     onNavigate: (SettingsSection) -> Unit
 ) {
     val agyOn = com.example.gemini.domain.model.AgentKind.AGY in enabledAgents
     val claudeOn = com.example.gemini.domain.model.AgentKind.CLAUDE in enabledAgents
     val hermesOn = com.example.gemini.domain.model.AgentKind.HERMES in enabledAgents
+    val openCodeOn = com.example.gemini.domain.model.AgentKind.OPENCODE in enabledAgents
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -611,6 +638,7 @@ private fun MainSettingsMenu(
                 enabledAgents.size > 1 -> "${enabledAgents.size} agents active"
                 hermesOn -> "Hermes Agent only"
                 claudeOn -> "Claude Code only"
+                openCodeOn -> "OpenCode only"
                 else -> "Antigravity only"
             },
             badgeText = "${enabledAgents.size} on",
@@ -724,6 +752,11 @@ private fun MainSettingsMenu(
         if (claudeGroup != null && claudeOn) {
             SettingsGroupHeader("Claude Code", ClaudeAccent, "Anthropic Claude Code CLI")
             claudeGroup()
+        }
+
+        if (openCodeGroup != null && openCodeOn) {
+            SettingsGroupHeader("OpenCode", com.example.gemini.ui.components.OpenCodeAccent, "Any provider, its own API keys")
+            openCodeGroup()
         }
 
         SettingsGroupHeader("App", MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), "Shared by both agents")
@@ -1895,9 +1928,11 @@ private fun ServersSubScreen(
     val initialBridgeBinPath = remember { authPrefs.getAgyBridgeBinaryPathSync() }
     val initialAgyBinPath = remember { authPrefs.getAgyBinaryPathSync() }
     val initialClaudeBinPath = remember { authPrefs.getClaudeBinaryPathSync() }
+    val initialOpenCodeBinPath = remember { authPrefs.getOpenCodeBinaryPathSync() }
     var bridgeBinPath by remember { mutableStateOf(initialBridgeBinPath) }
     var agyBinPath by remember { mutableStateOf(initialAgyBinPath) }
     var claudeBinPath by remember { mutableStateOf(initialClaudeBinPath) }
+    var openCodeBinPath by remember { mutableStateOf(initialOpenCodeBinPath) }
 
     var hubTestStatus by remember { mutableStateOf<String?>(null) }
     var isTestingHub by remember { mutableStateOf(false) }
@@ -1910,13 +1945,14 @@ private fun ServersSubScreen(
     var showRestartDialog by remember { mutableStateOf(false) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
 
-    val hasUnsavedChanges = remember(sharedHost, hubPort, bridgePort, bridgeBinPath, agyBinPath, claudeBinPath, securityToken) {
+    val hasUnsavedChanges = remember(sharedHost, hubPort, bridgePort, bridgeBinPath, agyBinPath, claudeBinPath, openCodeBinPath, securityToken) {
         sharedHost.trim() != initialSharedHost.trim() ||
             hubPort.trim() != initHubPort.trim() ||
             bridgePort.trim() != initBridgePort.trim() ||
             bridgeBinPath.trim() != initialBridgeBinPath.trim() ||
             agyBinPath.trim() != initialAgyBinPath.trim() ||
             claudeBinPath.trim() != initialClaudeBinPath.trim() ||
+            openCodeBinPath.trim() != initialOpenCodeBinPath.trim() ||
             securityToken.trim() != initSecurityToken.trim()
     }
 
@@ -1969,6 +2005,7 @@ private fun ServersSubScreen(
                         bridgeBinPath = initialBridgeBinPath
                         agyBinPath = initialAgyBinPath
                         claudeBinPath = initialClaudeBinPath
+                        openCodeBinPath = initialOpenCodeBinPath
                         securityToken = initSecurityToken
                     },
                     shape = RoundedCornerShape(8.dp)
@@ -2268,16 +2305,28 @@ private fun ServersSubScreen(
                     shape = RoundedCornerShape(10.dp)
                 )
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = openCodeBinPath,
+                    onValueChange = { openCodeBinPath = it; saveFeedback = null },
+                    label = { Text("OpenCode Binary Path") },
+                    placeholder = { Text(authPrefs.getDefaultOpenCodeBinaryPath()) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp)
+                )
+
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "• Passed to the bridge on launch (--bin for AGY, --claude-bin for Claude Code) so auto-start executes the designated binary directly without interactive prompts.",
+                    text = "• Passed to the bridge on launch (--bin for AGY, --claude-bin for Claude Code, --opencode-bin for OpenCode) so auto-start executes the designated binary directly without interactive prompts.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
                 if (com.example.gemini.data.local.LocalEnvironmentManager.isTermuxPackage(LocalContext.current)) {
                     Text(
-                        text = "• Claude Code: the default is AntiGem's launcher, which runs the newest official Claude version through the bundled glibc. Claude updates never replace it.",
+                        text = "• Claude Code: the default is AntiGem's launcher, which runs the newest official Claude version through the bundled glibc. Claude updates never replace it. OpenCode's default is where its own installer puts it (~/.opencode/bin/opencode), including installs started from Settings → OpenCode.",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
@@ -2293,6 +2342,7 @@ private fun ServersSubScreen(
                         bridgeBinPath = authPrefs.getDefaultBridgeBinaryPath()
                         agyBinPath = authPrefs.getDefaultAgyBinaryPath()
                         claudeBinPath = authPrefs.getDefaultClaudeBinaryPath()
+                        openCodeBinPath = authPrefs.getDefaultOpenCodeBinaryPath()
                         saveFeedback = "Settings reset to defaults (click Save to apply)."
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -2419,6 +2469,7 @@ private fun ServersSubScreen(
                     authPrefs.saveAgyBridgeBinaryPath(bridgeBinPath.trim().ifBlank { authPrefs.getDefaultBridgeBinaryPath() })
                     authPrefs.saveAgyBinaryPath(agyBinPath.trim().ifBlank { authPrefs.getDefaultAgyBinaryPath() })
                     authPrefs.saveClaudeBinaryPath(claudeBinPath.trim().ifBlank { authPrefs.getDefaultClaudeBinaryPath() })
+                    authPrefs.saveOpenCodeBinaryPath(openCodeBinPath.trim().ifBlank { authPrefs.getDefaultOpenCodeBinaryPath() })
                 }
                 saveFeedback = "✓ Server, Binaries and Security settings saved!"
                 showRestartDialog = true

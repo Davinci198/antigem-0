@@ -832,7 +832,8 @@ fun ChatHistoryDrawer(
                         null to "All",
                         com.example.gemini.domain.model.AgentKind.AGY to "Antigravity",
                         com.example.gemini.domain.model.AgentKind.CLAUDE to "Claude",
-                        com.example.gemini.domain.model.AgentKind.HERMES to "Hermes"
+                        com.example.gemini.domain.model.AgentKind.HERMES to "Hermes",
+                        com.example.gemini.domain.model.AgentKind.OPENCODE to "OpenCode"
                     ).forEach { (agent, label) ->
                         val selected = agentFilter == agent
                         val accent = agent?.accent() ?: ClaudeTerracotta
@@ -1520,6 +1521,8 @@ private fun ChatHistoryItemRow(
                     com.example.gemini.ui.components.ClaudeBadge(modifier = Modifier.padding(start = 6.dp))
                 } else if (conv.agent == com.example.gemini.domain.model.AgentKind.HERMES) {
                     com.example.gemini.ui.components.HermesBadge(modifier = Modifier.padding(start = 6.dp))
+                } else if (conv.agent == com.example.gemini.domain.model.AgentKind.OPENCODE) {
+                    com.example.gemini.ui.components.OpenCodeBadge(modifier = Modifier.padding(start = 6.dp))
                 }
                 if (subagents.isNotEmpty()) {
                     Surface(
@@ -1611,7 +1614,10 @@ private fun ChatHistoryItemRow(
 
         var menuExpanded by remember { mutableStateOf(false) }
         var showRename by remember { mutableStateOf(false) }
+        // Claude Code and OpenCode chats are renamed, exported and shared through claudeActions, which routes by agent
         val isClaudeConv = conv.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
+        val isOpenCodeConv = conv.agent == com.example.gemini.domain.model.AgentKind.OPENCODE
+        val isManagedConv = isClaudeConv || isOpenCodeConv
         val clipboardManager = LocalClipboardManager.current
         val context = LocalContext.current
 
@@ -1688,7 +1694,7 @@ private fun ChatHistoryItemRow(
                         onForkConversation(conv.id)
                     }
                 )
-                if (isClaudeConv && claudeActions != null) {
+                if (isManagedConv && claudeActions != null) {
                     DropdownMenuItem(
                         text = { Text("Rename", fontSize = 13.5.sp) },
                         leadingIcon = {
@@ -1704,6 +1710,8 @@ private fun ChatHistoryItemRow(
                             showRename = true
                         }
                     )
+                }
+                if (isClaudeConv && claudeActions != null) {
                     DropdownMenuItem(
                         text = { Text("Restart chat", fontSize = 13.5.sp) },
                         leadingIcon = {
@@ -1744,7 +1752,7 @@ private fun ChatHistoryItemRow(
                                 context = context,
                                 conversationId = conv.id,
                                 title = conv.title,
-                                activeMessages = if (isClaudeConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
+                                activeMessages = if (isManagedConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
                                 format = ConversationExportHelper.ExportFormat.MARKDOWN,
                                 snackbarHostState = snackbarHostState
                             )
@@ -1769,7 +1777,7 @@ private fun ChatHistoryItemRow(
                                 context = context,
                                 conversationId = conv.id,
                                 title = conv.title,
-                                activeMessages = if (isClaudeConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
+                                activeMessages = if (isManagedConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
                                 format = ConversationExportHelper.ExportFormat.HTML,
                                 snackbarHostState = snackbarHostState
                             )
@@ -1794,7 +1802,7 @@ private fun ChatHistoryItemRow(
                                 context = context,
                                 conversationId = conv.id,
                                 title = conv.title,
-                                activeMessages = if (isClaudeConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
+                                activeMessages = if (isManagedConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
                                 snackbarHostState = snackbarHostState
                             )
                         }
