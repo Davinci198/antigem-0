@@ -31,9 +31,15 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.22'
+          # The publish job must not read earlier CI build state (Suricode/
+          # zizmor cache-poisoning): no Go build cache for releases.
+          cache: false
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          # Same rule for the Gradle cache: the release build stays cache-free.
+          cache-disabled: true
 
       # The wrapper resolves services.gradle.org, which redirects to the GitHub
       # Releases CDN. That CDN answers 504 for minutes at a time and the wrapper
