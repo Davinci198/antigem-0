@@ -247,7 +247,17 @@ func (m *Manager) install(ctx context.Context, j *installJob, update bool) error
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(f, tr); err != nil {
+		// cap the unpacked size: the release digest proves integrity, not sanity, and a tar member that
+		// decompresses to gigabytes must not be allowed to fill the device's storage mid-install
+		const maxBinaryBytes = 512 << 20
+		written, err := io.Copy(f, io.LimitReader(tr, maxBinaryBytes))
+		if err == nil && written == maxBinaryBytes {
+			probe := make([]byte, 1)
+			if n, _ := tr.Read(probe); n > 0 {
+				err = fmt.Errorf("the opencode binary is unexpectedly large (over %d MiB); refusing to extract", maxBinaryBytes>>20)
+			}
+		}
+		if err != nil {
 			f.Close()
 			os.Remove(tmp)
 			return err

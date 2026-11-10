@@ -36,6 +36,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+
+	"gemini-server/pkg/ws"
 )
 
 // Manager handles all Hermes sessions.
@@ -63,7 +65,7 @@ func NewManager(homeDir, hermesBin string) *Manager {
 		hermesBin: hermesBin,
 		homeDir:   homeDir,
 		upgrader: websocket.Upgrader{
-			CheckOrigin:     func(*http.Request) bool { return true },
+			CheckOrigin:     func(r *http.Request) bool { return ws.AllowedOrigin(r.Header.Get("Origin")) },
 			ReadBufferSize:  4096,
 			WriteBufferSize: 65536,
 		},

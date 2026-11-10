@@ -12,9 +12,7 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins (Android app & webview)
-	},
+	CheckOrigin: func(r *http.Request) bool { return AllowedOrigin(r.Header.Get("Origin")) },
 }
 
 type ClientConn struct {
