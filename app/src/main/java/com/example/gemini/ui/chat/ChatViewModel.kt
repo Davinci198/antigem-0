@@ -120,6 +120,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val before = enabledAgents.value
         val firstChoice = !hasChosenAgents.value
         agentPrefs.setEnabled(agents)
+        agyBridgeService.setHubExpected(AgentKind.AGY in agents)
         if (newChatAgent.value !in agents) claudePrefs.setNewChatAgent(if (AgentKind.AGY in agents) AgentKind.AGY else agents.first())
         if (AgentKind.CLAUDE in agents) {
             claudeBackend.start()
@@ -1078,6 +1079,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             android.util.Log.w("ChatViewModel", "Could not register network callback: ${e.message}")
         }
 
+        agyBridgeService.setHubExpected(AgentKind.AGY in enabledAgents.value)
         agyBackend.start()
         if (isClaudeEnabled) claudeBackend.start()
         // the first chat follows the new-chat agent (Antigravity's own start-up chat only fills in when it is AGY)

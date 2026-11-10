@@ -159,6 +159,8 @@ fun ChatScreen(
     val isClaudeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
     val isHermesChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.HERMES
     val isOpenCodeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.OPENCODE
+    // the Antigravity hub's connection state only speaks for Antigravity chats; each other agent has its own
+    val isAgyChat = !isClaudeChat && !isHermesChat && !isOpenCodeChat
     val openCodeBackend = viewModel.openCodeBackend
     val openCodePending by openCodeBackend.pendingPermissions.collectAsState()
     val openCodeState by openCodeBackend.state.collectAsState()
@@ -1378,7 +1380,7 @@ fun ChatScreen(
                     val isExistingChat = messages.isEmpty() && isExistingConversation && isLoadingConversation
                     Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, error=$conversationError, isServerStopped=$isServerStopped")
 
-                    if (!isClaudeChat && isServerStopped && messages.isEmpty()) {
+                    if (isAgyChat && isServerStopped && messages.isEmpty()) {
                         BoxWithConstraints(
                             modifier = Modifier.fillMaxSize()
                         ) {
@@ -1404,7 +1406,7 @@ fun ChatScreen(
                                 com.example.gemini.ui.components.ServerStoppedPromptCard()
                             }
                         }
-                    } else if (!isClaudeChat && isServerInitializing && messages.isEmpty()) {
+                    } else if (isAgyChat && isServerInitializing && messages.isEmpty()) {
                         if (isFreshNewChat && enabledAgents.size > 1) {
                             // a new chat keeps its agent picker while Antigravity starts (Claude can be picked and used
                             // meanwhile); before, the whole view was replaced and the picker vanished until the hub was up
@@ -1546,7 +1548,7 @@ fun ChatScreen(
                                         secondaryLabel = if (openCodeState == com.example.gemini.data.agent.opencode.OpenCodeState.CHECKING) null else "Server logs",
                                         onSecondary = { showLocalServerOutputDialog = true }
                                     )
-                                } else when (if (isClaudeChat || isOpenCodeChat) null else systemConnectionState.status) {
+                                } else when (if (isAgyChat) systemConnectionState.status else null) {
                                     com.example.gemini.data.remote.SystemStatus.CHECKING_AUTH -> {
                                         com.example.gemini.ui.components.NewChatCheckingAuthPromptCard()
                                     }
@@ -2001,7 +2003,7 @@ fun ChatScreen(
 
                 // Disconnection / Reconnecting Inline Banner (Compact, non-intrusive with Reconnect action)
                 AnimatedVisibility(
-                    visible = !isClaudeChat && (isServerOnline == false || isReconnecting) && messages.isNotEmpty(),
+                    visible = isAgyChat && (isServerOnline == false || isReconnecting) && messages.isNotEmpty(),
                     enter = expandVertically() + fadeIn(),
                     exit = shrinkVertically() + fadeOut()
                 ) {
@@ -2159,8 +2161,8 @@ fun ChatScreen(
 
                 // Chat Input Bar with Bottom Model & Thinking Selector Pills (Claude Android Style)
                 ChatInputBar(
-                    isOnline = if (isOpenCodeChat) !openCodeState.isBlocking else if (isClaudeChat) !claudeState.isBlocking else systemConnectionState.canSend,
-                    isAuth = if (isOpenCodeChat) true else if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else systemConnectionState.isAuth,
+                    isOnline = if (isOpenCodeChat) !openCodeState.isBlocking else if (isClaudeChat) !claudeState.isBlocking else if (isHermesChat) systemConnectionState.isBridgeOnline else systemConnectionState.canSend,
+                    isAuth = if (isOpenCodeChat) true else if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else if (isHermesChat) true else systemConnectionState.isAuth,
                     offlineMessage = if (isOpenCodeChat) when (openCodeState) {
                         com.example.gemini.data.agent.opencode.OpenCodeState.NOT_INSTALLED -> "OpenCode is not installed on the server. See Settings → OpenCode."
                         com.example.gemini.data.agent.opencode.OpenCodeState.DISABLED, com.example.gemini.data.agent.opencode.OpenCodeState.OUTDATED -> "Restart the server to use OpenCode."
