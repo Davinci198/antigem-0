@@ -151,7 +151,11 @@ class OpenCodeBridgeClient(private val bridge: AgyBridgeService = AgyBridgeServi
         while (currentCoroutineContext().isActive) {
             var failure: Throwable? = null
             try {
-                val req = Request.Builder().url(url("/x/event")).header("Accept", "text/event-stream").get().build()
+                // identity: OkHttp's default transparent gzip would compress the event stream end to end, and the
+                // gzip window holds small events (and the 15 s heartbeats) until a block fills — the chat then only
+                // updates on a resync, not live. Asking for no encoding keeps every event flowing as it is written.
+                val req = Request.Builder().url(url("/x/event")).header("Accept", "text/event-stream")
+                    .header("Accept-Encoding", "identity").get().build()
                 streamClient.newCall(req).execute().use { resp ->
                     if (resp.code == 503 && resp.peekBody(4096).string().contains("\"disabled\":true")) {
                         throw OpenCodeUnavailableException("OpenCode is turned off on the server.", disabled = true)
