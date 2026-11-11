@@ -71,6 +71,8 @@ type Manager struct {
 
 	// provMu guards agy_providers.json (custom providers and which chat runs on one)
 	provMu sync.Mutex
+	// gateways holds the loopback translators of OpenAI-style providers
+	gateways gatewayCache
 
 	jobMu sync.Mutex
 	job   *cliJob

@@ -55,6 +55,11 @@ type Provider struct {
 	SmallModel string `json:"small_model,omitempty"`
 	// AuthMode is "bearer" (default) or "x-api-key".
 	AuthMode string `json:"auth_mode,omitempty"`
+	// OpenAIStyle marks a provider that only speaks OpenAI's chat/completions
+	// (NVIDIA Integrate, most local servers). Chats on it run through the
+	// loopback translation gateway: the CLI talks Anthropic to 127.0.0.1 and
+	// the gateway speaks OpenAI upstream. See formatgateway.go.
+	OpenAIStyle bool `json:"openai_style,omitempty"`
 	// Headers are extra request headers (ANTHROPIC_CUSTOM_HEADERS); ExtraEnv is extra environment of the chat's process.
 	Headers  map[string]string `json:"headers,omitempty"`
 	ExtraEnv map[string]string `json:"extra_env,omitempty"`
@@ -185,6 +190,14 @@ func (m *Manager) provider(id string) (Provider, bool) {
 func (m *Manager) providerSettingsFile(p Provider, model string) (string, error) {
 	// the stored base URL may still carry a path a user pasted (…/v1): chats always use the cleaned one
 	p.BaseURL = cleanBaseURL(p.BaseURL)
+	if p.OpenAIStyle {
+		// an OpenAI-only endpoint is reached through the loopback translator
+		gw, err := m.gateways.forProvider(p)
+		if err != nil {
+			return "", err
+		}
+		p.BaseURL = gw.URL()
+	}
 	small := p.SmallModel
 	if small == "" {
 		small = model
@@ -201,7 +214,12 @@ func (m *Manager) providerSettingsFile(p Provider, model string) (string, error)
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 	}
 	// the key goes into exactly one variable; the other is emptied so an environment value cannot win
-	if p.AuthMode == authXAPIKey {
+	if p.OpenAIStyle {
+		// the gateway holds the real key; the CLI refuses to start with an empty
+		// one, and it sends whatever it has to 127.0.0.1, where it is ignored
+		env["ANTHROPIC_AUTH_TOKEN"] = loopbackKey
+		env["ANTHROPIC_API_KEY"] = ""
+	} else if p.AuthMode == authXAPIKey {
 		env["ANTHROPIC_API_KEY"] = p.APIKey
 		env["ANTHROPIC_AUTH_TOKEN"] = ""
 	} else {
@@ -346,7 +364,7 @@ func (m *Manager) settingsConflicts() []string {
 // handleProviders routes /api/claude/providers[/...].
 //
 //	GET    /providers                        providers (keys masked) + "settings_endpoint" if settings.json has one
-//	POST   /providers                        add {name, base_url, api_key, models_url, small_model, models}
+//	POST   /providers                        add {name, base_url, api_key, models_url, small_model, models, openai_style}
 //	PUT    /providers/{id}                   update (an empty api_key keeps the saved one)
 //	DELETE /providers/{id}
 //	POST   /providers/{id}/fetch-models      {"free_only": bool} the provider's model list
@@ -457,6 +475,7 @@ func (m *Manager) handleProviders(w http.ResponseWriter, r *http.Request, rest s
 		f.Providers = kept
 		err := m.saveProvidersLocked(f)
 		m.provMu.Unlock()
+		m.gateways.close(id)
 		_ = os.Remove(filepath.Join(m.HomeDir, ".claude", "agy_providers", id+".settings.json"))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"success": false, "error": err.Error()})
@@ -557,6 +576,8 @@ func (m *Manager) saveProvider(w http.ResponseWriter, id string, p Provider) {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"success": false, "error": err.Error()})
 		return
 	}
+	// the translator (if any) is rebuilt from the new endpoint/key on the next spawn
+	m.gateways.close(p.ID)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "provider": viewOf(p)})
 }
 
@@ -664,6 +685,9 @@ type ProviderTestResult struct {
 // testProvider sends one tiny /v1/messages request exactly like the CLI would (same URL, auth mode and headers), so a
 // wrong base URL, key, auth mode or model id shows up here instead of as a CLI error in the middle of a chat.
 func testProvider(ctx context.Context, p Provider, model string) ProviderTestResult {
+	if p.OpenAIStyle {
+		return testProviderOpenAI(ctx, p, model)
+	}
 	res := ProviderTestResult{Model: model, URL: p.BaseURL + "/v1/messages"}
 	if model == "" {
 		res.Error = "add a model id first (the test sends one short message to it)"

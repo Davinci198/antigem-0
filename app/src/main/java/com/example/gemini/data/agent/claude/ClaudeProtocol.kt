@@ -769,6 +769,8 @@ data class ClaudeProvider(
     val default_max_output: Long = 0,
     /** Stops the CLI from sending experimental beta fields that strict gateways reject. */
     val disable_betas: Boolean = false,
+    /** The endpoint only speaks OpenAI's chat/completions; chats on it run through the bridge's loopback translator. */
+    val openai_style: Boolean = false,
     val models: List<ClaudeProviderModel> = emptyList(),
     val openrouter: Boolean = false
 )
