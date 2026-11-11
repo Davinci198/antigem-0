@@ -110,7 +110,7 @@ func (m *Manager) handleScan(w http.ResponseWriter, r *http.Request) {
 				results <- scanProbeEvent{Type: "scan-probe", Model: model, Error: "scan budget exhausted", BaseURL: provider.BaseURL}
 				return
 			}
-			latency, errMsg := probe(model, timeout)
+			latency, errMsg := probeModel(provider, probe, model, timeout)
 			ev := scanProbeEvent{Type: "scan-probe", Model: model, OK: errMsg == "", LatencyMS: latency, BaseURL: provider.BaseURL}
 			if errMsg != "" {
 				ev.Error = errMsg
@@ -181,6 +181,9 @@ func integrationProvider(id string, providers, credentials []map[string]interfac
 			key = pub
 		}
 		provider := &CustomProvider{ID: id, Name: id, Kind: kind, BaseURL: base, APIKey: key}
+		// Integrations whose ids are plain slugs of the provider name (nvidia,
+		// google, meta…) namespace their api model ids with that same prefix.
+		provider.namespaced = true
 		if hs, ok := p["headers"].(map[string]interface{}); ok {
 			hdr := map[string]string{}
 			for k, v := range hs {
@@ -222,6 +225,24 @@ func credentialKey(id string, credentials []map[string]interface{}) string {
 		}
 	}
 	return ""
+}
+
+// probeModel runs one probe and heals the one systematic misscoring that
+// namespaced providers cause: NVIDIA-style integrations sell models whose api
+// id begins with the provider id ("nvidia/nemotron-…"), but the picker hands
+// scans the stripped tail, and the api then answers 404 for a model that
+// exists. Retry once under the full id and report the verdict against the id
+// the app asked for. A custom endpoint never pays for this — the retry is
+// only for ids the bridge itself resolved from OpenCode's catalog.
+func probeModel(p *CustomProvider, probe func(string, time.Duration) (int64, string), model string, timeout time.Duration) (int64, string) {
+	latency, errMsg := probe(model, timeout)
+	if errMsg == "" || !p.namespaced || !strings.Contains(errMsg, "HTTP 404") || strings.HasPrefix(model, p.ID+"/") {
+		return latency, errMsg
+	}
+	if l2, e2 := probe(p.ID+"/"+model, timeout); e2 == "" {
+		return l2, ""
+	}
+	return latency, errMsg
 }
 
 // probe pings one model with the same tiny completion the other scanners use:
