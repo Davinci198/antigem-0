@@ -197,6 +197,7 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
             Log.w(TAG, "restore: no stored verdicts (prefs=${prefs != null})")
             return
         }
+        var restored = 0
         runCatching {
             val json = JSONObject(raw)
             json.keys().forEach { k ->
@@ -208,9 +209,15 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
                     model = o.optString("model"),
                     error = o.optString("error"),
                 )
+                restored++
             }
-        }.onFailure { Log.e(TAG, "restore: parse failed: ${it.message}") }
-        Log.d(TAG, "restore: ${verdicts.size} verdicts from ${raw.length} bytes")
+        }.onFailure { Log.e(TAG, "restore: parse failed after $restored entries: ${it.message}") }
+        // Counted locally on purpose: an unguarded read of a field of this
+        // very class threw here once a stored file met a half-initialized
+        // store, and the log line took the whole app into a crash loop at
+        // startup - verdicts on disk turned a working app into one that
+        // would not open at all.
+        Log.d(TAG, "restore: $restored verdicts from ${raw.length} bytes")
     }
 
     private fun persist() {
