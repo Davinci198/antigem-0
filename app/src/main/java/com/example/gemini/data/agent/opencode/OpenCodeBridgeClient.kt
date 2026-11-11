@@ -382,7 +382,7 @@ class OpenCodeBridgeClient(private val bridge: AgyBridgeService = AgyBridgeServi
         providerId: String,
         models: List<String>,
         timeoutMs: Int = 15_000,
-        onProbe: (modelId: String, ok: Boolean, latencyMs: Long, error: String?) -> Unit,
+        onProbe: (modelId: String, ok: Boolean, latencyMs: Long, error: String?, baseUrl: String?) -> Unit,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val payload = org.json.JSONObject()
@@ -404,12 +404,23 @@ class OpenCodeBridgeClient(private val bridge: AgyBridgeService = AgyBridgeServi
                     val line = source.readUtf8Line() ?: break
                     if (line.isBlank()) continue
                     val ev = runCatching { org.json.JSONObject(line) }.getOrNull() ?: continue
+                    if (!ev.has("type")) {
+                        // The stream never started: a refusal answer (provider
+                        // is neither a custom endpoint nor a known integration)
+                        // arrives as one plain success:false object, and telling
+                        // the user beats painting dots that never come.
+                        if (!ev.optBoolean("success", true)) {
+                            error(ev.optString("error").ifBlank { "the bridge refused the scan" })
+                        }
+                        continue
+                    }
                     if (ev.optString("type") != "scan-probe") continue
                     onProbe(
                         ev.optString("model"),
                         ev.optBoolean("ok", false),
                         ev.optLong("latency_ms", 0L),
                         ev.optString("error").takeIf { it.isNotBlank() },
+                        ev.optString("base_url").takeIf { it.isNotBlank() },
                     )
                 }
             }

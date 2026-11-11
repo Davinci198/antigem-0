@@ -88,6 +88,14 @@ func TestCustomProviderScanStream(t *testing.T) {
 	if events[0]["type"] != "scan-start" || events[0]["models"] != float64(2) {
 		t.Errorf("start: %v", events[0])
 	}
+	// The stream tells the app which endpoint was probed, so the verdict can
+	// be aliased by URL and shared with the other agents.
+	if events[0]["base_url"] == nil || events[0]["base_url"] == "" {
+		t.Errorf("scan-start carries no base_url: %v", events[0])
+	}
+	if probe := events[1]; probe["base_url"] == nil || probe["base_url"] == "" {
+		t.Errorf("scan-probe carries no base_url: %v", probe)
+	}
 	ok := map[string]bool{}
 	for _, ev := range events[1:3] {
 		if ev["type"] != "scan-probe" {
@@ -115,6 +123,70 @@ func TestCustomProviderScanUnknownProvider(t *testing.T) {
 	res := doJSON(t, m, http.MethodPost, "/api/opencode/custom-providers/scan", `{"provider_id":"ghost"}`)
 	if res["success"] != false || !strings.Contains(res["error"].(string), "ghost") {
 		t.Fatalf("unknown provider: %v", res)
+	}
+}
+
+func TestIntegrationProviderResolution(t *testing.T) {
+	providers := []map[string]interface{}{
+		{"id": "nvidia", "package": "@opencode/ai/providers/openai-compatible",
+			"settings": map[string]interface{}{"baseURL": "https://integrate.api.nvidia.com/v1"},
+			"headers":  map[string]interface{}{"X-Title": "opencode", "X-SKIP-ME": ""}},
+		{"id": "anthro", "package": "@opencode/ai/providers/anthropic",
+			"settings": map[string]interface{}{"baseURL": "https://api.anthropic.com", "apiKey": "sk-config"}},
+		{"id": "faceless", "package": "x", "settings": map[string]interface{}{}},
+	}
+	creds := []map[string]interface{}{
+		{"id": "cred_1", "integrationID": "nvidia", "active": true,
+			"value": map[string]interface{}{"type": "key", "key": "nv-secret"}},
+		{"id": "cred_2", "integrationID": "other", "active": true,
+			"value": map[string]interface{}{"type": "key", "key": "nope"}},
+	}
+	p, err := integrationProvider("nvidia", providers, creds)
+	if err != nil {
+		t.Fatalf("nvidia: %v", err)
+	}
+	if p.Kind != KindOpenAI || p.BaseURL != "https://integrate.api.nvidia.com/v1" || p.APIKey != "nv-secret" {
+		t.Errorf("nvidia resolved wrong: %+v", p)
+	}
+	if p.Headers["X-Title"] != "opencode" || len(p.Headers) != 1 {
+		t.Errorf("headers: %v (empty ones must be dropped)", p.Headers)
+	}
+	// anthropic package selects the /messages probe; with no credential the
+	// config key is used.
+	p, err = integrationProvider("anthro", providers, nil)
+	if err != nil {
+		t.Fatalf("anthro: %v", err)
+	}
+	if p.Kind != KindAnthropic || p.APIKey != "sk-config" {
+		t.Errorf("anthro resolved wrong: %+v", p)
+	}
+	if _, err := integrationProvider("ghost", providers, creds); err == nil {
+		t.Error("ghost provider must not resolve")
+	}
+	if _, err := integrationProvider("faceless", providers, creds); err == nil {
+		t.Error("provider without a baseURL must not resolve")
+	}
+}
+
+func TestCredentialKeySelection(t *testing.T) {
+	creds := []map[string]interface{}{
+		{"integrationID": "a", "active": false, "value": map[string]interface{}{"key": "stale"}},
+		{"integrationID": "b", "active": true, "value": map[string]interface{}{"type": "oauth", "access": "tok"}},
+		{"integrationID": "c", "active": true, "value": map[string]interface{}{"apiKey": "legacy-name"}},
+		{"id": "d", "active": true, "value": map[string]interface{}{"token": "plain-id-entry"}},
+	}
+	if k := credentialKey("a", creds); k != "" {
+		t.Errorf("inactive credential leaked: %s", k)
+	}
+	// oauth values hold no static key: nothing to probe with.
+	if k := credentialKey("b", creds); k != "" {
+		t.Errorf("oauth value matched as a key: %s", k)
+	}
+	if k := credentialKey("c", creds); k != "legacy-name" {
+		t.Errorf("apiKey field: %q", k)
+	}
+	if k := credentialKey("d", creds); k != "plain-id-entry" {
+		t.Errorf("id fallback: %q", k)
 	}
 }
 

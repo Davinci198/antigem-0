@@ -387,6 +387,10 @@ class OpenCodeChatBackend(
     private val _scanProgress = MutableStateFlow(0 to 0)
     val scanProgress: StateFlow<Pair<Int, Int>> = _scanProgress.asStateFlow()
 
+    private val _scanError = MutableStateFlow<String?>(null)
+    /** Why the last scan refused to run (a group that is neither custom nor a signed-in integration). */
+    val scanError: StateFlow<String?> = _scanError.asStateFlow()
+
     fun refreshCustomProviders() {
         backendScope.launch {
             client.customProviders().onSuccess { _customProviders.value = it }
@@ -403,7 +407,11 @@ class OpenCodeChatBackend(
     }
 
     /**
-     * Probes one app-added endpoint and keeps every verdict in the shared store.
+     * Probes one provider from the picker and keeps every verdict in the shared
+     * store. Works for the app's custom endpoints and for OpenCode's own
+     * integrations (nvidia, google, ...): the bridge resolves URL + key itself,
+     * and the stream carries the URL back so the verdict can also be aliased
+     * under it — which is what lets Claude and Hermes read this scan.
      * Sticky like the other agents: models already verified keep their dot;
      * [force] re-probes the whole provider.
      */
@@ -412,16 +420,17 @@ class OpenCodeChatBackend(
         backendScope.launch {
             _isScanning.value = true
             _scanProvider.value = providerId
+            _scanError.value = null
             try {
-                val providers = _customProviders.value.ifEmpty {
-                    client.customProviders().getOrNull().orEmpty().also { _customProviders.value = it }
-                }
-                val provider = providers.firstOrNull { it.id == providerId } ?: return@launch
-                val ids = provider.models.map { it.id }
-                val pending = if (force) ids else ids.filter { scanStore.verdict(providerId, it) == null }
-                _scanProgress.value = (ids.size - pending.size) to ids.size
+                val models = _allModels.value.map { it.id }
+                    .filter { providerOf(it) == providerId }
+                    .map { it.substringAfter('/') }
+                if (models.isEmpty()) return@launch
+                val pending = if (force) models else models.filter { scanStore.verdict(providerId, it) == null }
+                _scanProgress.value = (models.size - pending.size) to models.size
                 if (pending.isEmpty()) return@launch
-                client.scanCustomProvider(providerId, pending) { modelId, ok, latencyMs, error ->
+                val aliasUrl = _customProviders.value.firstOrNull { it.id == providerId }?.base_url
+                client.scanCustomProvider(providerId, pending) { modelId, ok, latencyMs, error, baseUrl ->
                     scanStore.recordProgress(
                         providerId, modelId,
                         ClaudeProviderTestResult(
@@ -432,10 +441,11 @@ class OpenCodeChatBackend(
                             model = modelId,
                             error = error.orEmpty(),
                         ),
-                        provider.base_url,
+                        baseUrl ?: aliasUrl,
                     )
-                    _scanProgress.value = (_scanProgress.value.first + 1) to ids.size
+                    _scanProgress.value = (_scanProgress.value.first + 1) to models.size
                 }.onFailure {
+                    _scanError.value = it.message
                     Log.w("OpenCodeScan", "scan of $providerId failed: ${it.message}")
                 }
             } finally {

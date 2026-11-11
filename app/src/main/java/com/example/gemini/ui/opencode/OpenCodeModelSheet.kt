@@ -64,10 +64,10 @@ fun OpenCodeModelSheet(backend: OpenCodeChatBackend, onOpenSettings: () -> Unit,
     val selected by backend.selectedModelId.collectAsState()
     val refreshing by backend.isRefreshingModels.collectAsState()
     val error by backend.modelsError.collectAsState()
-    val customProviders by backend.customProviders.collectAsState()
     val scanning by backend.isScanning.collectAsState()
     val scanProvider by backend.scanProvider.collectAsState()
     val scanProgress by backend.scanProgress.collectAsState()
+    val scanError by backend.scanError.collectAsState()
     var query by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
         backend.refreshModels()
@@ -99,17 +99,19 @@ fun OpenCodeModelSheet(backend: OpenCodeChatBackend, onOpenSettings: () -> Unit,
                 Spacer(Modifier.height(8.dp))
             }
             error?.let { Text(it, fontSize = 12.5.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 6.dp)) }
+            scanError?.let {
+                Text("Scan: $it", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 6.dp))
+            }
             val shown = models.filter {
                 query.isBlank() || it.displayName.contains(query, true) || it.id.contains(query, true) || it.description.contains(query, true)
             }
             val groups = shown.groupBy { it.baseName.ifBlank { it.id.substringBefore('/') } }
-            val customIds = customProviders.mapTo(HashSet()) { it.id }
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                 groups.forEach { (provider, list) ->
-                    // The group's real id: custom providers are the only ones the
-                    // app holds an endpoint + key for, so only they can be probed.
+                    // The group's real id. The bridge can probe the app's custom
+                    // endpoints and OpenCode's own integrations alike: it resolves
+                    // URL + key itself, so every group gets a Test button.
                     val pid = backend.providerOf(list.first().id)
-                    val isCustom = pid in customIds
                     val verdicts = list.mapNotNull { backend.verdictFor(it.id) }
                     val working = verdicts.count { scanKindOf(it.ok, it.status, it.error) == ScanKind.OK }
                     val broken = verdicts.count { scanKindOf(it.ok, it.status, it.error).isBroken }
@@ -123,26 +125,24 @@ fun OpenCodeModelSheet(backend: OpenCodeChatBackend, onOpenSettings: () -> Unit,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                                 modifier = Modifier.weight(1f, fill = false)
                             )
-                            if (isCustom) {
-                                Spacer(Modifier.width(8.dp))
-                                when {
-                                    scanProvider == pid -> Text(
-                                        "Testing ${scanProgress.first}/${scanProgress.second}…",
-                                        fontSize = 10.5.sp, color = OpenCodeAccent, fontWeight = FontWeight.Medium
-                                    )
-                                    verdicts.isNotEmpty() -> Text(
-                                        "$working working · $broken broken",
-                                        fontSize = 10.5.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                                    )
-                                }
-                                Spacer(Modifier.width(8.dp))
-                                TextButton(
-                                    onClick = { backend.scanProvider(pid, force = scanProvider == null && verdicts.isNotEmpty()) },
-                                    enabled = !scanning,
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Text(if (verdicts.isNotEmpty()) "Retest" else "Test", fontSize = 11.sp)
-                                }
+                            Spacer(Modifier.width(8.dp))
+                            when {
+                                scanProvider == pid -> Text(
+                                    "Testing ${scanProgress.first}/${scanProgress.second}…",
+                                    fontSize = 10.5.sp, color = OpenCodeAccent, fontWeight = FontWeight.Medium
+                                )
+                                verdicts.isNotEmpty() -> Text(
+                                    "$working working · $broken broken",
+                                    fontSize = 10.5.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(
+                                onClick = { backend.scanProvider(pid, force = scanProvider == null && verdicts.isNotEmpty()) },
+                                enabled = !scanning,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(if (verdicts.isNotEmpty()) "Retest" else "Test", fontSize = 11.sp)
                             }
                         }
                     }

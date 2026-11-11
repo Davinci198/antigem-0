@@ -11,6 +11,7 @@ package opencode
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ var scanBatchBudget = 12 * time.Minute
 type scanProbeEvent struct {
 	Type      string `json:"type"`
 	Provider  string `json:"provider_id,omitempty"`
+	BaseURL   string `json:"base_url,omitempty"`
 	Model     string `json:"model,omitempty"`
 	OK        bool   `json:"ok,omitempty"`
 	LatencyMS int64  `json:"latency_ms,omitempty"`
@@ -40,7 +42,10 @@ type scanProbeEvent struct {
 // {"provider_id":"my-local-ollama","models":["a","b"]?,"timeout_ms":15000}
 // with an NDJSON stream: scan-start, one scan-probe per model as it finishes
 // (so the picker fills in live), then scan-done. Without `models` every model
-// stored on the provider is probed.
+// stored on the provider is probed. provider_id may also name one of OpenCode's
+// own integrations (nvidia, google, ...): the bridge then resolves the endpoint
+// URL from the serve's provider catalog and the key from its credential store,
+// so scanning needs no re-typed endpoint and no key ever crosses to the app.
 func (m *Manager) handleScan(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ProviderID string   `json:"provider_id"`
@@ -56,22 +61,9 @@ func (m *Manager) handleScan(w http.ResponseWriter, r *http.Request) {
 		timeout = 20 * time.Second
 	}
 
-	m.provMu.Lock()
-	list, err := m.loadProviders()
-	m.provMu.Unlock()
+	provider, err := m.scanTarget(r.Context(), body.ProviderID)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": false, "error": err.Error()})
-		return
-	}
-	var provider *CustomProvider
-	for i := range list {
-		if list[i].ID == body.ProviderID {
-			provider = &list[i]
-			break
-		}
-	}
-	if provider == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"success": false, "error": "unknown provider: " + body.ProviderID})
 		return
 	}
 	models := body.Models
@@ -98,7 +90,7 @@ func (m *Manager) handleScan(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
-	emit(scanProbeEvent{Type: "scan-start", Provider: provider.ID, Models: len(models)})
+	emit(scanProbeEvent{Type: "scan-start", Provider: provider.ID, BaseURL: provider.BaseURL, Models: len(models)})
 
 	results := make(chan scanProbeEvent, len(models))
 	var wg sync.WaitGroup
@@ -115,11 +107,11 @@ func (m *Manager) handleScan(w http.ResponseWriter, r *http.Request) {
 			limit <- struct{}{}
 			defer func() { <-limit }()
 			if time.Now().After(deadline) {
-				results <- scanProbeEvent{Type: "scan-probe", Model: model, Error: "scan budget exhausted"}
+				results <- scanProbeEvent{Type: "scan-probe", Model: model, Error: "scan budget exhausted", BaseURL: provider.BaseURL}
 				return
 			}
 			latency, errMsg := probe(model, timeout)
-			ev := scanProbeEvent{Type: "scan-probe", Model: model, OK: errMsg == "", LatencyMS: latency}
+			ev := scanProbeEvent{Type: "scan-probe", Model: model, OK: errMsg == "", LatencyMS: latency, BaseURL: provider.BaseURL}
 			if errMsg != "" {
 				ev.Error = errMsg
 			}
@@ -133,6 +125,103 @@ func (m *Manager) handleScan(w http.ResponseWriter, r *http.Request) {
 		sent++
 	}
 	emit(scanProbeEvent{Type: "scan-done", Provider: provider.ID, Models: sent})
+}
+
+// scanTarget finds what to probe for a picker provider id: the app's own
+// custom endpoint store first (it holds URL + key + models), then OpenCode's
+// integration catalog — a provider the user signed into through OpenCode's
+// auth (nvidia, google, ...) is scannable too, resolved from the running
+// serve so nothing has to be typed twice and no key leaves the guest.
+func (m *Manager) scanTarget(ctx context.Context, id string) (*CustomProvider, error) {
+	m.provMu.Lock()
+	list, err := m.loadProviders()
+	m.provMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].ID == id {
+			return &list[i], nil
+		}
+	}
+	var catalog struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	if err := m.Call(ctx, http.MethodGet, "/api/provider", nil, &catalog); err != nil {
+		return nil, fmt.Errorf("unknown provider %s: not in the app's custom endpoints and OpenCode's catalog could not be read (%v)", id, err)
+	}
+	var creds struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	// A missing store is not an error: public and keyless integrations probe fine.
+	_ = m.Call(ctx, http.MethodGet, "/api/credential", nil, &creds)
+	return integrationProvider(id, catalog.Data, creds.Data)
+}
+
+// integrationProvider resolves one serve catalog entry into a probe target.
+func integrationProvider(id string, providers, credentials []map[string]interface{}) (*CustomProvider, error) {
+	for _, p := range providers {
+		if pid, _ := p["id"].(string); pid != id {
+			continue
+		}
+		pkg, _ := p["package"].(string)
+		settings, _ := p["settings"].(map[string]interface{})
+		base, _ := settings["baseURL"].(string)
+		if base == "" {
+			return nil, fmt.Errorf("provider %s has no endpoint URL in OpenCode's catalog", id)
+		}
+		kind := KindOpenAI
+		if strings.Contains(strings.ToLower(pkg), "anthropic") {
+			kind = KindAnthropic
+		}
+		key := credentialKey(id, credentials)
+		// Some integrations carry their key in the config itself ("public" is
+		// the marker for OpenCode's own keyless front, never a real key).
+		if pub, _ := settings["apiKey"].(string); key == "" && pub != "" && pub != "public" {
+			key = pub
+		}
+		provider := &CustomProvider{ID: id, Name: id, Kind: kind, BaseURL: base, APIKey: key}
+		if hs, ok := p["headers"].(map[string]interface{}); ok {
+			hdr := map[string]string{}
+			for k, v := range hs {
+				if s, ok := v.(string); ok && s != "" {
+					hdr[k] = s
+				}
+			}
+			if len(hdr) > 0 {
+				provider.Headers = hdr
+			}
+		}
+		return provider, nil
+	}
+	return nil, fmt.Errorf("unknown provider: %s (not a custom endpoint and not an OpenCode integration)", id)
+}
+
+// credentialKey picks the secret stored for one integration. The field names
+// follow what the serve returns; the first non-empty wins across them because
+// older and newer OpenCode versions spell the same secret differently.
+func credentialKey(id string, credentials []map[string]interface{}) string {
+	for _, c := range credentials {
+		integ, _ := c["integrationID"].(string)
+		if integ != "" {
+			if integ != id {
+				continue
+			}
+		} else if cid, _ := c["id"].(string); cid != id {
+			continue
+		}
+		if act, ok := c["active"].(bool); ok && !act {
+			continue
+		}
+		if v, ok := c["value"].(map[string]interface{}); ok {
+			for _, k := range []string{"key", "apiKey", "token"} {
+				if s, ok := v[k].(string); ok && s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // probe pings one model with the same tiny completion the other scanners use:

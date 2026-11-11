@@ -463,6 +463,8 @@ func (m *Manager) Call(ctx context.Context, method, path string, body interface{
 //	GET  /api/opencode/cli/job; POST /api/opencode/cli/{install|update}   install or update OpenCode (~/.opencode/bin)
 //	POST /api/opencode/custom-providers/fetch-models   {"kind","base_url","api_key"|"id"} → model ids of an endpoint
 //	POST /api/opencode/custom-providers/scan           {"provider_id","models"?,"timeout_ms"?} → NDJSON scan-probe stream
+//	                                                    (provider_id may also be one of OpenCode's own integrations:
+//	                                                    the bridge resolves its URL + stored key from the serve)
 //	*    /api/opencode/x/{path}           relayed to OpenCode's /api/{path} (SSE included: /x/event)
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/opencode")
