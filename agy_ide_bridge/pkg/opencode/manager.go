@@ -462,6 +462,9 @@ func (m *Manager) Call(ctx context.Context, method, path string, body interface{
 //	GET  /api/opencode/mcp; PUT|DELETE /api/opencode/mcp/{name}   MCP servers kept in the bridge's OpenCode config
 //	GET  /api/opencode/cli/job; POST /api/opencode/cli/{install|update}   install or update OpenCode (~/.opencode/bin)
 //	POST /api/opencode/custom-providers/fetch-models   {"kind","base_url","api_key"|"id"} → model ids of an endpoint
+//	POST /api/opencode/custom-providers/scan           {"provider_id","models"?,"timeout_ms"?} → NDJSON scan-probe stream
+//	                                                    (provider_id may also be one of OpenCode's own integrations:
+//	                                                    the bridge resolves its URL + stored key from the serve)
 //	*    /api/opencode/x/{path}           relayed to OpenCode's /api/{path} (SSE included: /x/event)
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/opencode")
@@ -493,6 +496,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.handleInstall(w, r, strings.TrimPrefix(path, "/cli/"))
 	case path == "/custom-providers/fetch-models" && r.Method == http.MethodPost:
 		m.handleFetchModels(w, r)
+	case path == "/custom-providers/scan" && r.Method == http.MethodPost:
+		m.handleScan(w, r)
 	case path == "/custom-providers" || strings.HasPrefix(path, "/custom-providers/"):
 		m.handleCustomProviders(w, r, strings.Trim(strings.TrimPrefix(path, "/custom-providers"), "/"))
 	default:

@@ -12,6 +12,8 @@ import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.Conversation
 import com.example.gemini.domain.model.ToolCall
 import com.example.gemini.data.agent.claude.isBridgeUnreachable
+import com.example.gemini.data.agent.claude.ClaudeProviderTestResult
+import com.example.gemini.ui.claude.ModelScanStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -360,6 +362,95 @@ class OpenCodeChatBackend(
                     .onFailure { _modelsError.value = it.message }
             } finally {
                 _isRefreshingModels.value = false
+            }
+        }
+    }
+
+    // ── model scan (health verdicts) ────────────────────────────────────────
+    // The verdicts live in the one store every agent reads — Claude and Hermes
+    // already write there — so a scan done in OpenCode is visible in the other
+    // pickers too, and vice versa whenever both know the endpoint by URL.
+
+    private val scanStore by lazy { ModelScanStore.shared(application) }
+
+    private val _customProviders = MutableStateFlow<List<OpenCodeCustomProvider>>(emptyList())
+    /** The endpoints the app added with its own URL + key: the probeable ones. */
+    val customProviders: StateFlow<List<OpenCodeCustomProvider>> = _customProviders.asStateFlow()
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    private val _scanProvider = MutableStateFlow<String?>(null)
+    /** The provider being probed right now, or null. */
+    val scanProvider: StateFlow<String?> = _scanProvider.asStateFlow()
+
+    private val _scanProgress = MutableStateFlow(0 to 0)
+    val scanProgress: StateFlow<Pair<Int, Int>> = _scanProgress.asStateFlow()
+
+    private val _scanError = MutableStateFlow<String?>(null)
+    /** Why the last scan refused to run (a group that is neither custom nor a signed-in integration). */
+    val scanError: StateFlow<String?> = _scanError.asStateFlow()
+
+    fun refreshCustomProviders() {
+        backendScope.launch {
+            client.customProviders().onSuccess { _customProviders.value = it }
+        }
+    }
+
+    /** A model's verdict: its own scan, or another agent's scan of the same endpoint. */
+    fun verdictFor(modelId: String): ClaudeProviderTestResult? {
+        val provider = providerOf(modelId)
+        val model = modelId.substringAfter('/')
+        scanStore.verdict(provider, model)?.let { return it }
+        val url = _customProviders.value.firstOrNull { it.id == provider }?.base_url
+        return scanStore.verdictByBaseUrl(url, model)
+    }
+
+    /**
+     * Probes one provider from the picker and keeps every verdict in the shared
+     * store. Works for the app's custom endpoints and for OpenCode's own
+     * integrations (nvidia, google, ...): the bridge resolves URL + key itself,
+     * and the stream carries the URL back so the verdict can also be aliased
+     * under it — which is what lets Claude and Hermes read this scan.
+     * Sticky like the other agents: models already verified keep their dot;
+     * [force] re-probes the whole provider.
+     */
+    fun scanProvider(providerId: String, force: Boolean = false) {
+        if (_isScanning.value) return
+        backendScope.launch {
+            _isScanning.value = true
+            _scanProvider.value = providerId
+            _scanError.value = null
+            try {
+                val models = _allModels.value.map { it.id }
+                    .filter { providerOf(it) == providerId }
+                    .map { it.substringAfter('/') }
+                if (models.isEmpty()) return@launch
+                val pending = if (force) models else models.filter { scanStore.verdict(providerId, it) == null }
+                _scanProgress.value = (models.size - pending.size) to models.size
+                if (pending.isEmpty()) return@launch
+                val aliasUrl = _customProviders.value.firstOrNull { it.id == providerId }?.base_url
+                client.scanCustomProvider(providerId, pending) { modelId, ok, latencyMs, error, baseUrl ->
+                    scanStore.recordProgress(
+                        providerId, modelId,
+                        ClaudeProviderTestResult(
+                            ok = ok,
+                            status = Regex("HTTP (\\d{3})").find(error.orEmpty())
+                                ?.groupValues?.get(1)?.toIntOrNull() ?: 0,
+                            latency_ms = latencyMs,
+                            model = modelId,
+                            error = error.orEmpty(),
+                        ),
+                        baseUrl ?: aliasUrl,
+                    )
+                    _scanProgress.value = (_scanProgress.value.first + 1) to models.size
+                }.onFailure {
+                    _scanError.value = it.message
+                    Log.w("OpenCodeScan", "scan of $providerId failed: ${it.message}")
+                }
+            } finally {
+                _isScanning.value = false
+                _scanProvider.value = null
             }
         }
     }
