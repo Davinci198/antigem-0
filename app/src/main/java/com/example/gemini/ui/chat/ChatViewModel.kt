@@ -1082,6 +1082,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         agyBridgeService.setHubExpected(AgentKind.AGY in enabledAgents.value)
         agyBackend.start()
         if (isClaudeEnabled) claudeBackend.start()
+        // OpenCode was only ever started from applyAgents: after an app restart (which an agent change also does)
+        // its event stream never connected — replies and errors stayed invisible until the chat was reloaded.
+        if (isOpenCodeEnabled) openCodeBackend.start()
         // the first chat follows the new-chat agent (Antigravity's own start-up chat only fills in when it is AGY)
         if (isClaudeEnabled && (newChatAgent.value == AgentKind.CLAUDE || AgentKind.AGY !in enabledAgents.value)) startNewChat()
         claudeAccount.onAccountChanged = {
