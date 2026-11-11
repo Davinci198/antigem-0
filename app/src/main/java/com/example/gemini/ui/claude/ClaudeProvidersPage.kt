@@ -415,6 +415,7 @@ private fun ProviderCard(
             if (p.extra_env.isNotEmpty()) Badge("${p.extra_env.size} env")
             if (p.timeout_sec > 0) Badge("${p.timeout_sec}s timeout")
             if (p.disable_betas) Badge("no betas")
+            if (p.openai_style) Badge("OpenAI")
         }
         Spacer(Modifier.size(8.dp))
 
@@ -630,6 +631,7 @@ private fun ProviderEditor(
     var budgetText by remember { mutableStateOf(if (initial.thinking_budget > 0) initial.thinking_budget.toString() else "16000") }
     var timeoutText by remember { mutableStateOf(if (initial.timeout_sec > 0) initial.timeout_sec.toString() else "") }
     var disableBetas by remember { mutableStateOf(initial.disable_betas) }
+    var openaiStyle by remember { mutableStateOf(initial.openai_style) }
     // blank = the default (3), 0 = never retry, 1..10
     var retriesText by remember { mutableStateOf(if (initial.max_retries > 0) initial.max_retries.toString() else if (initial.max_retries < 0) "0" else "") }
     var defaultCtxText by remember { mutableStateOf(if (initial.default_context > 0) initial.default_context.toString() else "") }
@@ -682,6 +684,7 @@ private fun ProviderEditor(
             name = name, base_url = normaliseBaseUrl(baseUrl), api_key = key.ifBlank { null }, auth_mode = authMode,
             models_url = if (openRouter) "" else modelsUrl, small_model = smallModel, models = models,
             headers = h, extra_env = e, timeout_sec = timeout, thinking_budget = budget, disable_betas = disableBetas,
+            openai_style = openaiStyle,
             default_context = defCtx, default_max_output = defOut, models_map = map, max_retries = retries
         ) to null
     }
@@ -776,7 +779,12 @@ private fun ProviderEditor(
                         OutlinedTextField(
                             baseUrl, { baseUrl = it }, label = { Text("Base URL") }, singleLine = true,
                             placeholder = { Text("https://api.example.com/anthropic") }, modifier = Modifier.fillMaxWidth(),
-                            supportingText = { Text("Claude Code calls <base URL>/v1/messages") }
+                            supportingText = {
+                                Text(
+                                    if (openaiStyle) "Claude Code calls the bridge's loopback port; every turn is forwarded to <base URL>/v1/chat/completions"
+                                    else "Claude Code calls <base URL>/v1/messages"
+                                )
+                            }
                         )
                         OutlinedTextField(
                             key, { key = it }, label = { Text("API key") }, singleLine = true,
@@ -802,6 +810,23 @@ private fun ProviderEditor(
                             else "x-api-key: <key> (ANTHROPIC_API_KEY). Used by providers that copy Anthropic's own scheme.",
                             fontSize = 11.sp, color = muted
                         )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("OpenAI-compatible endpoint", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("For servers that only speak OpenAI's chat/completions (NVIDIA, most local ones): the bridge translates Claude Code's requests on a loopback port, so their models work here too. Turning it on switches the key to a Bearer token.", fontSize = 11.sp, color = muted)
+                            }
+                            Switch(
+                                checked = openaiStyle,
+                                onCheckedChange = {
+                                    openaiStyle = it
+                                    // every OpenAI-only endpoint found in the field (NVIDIA, vLLM,
+                                    // llama.cpp, LM Studio) takes the key as a Bearer token, and an
+                                    // x-api-key left selected turns every turn into a 401.
+                                    if (it) authMode = "bearer"
+                                },
+                                colors = SwitchDefaults.colors(checkedTrackColor = ClaudeAccent)
+                            )
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedButton(enabled = !testing && baseUrl.isNotBlank(), onClick = { runTest(models.firstOrNull()?.id ?: newModel.trim()) }) {
                                 Icon(Icons.Outlined.NetworkCheck, null, Modifier.size(16.dp))
