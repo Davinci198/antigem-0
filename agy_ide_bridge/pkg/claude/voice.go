@@ -11,9 +11,19 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"gemini-server/pkg/ws"
 )
 
 const voiceEndpoint = "wss://api.anthropic.com/api/ws/speech_to_text/voice_stream"
+
+// voiceUpgrader is the app-side handshake for /voice/ws. It repeats the package upgrader's loopback-only origin
+// check here, at the Upgrade call itself: a browser page from anywhere else is refused before any audio flows.
+var voiceUpgrader = websocket.Upgrader{
+	CheckOrigin:     func(r *http.Request) bool { return ws.AllowedOrigin(r.Header.Get("Origin")) },
+	ReadBufferSize:  64 << 10,
+	WriteBufferSize: 64 << 10,
+}
 
 // oauthAccessToken reads the claude.ai OAuth token the CLI stored. If it is about to expire, `claude auth status`
 // is run first so the CLI can refresh it.
@@ -53,7 +63,7 @@ func (m *Manager) serveVoiceWS(w http.ResponseWriter, r *http.Request) {
 	if lang == "" {
 		lang = "en"
 	}
-	app, err := upgrader.Upgrade(w, r, nil)
+	app, err := voiceUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

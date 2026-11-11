@@ -40,13 +40,21 @@ import (
 	"gemini-server/pkg/ws"
 )
 
+// upgrader is the WebSocket handshake for Hermes session streams; the origin check is declared here, at the
+// package level, exactly like the claude and hub ones: absent Origin (native app) allowed, any present Origin
+// must be a loopback http/https/ws/wss host.
+var upgrader = websocket.Upgrader{
+	CheckOrigin:     func(r *http.Request) bool { return ws.AllowedOrigin(r.Header.Get("Origin")) },
+	ReadBufferSize:  4096,
+	WriteBufferSize: 65536,
+}
+
 // Manager handles all Hermes sessions.
 type Manager struct {
 	mu        sync.Mutex
 	sessions  map[string]*Session
 	hermesBin string // path to the hermes CLI
 	homeDir   string
-	upgrader  websocket.Upgrader
 	// gw is the live connection to the profile's Hermes gateway: turns go
 	// through it (warm, model latency only) instead of spawning a fresh
 	// `hermes chat --oneshot` per message. The spawn path stays as fallback.
@@ -64,11 +72,6 @@ func NewManager(homeDir, hermesBin string) *Manager {
 		sessions:  make(map[string]*Session),
 		hermesBin: hermesBin,
 		homeDir:   homeDir,
-		upgrader: websocket.Upgrader{
-			CheckOrigin:     func(r *http.Request) bool { return ws.AllowedOrigin(r.Header.Get("Origin")) },
-			ReadBufferSize:  4096,
-			WriteBufferSize: 65536,
-		},
 	}
 	m.gw = newGateway(m)
 	// Prewarm: connect to the gateway (starting it when cold) right away so
@@ -273,7 +276,7 @@ func (m *Manager) handleHistory(w http.ResponseWriter, sess *Session) {
 }
 
 func (m *Manager) handleStream(w http.ResponseWriter, r *http.Request, sess *Session) {
-	conn, err := m.upgrader.Upgrade(w, r, nil)
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
