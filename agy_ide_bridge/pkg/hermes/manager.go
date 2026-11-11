@@ -90,6 +90,11 @@ func (m *Manager) session(id string) *Session {
 	if s := m.peek(id); s != nil {
 		return s
 	}
+	// a session closed with the previous bridge run: re-materialise it from
+	// its record so the app's history keeps streaming from disk
+	if s := m.restoreSession(id); s != nil {
+		return s
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := &Session{
@@ -121,6 +126,7 @@ func (m *Manager) delete(id string) {
 	}
 	delete(m.sessions, id)
 	m.mu.Unlock()
+	m.deleteSessionFile(id)
 	if gwID != "" {
 		go m.gw.detach(gwID)
 	}
@@ -148,6 +154,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "sessions" && r.Method == http.MethodPost:
 		m.handleCreate(w, r)
+	case path == "sessions" && r.Method == http.MethodGet:
+		m.handleListSessions(w)
 	case path == "gateway":
 		m.handleGatewayStatus(w)
 
@@ -205,13 +213,24 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		ProviderID string `json:"provider_id"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	id := uuid.New().String()
+	// The session is keyed by the app's conversation id when one is given:
+	// the app never stores a conv.id→session_id mapping, so any other key
+	// would orphan the conversation across app restarts. A create for a
+	// session that already exists (memory or disk) reuses it — the call is
+	// idempotent, which is what lets a restored conversation send again.
+	id := body.ConversationID
+	if id == "" || !idRe.MatchString(id) {
+		id = uuid.New().String()
+	}
 	sess := m.session(id)
 	sess.mu.Lock()
 	sess.conversationID = body.ConversationID
-	sess.title = body.Title
+	if body.Title != "" && (sess.title == "" || sess.title == "New Chat") {
+		sess.title = body.Title
+	}
 	sess.gwModel = body.Model
 	sess.gwProvider = ""
+	sess.gwProviderID = ""
 	sess.gwBaseURL = ""
 	sess.gwAPIKey = ""
 	if body.ProviderID != "" {
@@ -219,6 +238,7 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 			// Hermes runs a custom endpoint as provider "custom" with the
 			// endpoint and key carried on the session itself.
 			sess.gwProvider = "custom"
+			sess.gwProviderID = body.ProviderID
 			sess.gwBaseURL = p.BaseURL
 			sess.gwAPIKey = p.APIKey
 			if body.Model == "" && len(p.Models) > 0 {
@@ -231,7 +251,14 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sess.mu.Unlock()
+	m.persistSession(sess)
 	writeJSON(w, http.StatusOK, obj{"session_id": id})
+}
+
+// handleListSessions answers GET /api/hermes/sessions with the persisted
+// conversations, newest first: the app rebuilds its drawer from this.
+func (m *Manager) handleListSessions(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, obj{"sessions": m.listSessions()})
 }
 
 func (m *Manager) handleSend(w http.ResponseWriter, r *http.Request, sess *Session) {
@@ -353,6 +380,9 @@ type Session struct {
 	gwID               string
 	gwModel            string
 	gwProvider         string
+	// gwProviderID names the app custom provider whose endpoint/key ride the
+	// turn; it is what the on-disk record keeps (the key itself never does).
+	gwProviderID       string
 	gwBaseURL          string
 	gwAPIKey           string
 	gwProviderAtCreate string
@@ -399,6 +429,7 @@ func (s *Session) runTurn(content string) {
 	s.msgs = append(s.msgs, userMsg)
 	hermesID := s.hermesSessionID
 	s.mu.Unlock()
+	s.mgr.persistSession(s)
 
 	// warm path: dispatch the turn over the live gateway connection; fall
 	// back to spawning `hermes chat --oneshot` only when the gateway cannot
@@ -502,11 +533,13 @@ func (s *Session) gwFinish(usage interface{}, text string) {
 	s.mu.Unlock()
 	s.emit(obj{"type": "assistant_done", "usage": usage, "title": s.derivedTitle(content)})
 	if id == "" || body == "" {
+		s.mgr.persistSession(s)
 		return
 	}
 	s.mu.Lock()
 	s.msgs = append(s.msgs, Message{ID: id, Role: "assistant", Content: body})
 	s.mu.Unlock()
+	s.mgr.persistSession(s)
 }
 
 // runTurnSpawn is the legacy path: one `hermes chat --oneshot` process per turn.
@@ -581,11 +614,13 @@ func (s *Session) runTurnSpawn(content string, hermesID string) {
 		doneSent = true
 		s.emit(obj{"type": "assistant_done", "usage": usage, "title": s.derivedTitle(content)})
 		if assistantText.Len() == 0 {
+			s.mgr.persistSession(s)
 			return
 		}
 		s.mu.Lock()
 		s.msgs = append(s.msgs, Message{ID: msgID, Role: "assistant", Content: assistantText.String()})
 		s.mu.Unlock()
+		s.mgr.persistSession(s)
 	}
 
 	scanner := bufio.NewScanner(stdout)

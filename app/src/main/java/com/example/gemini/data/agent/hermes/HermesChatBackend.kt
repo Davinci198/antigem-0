@@ -34,6 +34,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -45,6 +46,11 @@ private const val MAX_WS_RETRIES = 3
 
 /** How long sendMessage waits for the stream socket to open before sending anyway. */
 private const val WS_OPEN_TIMEOUT_MS = 5_000L
+
+/** How many times the drawer restore retries GET /sessions before giving up;
+ * the bridge may still be booting when the app opens. */
+private const val RESTORE_ATTEMPTS = 10
+private const val RESTORE_RETRY_DELAY_MS = 2_000L
 
 /**
  * How long one provider's `scan-batch` may take before the app gives up on the
@@ -268,6 +274,9 @@ class HermesChatBackend(
     /** Id of the assistant bubble currently being streamed. Lives on the
      * backend so a reconnecting listener keeps filling the same bubble. */
     @Volatile private var streamingMsgId: String? = null
+
+    /** True while restoreSessions is retrying GET /sessions (app start). */
+    @Volatile private var restoring = false
 
     /** Wall-clock ms at which the current turn was sent; carried to
      * assistant_done so TokenUsage.durationMs can show ⏱ in the footer. */
@@ -630,6 +639,71 @@ class HermesChatBackend(
         backendScope.launch { disconnectWs() }
     }
 
+    /**
+     * Rebuilds the drawer from the bridge's persisted sessions after an app
+     * restart. The bridge mirrors every Hermes conversation to disk, so the
+     * list survives; the bridge process may still be booting, hence the
+     * bounded retry. Conversations already shown locally are never replaced
+     * — restore only adds what the app lost.
+     */
+    fun restoreSessions() {
+        if (restoring) return
+        restoring = true
+        backendScope.launch {
+            for (attempt in 0 until RESTORE_ATTEMPTS) {
+                val arr = runCatching {
+                    JSONObject(getBridge("/sessions")).optJSONArray("sessions")
+                }.getOrNull()
+                if (arr != null) {
+                    applyRestoredSessions(arr)
+                    restoring = false
+                    return@launch
+                }
+                delay(RESTORE_RETRY_DELAY_MS)
+            }
+            restoring = false
+        }
+    }
+
+    private fun applyRestoredSessions(arr: JSONArray) {
+        val restored = mutableListOf<Conversation>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val id = o.optString("id")
+            // the bridge keys sessions by the app conversation id; anything
+            // else is a pre-keying leftover with no conversation to attach to
+            val convId = o.optString("conversation_id").ifBlank { id }
+            if (convId.isBlank() || convId != id) continue
+            val updatedAt = o.optLong("updated_at").takeIf { it > 0 } ?: System.currentTimeMillis()
+            restored += Conversation(
+                id = convId,
+                title = o.optString("title").ifBlank { "New Chat" },
+                agent = AgentKind.HERMES,
+                sessionId = id,
+                createdAt = updatedAt,
+                updatedAt = updatedAt
+            )
+        }
+        if (restored.isEmpty()) return
+        val local = _conversations.value
+        _conversations.value = (local + restored.filter { r -> local.none { it.id == r.id } })
+            .sortedByDescending { it.updatedAt }
+        // the app opens with an empty "New Chat"; if nothing was typed into
+        // it, drop the placeholder and land on the most recent restored
+        // conversation instead
+        val cur = store.currentConversation.value
+        if (cur != null && cur.agent == AgentKind.HERMES && cur.title == "New Chat" &&
+            _messages.value.none { it.conversationId == cur.id }
+        ) {
+            _conversations.value = _conversations.value.filter { it.id != cur.id }
+            store.currentConversation.value = null
+        }
+        val shown = store.currentConversation.value
+        if (shown == null || _conversations.value.none { it.id == shown.id }) {
+            _conversations.value.firstOrNull()?.let { selectConversation(it.id) }
+        }
+    }
+
     override fun selectConversation(id: String) {
         backendScope.launch {
             disconnectWs()
@@ -763,7 +837,9 @@ class HermesChatBackend(
     }
 
     private suspend fun loadHistory(conv: Conversation) = withContext(Dispatchers.IO) {
-        val sid = activeSession ?: return@withContext
+        // the bridge keys each session by the app conversation id, so a
+        // conversation never selected this run still has its history on disk
+        val sid = activeSession ?: conv.id
         val resp = getBridge("/sessions/$sid/history")
         val arr = JSONObject(resp).optJSONArray("messages") ?: return@withContext
         val msgs = mutableListOf<ChatMessage>()
