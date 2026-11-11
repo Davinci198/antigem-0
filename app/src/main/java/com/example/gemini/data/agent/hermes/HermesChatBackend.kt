@@ -269,6 +269,10 @@ class HermesChatBackend(
      * backend so a reconnecting listener keeps filling the same bubble. */
     @Volatile private var streamingMsgId: String? = null
 
+    /** Wall-clock ms at which the current turn was sent; carried to
+     * assistant_done so TokenUsage.durationMs can show ⏱ in the footer. */
+    @Volatile private var turnStartedAt = 0L
+
     /** Completes once the current stream socket is open (true) or failed (false). */
     private var wsOpened = CompletableDeferred<Boolean>()
 
@@ -655,6 +659,7 @@ class HermesChatBackend(
             _isStreaming.value = false
             _startupStatus.value = null
             streamingMsgId = null
+            turnStartedAt = 0L
             // mark last assistant message done
             _messages.value = _messages.value.map {
                 if (it.isStreaming) it.copy(isStreaming = false) else it
@@ -696,6 +701,7 @@ class HermesChatBackend(
         _conversationError.value = null
         // a new turn starts a fresh assistant bubble
         streamingMsgId = null
+        turnStartedAt = System.currentTimeMillis()
 
         // append the user bubble immediately
         appendMessage(
@@ -992,6 +998,15 @@ class HermesChatBackend(
                 "assistant_done" -> {
                     val id = streamingMsgId
                     val usage = obj.optJSONObject("usage")
+                    // The bridge reports per-turn timings on the usage object;
+                    // fall back to what we measured locally between send and
+                    // done so the footer always shows ⏱ for a live turn.
+                    val durationMs = usage?.optLong("duration_ms")?.takeIf { it > 0 }
+                        ?: obj.optLong("duration_ms").takeIf { it > 0 }
+                        ?: turnStartedAt.takeIf { it > 0 }
+                            ?.let { (System.currentTimeMillis() - it).coerceAtLeast(0L) }
+                        ?: 0L
+                    turnStartedAt = 0L
                     _messages.value = _messages.value.map { m ->
                         if (m.id == id) m.copy(
                             isStreaming = false,
@@ -999,7 +1014,16 @@ class HermesChatBackend(
                                 TokenUsage(
                                     promptTokens = it.optInt("input_tokens"),
                                     outputTokens = it.optInt("output_tokens"),
-                                    totalTokens = it.optInt("input_tokens") + it.optInt("output_tokens")
+                                    totalTokens = it.optInt("input_tokens") + it.optInt("output_tokens"),
+                                    durationMs = durationMs,
+                                    model = it.optString("model").takeIf { n -> n.isNotBlank() }
+                                        ?: m.modelId
+                                        ?: _selectedModelId.value.takeIf { n -> n.isNotBlank() }
+                                )
+                            } ?: durationMs.takeIf { it > 0 }?.let {
+                                TokenUsage(
+                                    durationMs = it,
+                                    model = m.modelId ?: _selectedModelId.value.takeIf { n -> n.isNotBlank() }
                                 )
                             }
                         ) else m
