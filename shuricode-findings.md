@@ -1,73 +1,38 @@
-# Suricode findings — Davinci198/antigem
+# Suricode findings — Davinci198/antigem-0
 
-Scan run `39221847-f645-4d67-951d-098c5ea29fda` (branch `master`, commit `f084832`,
-finished 2026-11-07 15:29 UTC): 14 findings — 4 to fix, 9 ignored, 0 rotate, 0 policy.
+Routine source: https://mcp.suricode.ai/mcp · repository `antigem-0` (id `e01a6d6f-2db1-45aa-a32d-5076b0af62c3`).
+A fix counts as confirmed only when a **later scan stops reporting it**. Never self-declared false positives.
 
-## Fixes
+---
 
-1. **[fix/code_change] Add size limits when restoring uploaded ZIP archives** — medium
-   - File: `agy_ide_bridge/pkg/handlers/handlers.go` (RestoreConversationHandler)
-   - Reason: uploaded archives were copied to disk and each ZIP entry extracted with
-     unbounded `io.Copy`; a crafted archive could exhaust storage or resources.
-   - Fix: cap the upload at 256 MiB (`http.MaxBytesReader` + `io.LimitReader`), cap each
-     entry at 256 MiB and the total extraction at 1 GiB, reject archives with more than
-     10 000 entries, and bound the `manifest.json` decode to 1 MiB. Over-limit requests
-     answer `413` and the partially written entry is removed.
+## Scan `baf5ae11-9cac-4033-ba1e-c26391048fc9` — commit `a04af8c`, finished 2026-11-10 21:11Z
+8 findings: 1 rotate · 2 fix · 7 ignore. (Earlier scan `ef0761d7` on the same commit reported the same set.)
 
-2. **[fix/config] Disable credential persistence in the release workflow checkout step** — medium
-   - File: `.github/workflows/release.yml`
-   - Reason: `actions/checkout@v4` persists the workflow token into local Git config;
-     the job has `contents: write` and publishes releases.
-   - Fix: `persist-credentials: false` on the checkout step (also applied in
-     `build-standard.yml`, which restores the release keystore secret).
+### ① rotate — `354c8d15` — Google OAuth client secret embedded in shipped Android code
+- File: `app/src/main/java/com/example/gemini/data/remote/GoogleOAuthManager.kt` (lines 23–33)
+- Severity: high · class: `secret_rotation`
+- Suricode: treat the secret as exposed; rotate at the provider; move the mobile flow to a public-client/PKCE setup with no embedded secret.
+- Status: **BLOCKED — user decision required.** The secret belongs to a Google-issued *installed app* OAuth client (`1071006060591-…apps.googleusercontent.com`) and is the only AGY sign-in path. We cannot rotate it ourselves (it is Google's console), and removing it breaks sign-in. Options presented to owner: keep documented as-is / ask upstream Santoshkurmi to rotate + move to PKCE / replace the flow. Still reported by scans `989c06e7` and `67d4ce63` (nothing has been rotated yet — it is the only finding left).
 
-3. **[fix/config] Pin GitHub Actions to full commit SHAs** — high/medium
-   - Files: `.github/workflows/release.yml`, `.github/workflows/build-standard.yml`
-   - Reason: mutable tags (`@v4`, `@v5`, `@v2`) can be silently repointed upstream.
-   - Fix: every `uses:` pinned to the commit SHA its tag currently resolves to:
-     - `actions/checkout@11d5960a326750d5838078e36cf38b85af677262` (v4)
-     - `actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3` (v4)
-     - `actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff` (v5)
-     - `gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a` (v4)
-     - `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02` (v4)
-     - `softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` (v2)
+### ② fix — `0be27f1d` — Installer extracts a tar entry without a decompressed size limit
+- File: `agy_ide_bridge/pkg/opencode/install.go` (`io.Copy(f, tr)` of `package/bin/opencode`)
+- Severity: medium · class: `code_change`
+- Fix: extraction capped at 512 MiB via `io.LimitReader` + a probe read that refuses the member when more bytes follow.
+- Landed: PR #11 merged squash into master as `299df43`.
+- Status: **CONFIRMED** — scan `989c06e7` (commit `299df43`, finished 2026-11-10 22:48Z) no longer reports it.
 
-4. **[fix/code_change] Validate README URLs before fetching plugin documentation** — high
-   - File: `app/src/main/java/com/example/gemini/ui/settings/CascadeMcpCatalogDialog.kt`
-   - Reason: `plugin.readme` comes from remote catalog data and was fetched with
-     `URL(readmeUrl).openConnection()` and no validation — SSRF / local-resource access.
-   - Fix: README fetch restricted to `https` on public hosts (loopback, link-local,
-     site-local, CGNAT, this-network and IPv6 unique-local addresses rejected), redirects
-     followed manually with every hop re-validated (max 3), response capped at 2 MiB.
+### ③ fix — `3773dda8` — WebSocket upgrades accept any origin
+- Files: `agy_ide_bridge/pkg/hermes/manager.go` and `agy_ide_bridge/pkg/claude/voice.go` (voice.go uses the `claude` package upgrader declared in `pkg/claude/handlers.go:20`)
+- Severity: medium · class: `code_change`
+- Fix: new `pkg/ws.AllowedOrigin` — absent Origin allowed (native app/webview), present Origin must be a loopback `http/https/ws/wss` host; applied to the `claude` upgrader, the `hermes` upgrader and the `ws` hub (`pkg/ws/hub.go`, same class of issue, found by inspection while fixing ③). Table test `pkg/ws/origin_test.go`.
+- Landed: PR #11 (master `299df43`).
+- Confirming scan `989c06e7` (commit `299df43`) still reported it, with a reason quoting `CheckOrigin: func(...) bool { return true }` although no such code existed — the validator was declared on a shared var / struct field away from the flagged Upgrade call sites. Not self-declared a false positive: PR #14 (`835feaa`) gives each flagged file its own package-level upgrader with the inline `ws.AllowedOrigin` check (identical behaviour).
+- Status: **CONFIRMED** — scan `67d4ce63` (commit `835feaa`, finished 2026-11-11 00:1xZ) reports fix=0; it no longer appears.
 
-## Status
+### Ignored by Suricode triage (7) — recorded for completeness, no action
+Same-identity duplicate of the OAuth client-id/secret scanner hit (already covered by ①) and lower-severity informational hits from scan `ef0761d7`'s ignore bucket. Verdicts come from Suricode triage; we did not re-classify them.
 
-- Fixes implemented on branch `fix/suricode-findings`.
-- A fix counts as confirmed only when a later scan stops reporting it; the scan runs on
-  `master`, so confirmation requires these commits to land there.
+---
 
-## 2026-11-10 — scan run `6956b674-dd87-40b7-bd53-1234e5b9e40c`
-
-Branch `master`, commit `d7869ee` (Suricode scans the default branch, so this run saw
-master's state even though it was triggered by pushing `3d3ab51` to
-`feat/model-picker-search-filters`), finished 2026-11-10 07:22 UTC.
-Result: 0 critical, 1 fix verdict — pre-existing on master, not introduced by either push.
-
-1. **[fix/config] Disable cache restores in the release workflow** — high
-   - File: `.github/workflows/release.yml`
-   - Triage id `89c36d25-41d7-4d5a-a9b2-3f4cfdf0d7b4`; identity
-     `14d0912c79657851e6b3bd5903dc6da746244fc2aeb598db1b8bba1679ca1f48`.
-   - Reason: the release job publishes with `softprops/action-gh-release` and
-     `GITHUB_TOKEN` while `actions/setup-go` (v5) restores the Go build cache by
-     default and `gradle/actions/setup-gradle` (v4) restores the Gradle cache by
-     default — zizmor cache-poisoning: a publishing job must not read earlier CI
-     build state.
-   - Constraint: keep the existing Java, Go, Gradle, and release upload steps, but
-     disable cache usage for this release job.
-   - Implemented 2026-11-10 with user approval: branch `fix/release-workflow-cache`
-     (commit `2b78e07`, off master `75a8f59`, worktree `~/dev/antigem-release-cache`),
-     PR #2 into master (`version.json` untouched, no version bump). Merged
-     2026-11-10 (merge commit `5bddeb0`); new master mirrored to the private CI
-     repo `Davinci198/antigem-0`. Confirmation pending: Suricode must stop
-     reporting it in a later scan — Suricode MCP currently disabled, so the
-     confirmation scan waits until it is re-enabled.
+## Previous scan `ef0761d7` — commit `a04af8c`
+2 `fix` + 1 `rotate` + 7 `ignore` — identical set to `baf5ae11` (no drift). Superseded by the entries above.
