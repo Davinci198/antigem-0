@@ -47,6 +47,10 @@ type CustomProvider struct {
 	APIKey  string            `json:"api_key,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Models  []CustomModel     `json:"models"`
+	// namespaced marks an integration whose api model ids begin with the
+	// provider id itself ("nvidia/nemotron-…") while the picker only holds the
+	// tail. Scans then retry a 404 once under the full id. Never persisted.
+	namespaced bool
 }
 
 // publicProvider is what the app gets back: never the key, only whether one is set and its last characters.

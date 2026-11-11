@@ -148,6 +148,9 @@ func TestIntegrationProviderResolution(t *testing.T) {
 	if p.Kind != KindOpenAI || p.BaseURL != "https://integrate.api.nvidia.com/v1" || p.APIKey != "nv-secret" {
 		t.Errorf("nvidia resolved wrong: %+v", p)
 	}
+	if !p.namespaced {
+		t.Error("integrations must retry namespaced model ids on 404")
+	}
 	if p.Headers["X-Title"] != "opencode" || len(p.Headers) != 1 {
 		t.Errorf("headers: %v (empty ones must be dropped)", p.Headers)
 	}
@@ -187,6 +190,41 @@ func TestCredentialKeySelection(t *testing.T) {
 	}
 	if k := credentialKey("d", creds); k != "plain-id-entry" {
 		t.Errorf("id fallback: %q", k)
+	}
+}
+
+func TestProbeModelNamespaceHealing(t *testing.T) {
+	// a fake api that only knows "nvidia/nemotron-x", like the real one
+	calls := []string{}
+	fake := func(model string, _ time.Duration) (int64, string) {
+		calls = append(calls, model)
+		if model == "nvidia/nemotron-x" {
+			return 42, ""
+		}
+		return 7, "HTTP 404: gone"
+	}
+	ns := &CustomProvider{ID: "nvidia", Kind: KindOpenAI, namespaced: true}
+	if lat, err := probeModel(ns, fake, "nemotron-x", time.Second); err != "" || lat != 42 {
+		t.Errorf("namespaced retry: lat=%d err=%q", lat, err)
+	}
+	if len(calls) != 2 || calls[1] != "nvidia/nemotron-x" {
+		t.Errorf("retry did not use the full id: %v", calls)
+	}
+	// dead model: both attempts fail, the original 404 stands
+	calls = nil
+	if _, err := probeModel(ns, fake, "ghost-model", time.Second); err == "" || !strings.Contains(err, "404") {
+		t.Errorf("double miss: %q", err)
+	}
+	// custom endpoints never paid for a second request
+	calls = nil
+	plain := &CustomProvider{ID: "ollama", Kind: KindOpenAI}
+	if _, err := probeModel(plain, fake, "llama", time.Second); err == "" || len(calls) != 1 {
+		t.Errorf("non-namespaced retried: %v", calls)
+	}
+	// an id that already carries the prefix is not prefixed twice
+	calls = nil
+	if _, err := probeModel(ns, fake, "nvidia/ghost", time.Second); err == "" || len(calls) != 1 {
+		t.Errorf("already-prefixed retried: %v", calls)
 	}
 }
 
