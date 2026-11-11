@@ -30,8 +30,18 @@ data class ScanEntry(
  * the chat, which is where the user reads the result.
  */
 class ModelScanStore(private val prefs: SharedPreferences? = null) {
-    /** One verdict per "providerId@modelId"; the key is what the filter reads. */
-    val verdicts = mutableStateMapOf<String, ClaudeProviderTestResult>().apply { restore() }
+    /** One verdict per "providerId@modelId"; the key is what the filter reads.
+     *
+     * restore() runs from init, not from the initializer: while a property's
+     * own initializer runs, its backing field is still null, so the first
+     * stored entry used to throw a NullPointerException on `verdicts[k] =`
+     * that runCatching swallowed — every cold start then read the disk as if
+     * it held no verdicts at all, in every agent. */
+    val verdicts = mutableStateMapOf<String, ClaudeProviderTestResult>()
+
+    init {
+        restore()
+    }
 
     /** Providers with a scan in flight, keyed by provider id. */
     val scanning = mutableStateMapOf<String, Boolean>()
