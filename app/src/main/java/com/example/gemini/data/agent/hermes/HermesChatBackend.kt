@@ -312,46 +312,50 @@ class HermesChatBackend(
     private val healthPrefs =
         application.getSharedPreferences("hermes_model_health", android.content.Context.MODE_PRIVATE)
     private val sharedScanStore by lazy { ModelScanStore.shared(application) }
-    private val sharedScanPrefs by lazy {
-        application.getSharedPreferences(ModelScanStore.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-    }
     private val _modelHealth = MutableStateFlow<Map<String, HermesModelHealth>>(loadStoredHealth())
     val modelHealth: StateFlow<Map<String, HermesModelHealth>> = _modelHealth.asStateFlow()
 
-    /** Restores verdicts written by an earlier run, preferring the shared store. */
+    /** Restores verdicts written by an earlier run, preferring the shared store.
+     *
+     * Both sources are always read: `SharedPreferences.contains` does not wait
+     * for the file's async disk load and answered false during cold start,
+     * which hid every verdict until a refresh happened; and the legacy
+     * per-agent prefs still hold the verdicts written before the two agents
+     * shared one store. Where both name the same model, the shared store wins. */
     private fun loadStoredHealth(): Map<String, HermesModelHealth> {
-        if (sharedScanPrefs.contains(ModelScanStore.KEY_VERDICTS)) {
-            return sharedScanStore.verdicts.entries.mapNotNull { (key, verdict) ->
-                val at = key.indexOf('@')
-                if (at <= 0 || at == key.lastIndex) return@mapNotNull null
-                val providerId = key.substring(0, at)
-                val modelId = key.substring(at + 1)
-                "$providerId|$modelId" to HermesModelHealth(
-                    ok = verdict.ok,
-                    latencyMs = verdict.latency_ms,
-                    error = verdict.error.takeIf { it.isNotBlank() },
-                    status = verdict.status,
-                )
-            }.toMap()
-        }
-        // Verdicts written before the two agents shared a store.
-        val raw = runCatching { healthPrefs.getString("verdicts", null) }.getOrNull() ?: return emptyMap()
-        return runCatching {
-            val json = JSONObject(raw)
-            buildMap {
-                json.keys().forEach { key ->
-                    val o = json.optJSONObject(key) ?: return@forEach
-                    put(
-                        key,
-                        HermesModelHealth(
-                            ok = o.optBoolean("ok", false),
-                            latencyMs = o.optLong("latency_ms", 0L),
-                            error = o.optString("error").takeIf { it.isNotBlank() },
+        val legacy = runCatching { healthPrefs.getString("verdicts", null) }.getOrNull()?.let { raw ->
+            runCatching {
+                val json = JSONObject(raw)
+                buildMap {
+                    json.keys().forEach { key ->
+                        val o = json.optJSONObject(key) ?: return@forEach
+                        put(
+                            key,
+                            HermesModelHealth(
+                                ok = o.optBoolean("ok", false),
+                                latencyMs = o.optLong("latency_ms", 0L),
+                                error = o.optString("error").takeIf { it.isNotBlank() },
+                            )
                         )
-                    )
+                    }
                 }
-            }
-        }.getOrDefault(emptyMap())
+            }.getOrDefault(emptyMap())
+        }.orEmpty()
+        val shared = sharedScanStore.verdicts.entries.mapNotNull { (key, verdict) ->
+            val at = key.indexOf('@')
+            if (at <= 0 || at == key.lastIndex) return@mapNotNull null
+            val providerId = key.substring(0, at)
+            val modelId = key.substring(at + 1)
+            "$providerId|$modelId" to HermesModelHealth(
+                ok = verdict.ok,
+                latencyMs = verdict.latency_ms,
+                error = verdict.error.takeIf { it.isNotBlank() },
+                status = verdict.status,
+            )
+        }.toMap()
+        val merged = legacy + shared
+        Log.d("HermesHealth", "loadStoredHealth: legacy=${legacy.size} shared=${shared.size} merged=${merged.size}")
+        return merged
     }
 
     /** Re-reads the shared verdicts, so a scan run in Claude's picker shows here too. */
