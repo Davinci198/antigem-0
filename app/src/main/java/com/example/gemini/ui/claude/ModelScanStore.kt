@@ -120,10 +120,33 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
         scanning[provider.id] = true
     }
 
-    fun recordProgress(providerId: String, modelId: String, result: ClaudeProviderTestResult) {
+    fun recordProgress(providerId: String, modelId: String, result: ClaudeProviderTestResult, baseUrl: String? = null) {
         verdicts[key(providerId, modelId)] = result
+        // Same endpoint under two agent's names shares one verdict: the alias
+        // key is the normalized URL, which every agent's provider record has.
+        aliasKey(baseUrl, modelId)?.let { verdicts[it] = result }
         persist()
     }
+
+    /** Verdict addressed by endpoint instead of by a single agent's provider id.
+     * "~" cannot start a real provider id (the bridge restricts them to
+     * [a-z0-9_-]), so alias keys live beside normal ones in the same map. */
+    fun aliasKey(baseUrl: String?, modelId: String): String? =
+        baseUrl?.takeIf { it.isNotBlank() }?.let { "~${normalizeBaseUrl(it)}|$modelId" }
+
+    /** Two spellings of one endpoint — trailing slash, "/v1", http vs https,
+     * case — must not look like two providers. */
+    fun normalizeBaseUrl(url: String): String {
+        var u = url.trim().lowercase()
+        if (u.endsWith("/")) u = u.dropLast(1)
+        if (u.endsWith("/v1")) u = u.dropLast(3)
+        if (u.endsWith("/")) u = u.dropLast(1)
+        return u.removePrefix("https://").removePrefix("http://")
+    }
+
+    /** Reads another agent's scan of the same endpoint, matched by URL. */
+    fun verdictByBaseUrl(baseUrl: String?, modelId: String): ClaudeProviderTestResult? =
+        aliasKey(baseUrl, modelId)?.let { verdicts[it] }
 
     /** The verdicts of one provider, keyed by model id (the shared catalog uses these). */
     fun verdictsFor(providerId: String): Map<String, ClaudeProviderTestResult> {

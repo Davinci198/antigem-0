@@ -423,6 +423,9 @@ class HermesChatBackend(
             // a handful of HTTP calls instead of one per model (448 round trips
             // over loopback, 4 at a time, was minutes of waiting).
             val pendingByProvider = pending.groupBy { it.providerId }
+            // id -> endpoint URL for the verdicts written below; preset models
+            // ride the gateway and have no app-side URL to alias under.
+            val customBaseUrl = _models.value?.custom?.associate { it.id to it.baseUrl }.orEmpty()
             val done = java.util.concurrent.atomic.AtomicInteger(targets.size - pending.size)
             val sid = activeSession ?: "default"
             // A batch that never answered is a fact about the scan, not the
@@ -455,6 +458,9 @@ class HermesChatBackend(
                             _modelHealth.value = _modelHealth.value + (entry.key to verdict)
                             // The custom providers are shared with Claude; writing
                             // here is what makes "working/broken" the same in both.
+                            // The endpoint URL is written too, so OpenCode's picker
+                            // (which knows the same endpoint under its own id) can
+                            // read the verdict by URL instead of requiring a rescan.
                             sharedScanStore.recordProgress(
                                 entry.providerId,
                                 entry.modelId,
@@ -464,7 +470,8 @@ class HermesChatBackend(
                                     latency_ms = verdict.latencyMs,
                                     model = entry.modelId,
                                     error = verdict.error.orEmpty(),
-                                )
+                                ),
+                                customBaseUrl[providerId],
                             )
                             _scanProgress.value = done.incrementAndGet() to targets.size
                         }

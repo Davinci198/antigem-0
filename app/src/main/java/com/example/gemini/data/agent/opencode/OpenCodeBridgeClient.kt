@@ -368,4 +368,51 @@ class OpenCodeBridgeClient(private val bridge: AgyBridgeService = AgyBridgeServi
         if (!r.success) error(r.error ?: "Could not list the models")
         r.models
     }
+
+    /** Scan stream: one probe per model, flushed as each finishes. A whole catalog
+     * on a cold endpoint takes minutes, so this call gets its own read ceiling
+     * (matching the bridge's scan budget) — the buffered [execute] would swallow
+     * the live progress and the shared client's 30s read would cut mid-scan. */
+    private val scanClient by lazy {
+        bridge.client.newBuilder().readTimeout(15, TimeUnit.MINUTES).build()
+    }
+
+    /** Probes [providerId]'s models through the bridge; [onProbe] runs per verdict, as it arrives. */
+    suspend fun scanCustomProvider(
+        providerId: String,
+        models: List<String>,
+        timeoutMs: Int = 15_000,
+        onProbe: (modelId: String, ok: Boolean, latencyMs: Long, error: String?) -> Unit,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = org.json.JSONObject()
+                .put("provider_id", providerId)
+                .put("timeout_ms", timeoutMs)
+                .put("models", org.json.JSONArray(models))
+                .toString()
+            val req = Request.Builder().url(url("/custom-providers/scan"))
+                .post(payload.toRequestBody(jsonType)).build()
+            scanClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val text = resp.body?.string().orEmpty()
+                    val detail = runCatching { org.json.JSONObject(text).optString("error") }
+                        .getOrNull()?.takeIf { it.isNotBlank() }
+                    error("bridge HTTP ${resp.code}" + (detail?.let { ": $it" } ?: ""))
+                }
+                val source = resp.body?.source() ?: error("the bridge returned no scan stream")
+                while (true) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank()) continue
+                    val ev = runCatching { org.json.JSONObject(line) }.getOrNull() ?: continue
+                    if (ev.optString("type") != "scan-probe") continue
+                    onProbe(
+                        ev.optString("model"),
+                        ev.optBoolean("ok", false),
+                        ev.optLong("latency_ms", 0L),
+                        ev.optString("error").takeIf { it.isNotBlank() },
+                    )
+                }
+            }
+        }
+    }
 }

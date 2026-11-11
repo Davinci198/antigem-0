@@ -407,7 +407,7 @@ fun ClaudeModelSheet(
                     if (force) store.beginScan(scanningProvider)
                     backend.scanProviderLatency(
                         scanningProvider, scanningProvider.models,
-                        onProgress = { model, res -> store.recordProgress(scanningProvider.id, model, res) },
+                        onProgress = { model, res -> store.recordProgress(scanningProvider.id, model, res, scanningProvider.base_url) },
                         onFinished = { _, fastest -> store.finishScan(scanningProvider, fastest?.model) }
                     )
                 },

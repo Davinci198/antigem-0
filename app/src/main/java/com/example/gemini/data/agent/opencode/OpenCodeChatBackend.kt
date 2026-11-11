@@ -12,6 +12,8 @@ import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.Conversation
 import com.example.gemini.domain.model.ToolCall
 import com.example.gemini.data.agent.claude.isBridgeUnreachable
+import com.example.gemini.data.agent.claude.ClaudeProviderTestResult
+import com.example.gemini.ui.claude.ModelScanStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -360,6 +362,85 @@ class OpenCodeChatBackend(
                     .onFailure { _modelsError.value = it.message }
             } finally {
                 _isRefreshingModels.value = false
+            }
+        }
+    }
+
+    // ── model scan (health verdicts) ────────────────────────────────────────
+    // The verdicts live in the one store every agent reads — Claude and Hermes
+    // already write there — so a scan done in OpenCode is visible in the other
+    // pickers too, and vice versa whenever both know the endpoint by URL.
+
+    private val scanStore by lazy { ModelScanStore.shared(application) }
+
+    private val _customProviders = MutableStateFlow<List<OpenCodeCustomProvider>>(emptyList())
+    /** The endpoints the app added with its own URL + key: the probeable ones. */
+    val customProviders: StateFlow<List<OpenCodeCustomProvider>> = _customProviders.asStateFlow()
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    private val _scanProvider = MutableStateFlow<String?>(null)
+    /** The provider being probed right now, or null. */
+    val scanProvider: StateFlow<String?> = _scanProvider.asStateFlow()
+
+    private val _scanProgress = MutableStateFlow(0 to 0)
+    val scanProgress: StateFlow<Pair<Int, Int>> = _scanProgress.asStateFlow()
+
+    fun refreshCustomProviders() {
+        backendScope.launch {
+            client.customProviders().onSuccess { _customProviders.value = it }
+        }
+    }
+
+    /** A model's verdict: its own scan, or another agent's scan of the same endpoint. */
+    fun verdictFor(modelId: String): ClaudeProviderTestResult? {
+        val provider = providerOf(modelId)
+        val model = modelId.substringAfter('/')
+        scanStore.verdict(provider, model)?.let { return it }
+        val url = _customProviders.value.firstOrNull { it.id == provider }?.base_url
+        return scanStore.verdictByBaseUrl(url, model)
+    }
+
+    /**
+     * Probes one app-added endpoint and keeps every verdict in the shared store.
+     * Sticky like the other agents: models already verified keep their dot;
+     * [force] re-probes the whole provider.
+     */
+    fun scanProvider(providerId: String, force: Boolean = false) {
+        if (_isScanning.value) return
+        backendScope.launch {
+            _isScanning.value = true
+            _scanProvider.value = providerId
+            try {
+                val providers = _customProviders.value.ifEmpty {
+                    client.customProviders().getOrNull().orEmpty().also { _customProviders.value = it }
+                }
+                val provider = providers.firstOrNull { it.id == providerId } ?: return@launch
+                val ids = provider.models.map { it.id }
+                val pending = if (force) ids else ids.filter { scanStore.verdict(providerId, it) == null }
+                _scanProgress.value = (ids.size - pending.size) to ids.size
+                if (pending.isEmpty()) return@launch
+                client.scanCustomProvider(providerId, pending) { modelId, ok, latencyMs, error ->
+                    scanStore.recordProgress(
+                        providerId, modelId,
+                        ClaudeProviderTestResult(
+                            ok = ok,
+                            status = Regex("HTTP (\\d{3})").find(error.orEmpty())
+                                ?.groupValues?.get(1)?.toIntOrNull() ?: 0,
+                            latency_ms = latencyMs,
+                            model = modelId,
+                            error = error.orEmpty(),
+                        ),
+                        provider.base_url,
+                    )
+                    _scanProgress.value = (_scanProgress.value.first + 1) to ids.size
+                }.onFailure {
+                    Log.w("OpenCodeScan", "scan of $providerId failed: ${it.message}")
+                }
+            } finally {
+                _isScanning.value = false
+                _scanProvider.value = null
             }
         }
     }

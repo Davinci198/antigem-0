@@ -257,7 +257,7 @@ fun ProvidersPage(deps: ClaudeSettingsDeps) {
                     store.beginScan(p)
                     backend.scanProviderLatency(
                         p, p.models,
-                        onProgress = { model, res -> store.recordProgress(p.id, model, res) },
+                        onProgress = { model, res -> store.recordProgress(p.id, model, res, p.base_url) },
                         onFinished = { answered, fastest ->
                             store.finishScan(p, fastest?.model)
                             val msg = if (answered == 0) {
