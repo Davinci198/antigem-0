@@ -554,12 +554,8 @@ class AgyChatBackend(
             if (initial.isNotBlank() && _selectedModelId.value.isBlank()) {
                 _selectedModelId.value = initial
             }
-            // the start-up chat: only when nothing is open yet or it is still an empty Antigravity chat (a Claude
-            // chat opened meanwhile must not be replaced)
-            val cur = _currentConversation.value
-            if (cur == null || (cur.agent == AgentKind.AGY && cur.title == "New Chat" && _messages.value.isEmpty())) {
-                startNewChat()
-            }
+            // No start-up chat: the app opens on the start screen, where the agent is picked
+            // and the first message creates that agent's chat (nothing is created silently).
         }
 
         backendScope.launch {
@@ -1083,10 +1079,21 @@ class AgyChatBackend(
                 if (remaining.isNotEmpty()) {
                     selectConversation(remaining.first().id)
                 } else {
-                    startNewChat()
+                    showEmptyChat()
                 }
             }
         }
+    }
+
+    /**
+     * Leaves no chat open after the last one is deleted: the start screen shows the agent
+     * picker and the first message creates a chat. Deleting a chat never creates another.
+     */
+    private fun showEmptyChat() {
+        detach()
+        _currentConversation.value = null
+        _messages.value = emptyList()
+        _conversationError.value = null
     }
 
     override fun forkConversation(id: String) {

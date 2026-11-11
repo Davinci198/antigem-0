@@ -132,7 +132,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Hermes needs no start/stop — it's always-on (bridge manages the process)
         if (AgentKind.HERMES in agents) hermesBackend.restoreSessions()
         val cur = store.currentConversation.value
-        if (cur == null || cur.agent !in agents) startNewChat()
+        // A chat of an agent that was just turned off is left, but nothing replaces it: the
+        // start screen picks the agent, and its first message creates the chat.
+        if (cur != null && cur.agent !in agents) showEmptyChat()
         if (firstChoice) {
             // first launch: the server waited for this choice and now starts with it
             com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(getApplication())
@@ -193,9 +195,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setNewChatAgent(agent: AgentKind) {
         claudePrefs.setNewChatAgent(agent)
-        val cur = store.currentConversation.value
-        val isFreshChat = cur == null || (cur.title == "New Chat" && messages.value.isEmpty())
-        if (isFreshChat && cur?.agent != agent) startNewChat()
+        val cur = store.currentConversation.value ?: return
+        val isFreshChat = cur.title == "New Chat" && messages.value.isEmpty()
+        if (isFreshChat && cur.agent != agent) startNewChat()
     }
 
     // ==================== ANTIGRAVITY (AGY) — delegated to data/agent/agy ====================
@@ -283,13 +285,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun onProjectChanged(projectPath: String) = agyBackend.onProjectChanged(projectPath)
     fun onUserStartedTyping() = agyBackend.onUserStartedTyping()
-    fun startNewChat() = startNewChat(
+    fun startNewChat() = startNewChat(defaultNewChatAgent())
+
+    /** The agent a new chat goes to: the one picked on the start screen, or the first enabled one. */
+    private fun defaultNewChatAgent(): AgentKind =
         newChatAgent.value.takeIf { it in enabledAgents.value }
             ?: if (AgentKind.AGY in enabledAgents.value) AgentKind.AGY
             else if (AgentKind.CLAUDE in enabledAgents.value) AgentKind.CLAUDE
             else if (AgentKind.HERMES in enabledAgents.value) AgentKind.HERMES
             else AgentKind.OPENCODE
-    )
+
+    /**
+     * Leaves no chat open: the start screen shows the agent picker, and the first message
+     * creates the chat. Used after the last chat is deleted and when the chat on screen
+     * belongs to an agent that was turned off.
+     */
+    private fun showEmptyChat() {
+        agyBackend.detach()
+        claudeBackend.detach()
+        hermesBackend.detach()
+        openCodeBackend.detach()
+        store.currentConversation.value = null
+        store.messages.value = emptyList()
+    }
 
     /** New chat with [agent] (e.g. `/clear` in a Claude chat), without changing the new-chat default. */
     fun startNewChat(agent: AgentKind) {
@@ -386,13 +404,53 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         isClaudeActive -> claudeBackend.selectModel(modelId)
         else -> agyBackend.selectModel(modelId)
     }
+    /** Texts typed on the start screen before its chat exists (Hermes opens one in its own coroutine). */
+    private val firstMessages = mutableListOf<String>()
+    private var openingChatForFirstMessage = false
+
     /** `/plu:` plugin skills and custom slash commands are expanded here, for both agents. */
-    fun sendMessage(content: String) = PromptExpansion.expand(content).let {
-        when {
-            isHermesActive -> hermesBackend.sendMessage(it)
-            isClaudeActive -> claudeBackend.sendMessage(it)
-            isOpenCodeActive -> openCodeBackend.sendMessage(it)
-            else -> agyBackend.sendMessage(it)
+    fun sendMessage(content: String) {
+        val text = PromptExpansion.expand(content)
+        val conv = store.currentConversation.value
+        if (conv != null) {
+            dispatchMessage(conv.agent, text)
+            return
+        }
+        // Nothing is open: the start screen picked an agent, so open its chat and deliver the
+        // message once the backend has it (a chat is never created just for showing the screen).
+        firstMessages += text
+        if (openingChatForFirstMessage) return
+        openingChatForFirstMessage = true
+        val agent = defaultNewChatAgent()
+        viewModelScope.launch {
+            try {
+                startNewChat(agent)
+                val opened = withTimeoutOrNull(5_000) {
+                    store.currentConversation.filterNotNull().first()
+                }
+                val queued = firstMessages.toList()
+                firstMessages.clear()
+                if (opened == null) {
+                    com.example.gemini.ui.components.AppToastHelper.showToast(
+                        "Could not open the new chat. Try again.",
+                        com.example.gemini.ui.components.ChatToastType.ERROR
+                    )
+                    return@launch
+                }
+                queued.forEach { dispatchMessage(opened.agent, it) }
+            } finally {
+                openingChatForFirstMessage = false
+            }
+        }
+    }
+
+    /** Sends [text] to the backend that owns [agent]'s chat. */
+    private fun dispatchMessage(agent: AgentKind, text: String) {
+        when (agent) {
+            AgentKind.HERMES -> hermesBackend.sendMessage(text)
+            AgentKind.CLAUDE -> claudeBackend.sendMessage(text)
+            AgentKind.OPENCODE -> openCodeBackend.sendMessage(text)
+            else -> agyBackend.sendMessage(text)
         }
     }
     val isTranscribingAudio = agyBackend.isTranscribingAudio
@@ -1089,8 +1147,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Hermes conversations live in the bridge's session store on disk;
         // after an app restart the drawer starts empty until they are pulled back
         if (AgentKind.HERMES in enabledAgents.value) hermesBackend.restoreSessions()
-        // the first chat follows the new-chat agent (Antigravity's own start-up chat only fills in when it is AGY)
-        if (isClaudeEnabled && (newChatAgent.value == AgentKind.CLAUDE || AgentKind.AGY !in enabledAgents.value)) startNewChat()
+        // The app opens on the start screen (agent picker) instead of a chat nobody asked for:
+        // the first message creates the chat of the agent picked there.
         claudeAccount.onAccountChanged = {
             claudeBackend.refreshInfo(force = true)
             viewModelScope.launch { claudeBackend.refreshSessions() }
