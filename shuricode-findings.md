@@ -12,7 +12,7 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 - File: `app/src/main/java/com/example/gemini/data/remote/GoogleOAuthManager.kt` (lines 23–33)
 - Severity: high · class: `secret_rotation`
 - Suricode: treat the secret as exposed; rotate at the provider; move the mobile flow to a public-client/PKCE setup with no embedded secret.
-- Status: **BLOCKED — user decision required.** The secret belongs to a Google-issued *installed app* OAuth client (`1071006060591-…apps.googleusercontent.com`) and is the only AGY sign-in path. We cannot rotate it ourselves (it is Google's console), and removing it breaks sign-in. Options presented to owner: keep documented as-is / ask upstream Santoshkurmi to rotate + move to PKCE / replace the flow. Still reported by scans `989c06e7`, `67d4ce63`, `670d9019` and `6cdc45d8` — nothing rotated yet; it is the only finding left.
+- Status: **BLOCKED — user decision required.** The secret belongs to a Google-issued *installed app* OAuth client (`1071006060591-…apps.googleusercontent.com`) and is the only AGY sign-in path. We cannot rotate it ourselves (it is Google's console), and removing it breaks sign-in. Options presented to owner: keep documented as-is / ask upstream Santoshkurmi to rotate + move to PKCE / replace the flow. Still reported by scans `989c06e7`, `67d4ce63`, `670d9019`, `6cdc45d8` and `6a241e3b` — nothing rotated yet; it is the only finding left.
 
 ### ② fix — `0be27f1d` — Installer extracts a tar entry without a decompressed size limit
 - File: `agy_ide_bridge/pkg/opencode/install.go` (`io.Copy(f, tr)` of `package/bin/opencode`)
@@ -39,6 +39,9 @@ fix=0 · rotate=1 · ignore=8. Confirms ② and ③ stay gone after PRs #12–#1
 
 ## Scan `6cdc45d8-c7a0-4b46-9fe9-d494a9af8479` — commit `6a6141b` (master after PR #18 Hermes turn-duration)
 fix=0 · rotate=1 · ignore=8. PR #18 introduced no new findings; register unchanged — still only ① open.
+
+## Scan `6a241e3b-0b75-4867-a86d-4441818ec4a0` — commit `52593a9` (master after docs PR #19)
+fix=0 · rotate=1 · ignore=8. Docs-only merge, identical set — no drift. Further scans of docs-only commits would re-report the same set, so the next scan runs after the next code push.
 
 ---
 
