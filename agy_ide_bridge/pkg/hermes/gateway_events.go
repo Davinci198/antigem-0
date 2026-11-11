@@ -336,10 +336,12 @@ func (m *Manager) handleSetModel(w http.ResponseWriter, r *http.Request, sess *S
 		sess.mu.Lock()
 		sess.gwModel = body.Model
 		sess.gwProvider = "custom"
+		sess.gwProviderID = body.ProviderID
 		sess.gwBaseURL = p.BaseURL
 		sess.gwAPIKey = p.APIKey
 		live := gwID != "" && sess.gwProviderAtCreate != "custom"
 		sess.mu.Unlock()
+		m.persistSession(sess)
 		if live {
 			writeJSON(w, http.StatusOK, obj{"success": false, "deferred": true,
 				"message": "This chat runs on Hermes' own provider; the custom model applies from the next chat."})
@@ -360,9 +362,11 @@ func (m *Manager) handleSetModel(w http.ResponseWriter, r *http.Request, sess *S
 	sess.mu.Lock()
 	sess.gwModel = body.Model
 	sess.gwProvider = ""
+	sess.gwProviderID = body.ProviderID
 	sess.gwBaseURL = baseURL
 	sess.gwAPIKey = apiKey
 	sess.mu.Unlock()
+	m.persistSession(sess)
 	if gwID == "" {
 		writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true})
 		return

@@ -130,6 +130,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (AgentKind.OPENCODE in agents) openCodeBackend.start() else openCodeBackend.stop()
         // Hermes needs no start/stop — it's always-on (bridge manages the process)
+        if (AgentKind.HERMES in agents) hermesBackend.restoreSessions()
         val cur = store.currentConversation.value
         if (cur == null || cur.agent !in agents) startNewChat()
         if (firstChoice) {
@@ -1085,6 +1086,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // OpenCode was only ever started from applyAgents: after an app restart (which an agent change also does)
         // its event stream never connected — replies and errors stayed invisible until the chat was reloaded.
         if (isOpenCodeEnabled) openCodeBackend.start()
+        // Hermes conversations live in the bridge's session store on disk;
+        // after an app restart the drawer starts empty until they are pulled back
+        if (AgentKind.HERMES in enabledAgents.value) hermesBackend.restoreSessions()
         // the first chat follows the new-chat agent (Antigravity's own start-up chat only fills in when it is AGY)
         if (isClaudeEnabled && (newChatAgent.value == AgentKind.CLAUDE || AgentKind.AGY !in enabledAgents.value)) startNewChat()
         claudeAccount.onAccountChanged = {
