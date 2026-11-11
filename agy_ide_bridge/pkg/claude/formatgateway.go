@@ -505,7 +505,9 @@ func testProviderOpenAI(ctx context.Context, p Provider, model string) ProviderT
 		res.Error = "add a model id first (the test sends one short message to it)"
 		return res
 	}
-	timeout := 30 * time.Second
+	// a cold NVIDIA model takes ~36s to answer its first token, so a 30s
+	// cap marks a working endpoint as broken; the spinner is the wait
+	timeout := 60 * time.Second
 	if p.TimeoutSec > 0 {
 		timeout = time.Duration(min(p.TimeoutSec, 120)) * time.Second
 	}
@@ -589,11 +591,17 @@ func testProviderOpenAI(ctx context.Context, p Provider, model string) ProviderT
 		return res
 	}
 	res.Status = lastStatus
-	res.Error = fmt.Sprintf("HTTP 404: no chat/completions endpoint under %s", p.BaseURL)
-	res.Hint = "An OpenAI-style test posts to " + strings.Join(endpoints, " and ") + ". Check the base URL and the model id."
+	res.Error = fmt.Sprintf("HTTP 404: no chat/completions answer from %s", p.BaseURL)
 	if len(lastBody) > 0 {
 		res.Error += ": " + strings.TrimSpace(string(lastBody[:min(len(lastBody), 200)]))
 	}
+	// Both spellings of the URL answer 404, which means either a wrong base URL
+	// or a model the account cannot reach. NVIDIA names them differently: a
+	// decommissioned model answers a plain "404 page not found", an entitlement
+	// miss answers a JSON "Not found for account", and /v1/models still lists
+	// both, so the hint names the likely culprit instead of blaming the URL.
+	res.Hint = "The test posts to " + strings.Join(endpoints, " and ") + ". " +
+		"Some providers list models in /v1/models that are end of life or not deployed on this account (NVIDIA does): a 404 here usually means this model id, not a wrong base URL."
 	return res
 }
 

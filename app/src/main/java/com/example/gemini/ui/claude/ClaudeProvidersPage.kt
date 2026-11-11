@@ -779,7 +779,12 @@ private fun ProviderEditor(
                         OutlinedTextField(
                             baseUrl, { baseUrl = it }, label = { Text("Base URL") }, singleLine = true,
                             placeholder = { Text("https://api.example.com/anthropic") }, modifier = Modifier.fillMaxWidth(),
-                            supportingText = { Text("Claude Code calls <base URL>/v1/messages") }
+                            supportingText = {
+                                Text(
+                                    if (openaiStyle) "Claude Code calls the bridge's loopback port; every turn is forwarded to <base URL>/v1/chat/completions"
+                                    else "Claude Code calls <base URL>/v1/messages"
+                                )
+                            }
                         )
                         OutlinedTextField(
                             key, { key = it }, label = { Text("API key") }, singleLine = true,
@@ -805,6 +810,23 @@ private fun ProviderEditor(
                             else "x-api-key: <key> (ANTHROPIC_API_KEY). Used by providers that copy Anthropic's own scheme.",
                             fontSize = 11.sp, color = muted
                         )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("OpenAI-compatible endpoint", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("For servers that only speak OpenAI's chat/completions (NVIDIA, most local ones): the bridge translates Claude Code's requests on a loopback port, so their models work here too. Turning it on switches the key to a Bearer token.", fontSize = 11.sp, color = muted)
+                            }
+                            Switch(
+                                checked = openaiStyle,
+                                onCheckedChange = {
+                                    openaiStyle = it
+                                    // every OpenAI-only endpoint found in the field (NVIDIA, vLLM,
+                                    // llama.cpp, LM Studio) takes the key as a Bearer token, and an
+                                    // x-api-key left selected turns every turn into a 401.
+                                    if (it) authMode = "bearer"
+                                },
+                                colors = SwitchDefaults.colors(checkedTrackColor = ClaudeAccent)
+                            )
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedButton(enabled = !testing && baseUrl.isNotBlank(), onClick = { runTest(models.firstOrNull()?.id ?: newModel.trim()) }) {
                                 Icon(Icons.Outlined.NetworkCheck, null, Modifier.size(16.dp))
@@ -968,13 +990,6 @@ private fun ProviderEditor(
                                 Text("Turn on if the provider answers 400 about unknown fields or beta headers.", fontSize = 11.sp, color = muted)
                             }
                             Switch(checked = disableBetas, onCheckedChange = { disableBetas = it }, colors = SwitchDefaults.colors(checkedTrackColor = ClaudeAccent))
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("OpenAI-compatible endpoint", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text("For servers that only speak OpenAI's chat/completions (NVIDIA, most local ones): the bridge translates Claude Code's requests on a loopback port, so their models work here too. Send the key as a Bearer token.", fontSize = 11.sp, color = muted)
-                            }
-                            Switch(checked = openaiStyle, onCheckedChange = { openaiStyle = it }, colors = SwitchDefaults.colors(checkedTrackColor = ClaudeAccent))
                         }
                     }
 
