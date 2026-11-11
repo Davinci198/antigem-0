@@ -3,6 +3,7 @@ package com.example.gemini.ui.claude
 import androidx.compose.runtime.mutableStateMapOf
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import com.example.gemini.data.agent.claude.ClaudeProvider
 import com.example.gemini.data.agent.claude.ClaudeProviderTestResult
 import com.example.gemini.ui.components.ScanFilter
@@ -152,9 +153,17 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
     // restarted mid-verification (swiped to background and back) and every
     // result vanished, so the sheet went back to "not checked yet" even though
     // the probes had run seconds earlier.
+    //
+    // Every disk touch logs one line: the scan-loss reports could not be
+    // reproduced from code alone, so the log is the evidence of what actually
+    // reaches the file and what comes back on the next start.
 
     private fun restore() {
-        val raw = runCatching { prefs?.getString(KEY_VERDICTS, null) }.getOrNull() ?: return
+        val raw = runCatching { prefs?.getString(KEY_VERDICTS, null) }.getOrNull()
+        if (raw == null) {
+            Log.w(TAG, "restore: no stored verdicts (prefs=${prefs != null})")
+            return
+        }
         runCatching {
             val json = JSONObject(raw)
             json.keys().forEach { k ->
@@ -167,7 +176,8 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
                     error = o.optString("error"),
                 )
             }
-        }
+        }.onFailure { Log.e(TAG, "restore: parse failed: ${it.message}") }
+        Log.d(TAG, "restore: ${verdicts.size} verdicts from ${raw.length} bytes")
     }
 
     private fun persist() {
@@ -185,11 +195,37 @@ class ModelScanStore(private val prefs: SharedPreferences? = null) {
                         .put("error", v.error)
                 )
             }
-            target.edit().putString(KEY_VERDICTS, json.toString()).apply()
+            queueWrite(json.toString())
+        }.onFailure { Log.e(TAG, "persist failed: ${it.message}") }
+    }
+
+    /** Disk writer: a scan records one verdict per model, so writes are
+     * coalesced — the executor always commits the newest payload queued so
+     * far. commit() is used because the process can be swiped away right
+     * after the last verdict, and apply()'s queue was the one thing that
+     * could still be lost then. All of this runs off the main thread: the
+     * scan callbacks arrive on it, and a synchronous write there is an ANR. */
+    private val diskWrites = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "model-scan-persist").apply { isDaemon = true }
+    }
+    private val pendingPayload = java.util.concurrent.atomic.AtomicReference<String>()
+    private val writeQueued = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun queueWrite(payload: String) {
+        pendingPayload.set(payload)
+        if (!writeQueued.compareAndSet(false, true)) return
+        diskWrites.execute {
+            writeQueued.set(false)
+            val data = pendingPayload.get() ?: return@execute
+            runCatching {
+                val ok = prefs!!.edit().putString(KEY_VERDICTS, data).commit()
+                Log.d(TAG, "persist: ${data.length} bytes written commit=$ok")
+            }.onFailure { Log.e(TAG, "persist write failed: ${it.message}") }
         }
     }
 
     companion object {
+        private const val TAG = "ModelScanStore"
         /** Shared with the settings screen, so a scan there shows up in the chat. */
         const val PREFS_NAME = "model_scan_verdicts"
         const val KEY_VERDICTS = "verdicts"
