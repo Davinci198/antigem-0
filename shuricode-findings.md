@@ -43,6 +43,15 @@ fix=0 · rotate=1 · ignore=8. PR #18 introduced no new findings; register uncha
 ## Scan `6a241e3b-0b75-4867-a86d-4441818ec4a0` — commit `52593a9` (master after docs PR #19)
 fix=0 · rotate=1 · ignore=8. Docs-only merge, identical set — no drift. Further scans of docs-only commits would re-report the same set, so the next scan runs after the next code push.
 
+## Scan `ab451785-27b4-4e76-8eb9-7a545eccb73d` — commit `f3b0f7c` (master before PR #21)
+fix=0 · rotate=1 · ignore=8. Triggered by the push of `fix/hermes-session-persistence` (PR #21); Suricode scans the default branch, so this confirms master itself still has no drift — only ① open. The scan that validates PR #21's code runs after it merges.
+
+## Scan `ad5b7afe-bf73-4476-85e8-726dc2befb5f` — commit `11bcaa6` (master after PR #24)
+fix=0 · rotate=1 · ignore=8. The OpenCode model scan (PR #24) introduced no new findings. Only ① remains, re-reported under a fresh id (`08b465f1`): the same embedded Google OAuth secret, still awaiting the user's own OAuth client.
+
+## Scan `d6064cbc-7b8d-4b51-9907-b9d28113564d` — commit `1e02a21` (master after PR #25)
+fix=0 · rotate=1 · ignore=8. The Claude OpenAI-compatible gateway (PR #25) introduced no new findings either — the new Go translator files are clean. Only ① remains, now as `01439769`.
+
 ---
 
 ## Previous scan `ef0761d7` — commit `a04af8c`
