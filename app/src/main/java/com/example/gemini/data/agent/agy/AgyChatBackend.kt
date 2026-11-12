@@ -152,25 +152,9 @@ class AgyChatBackend(
     }
 
     private fun recomputeEnabledModels() {
-        val all = _availableModels.value
-        val enabledSet = _enabledModelIds.value
-        val filtered = if (enabledSet.isNullOrEmpty()) {
-            all
-        } else {
-            all.filter { it.id in enabledSet || it.key in enabledSet }
-        }
-        _enabledModels.value = if (filtered.isNotEmpty()) filtered else all
-
-        // Only switch if user has an explicit filter AND current selection is not in the filtered enabled list
-        val currentSelected = _selectedModelId.value
-        if (!enabledSet.isNullOrEmpty() && currentSelected.isNotBlank()) {
-            val isCurrentEnabled = _enabledModels.value.any { it.id == currentSelected || it.key == currentSelected }
-            if (!isCurrentEnabled) {
-                _enabledModels.value.firstOrNull()?.let {
-                    selectModel(it.id)
-                }
-            }
-        }
+        // Every model the hub offers stays selectable. The per-model on/off list is a leftover
+        // with no UI any more, and a stale stored subset silently hid models from the picker.
+        _enabledModels.value = _availableModels.value
     }
 
     private val _bridgeStatusMessage = MutableStateFlow<String?>(null)

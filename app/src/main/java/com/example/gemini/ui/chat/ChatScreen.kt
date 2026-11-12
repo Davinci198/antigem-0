@@ -850,7 +850,7 @@ fun ChatScreen(
             }
             AiModel(id = hermesSelectedModelId.ifBlank { "hermes-default" }, displayName = label)
         }
-        else -> AiModel.findInList(enabledModels, selectedModelId, preferredModelName)
+        else -> AiModel.findInList(availableModels, selectedModelId, preferredModelName)
     }
     val currentQuota = quotas.find { it.modelId == selectedModelId }
 
@@ -2259,7 +2259,9 @@ fun ChatScreen(
     } else if (showModelSelector) {
         ModelSelectorBottomSheet(
             selectedModelId = selectedModelId,
-            availableModels = enabledModels,
+            // every model the agent offers, not the legacy "enabled" subset: that stored
+            // filter has no UI any more and used to hide models from the picker
+            availableModels = availableModels,
             quotas = quotas,
             quotaSummary = quotaSummary,
             isRefreshing = isRefreshingModels,
