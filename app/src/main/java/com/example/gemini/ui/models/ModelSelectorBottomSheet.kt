@@ -27,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,7 +37,6 @@ import com.example.gemini.domain.model.ModelFamily
 import com.example.gemini.domain.model.ModelQuota
 import com.example.gemini.theme.*
 import kotlin.math.roundToInt
-import kotlinx.coroutines.launch
 
 enum class CategoryType {
     GEMINI,
@@ -70,11 +68,9 @@ fun ModelSelectorBottomSheet(
     var activeCategory by remember { mutableStateOf<CategoryType?>(null) }
 
     val sheetState = rememberModalBottomSheetState(
-        skipPartiallyExpanded = false
+        // the model list is the point of this sheet: open it full height, not at 78%
+        skipPartiallyExpanded = true
     )
-    val coroutineScope = rememberCoroutineScope()
-    val configuration = LocalConfiguration.current
-    val expandedHeight = (configuration.screenHeightDp * 0.78f).dp
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -87,15 +83,12 @@ fun ModelSelectorBottomSheet(
         // Intercept back press when inside a subcategory inside the sheet window
         BackHandler(enabled = activeCategory != null) {
             activeCategory = null
-            coroutineScope.launch {
-                sheetState.partialExpand()
-            }
         }
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(expandedHeight)
+                .fillMaxHeight()
                 .padding(horizontal = 18.dp)
         ) {
             AnimatedContent(
@@ -141,9 +134,6 @@ fun ModelSelectorBottomSheet(
                         selectedModelId = selectedModelId,
                         onBack = {
                             activeCategory = null
-                            coroutineScope.launch {
-                                sheetState.partialExpand()
-                            }
                         },
                         onSelectModel = { modelId ->
                             onSelectModel(modelId)
@@ -412,52 +402,139 @@ data class SubGroupedModel(
 )
 
 private fun groupModelsByBaseName(models: List<AiModel>): List<SubGroupedModel> {
+    // Group real thinking tiers of one model: their keys are equal once the tier suffix is
+    // stripped. Grouping by display name instead is wrong, because the hub hands the same
+    // name to *different* models: 3.5 Flash Lite, 2.5 Flash Lite, 2.5 Flash Thinking and
+    // 2.5 Flash all arrive as "Gemini 3.5 Flash Lite".
     val map = LinkedHashMap<String, MutableList<AiModel>>()
-
     for (model in models) {
-        val baseId = if (model.baseName.isNotBlank()) {
-            model.baseName
-        } else {
-            val id = model.key.ifBlank { model.id }
-            when {
-                id.endsWith("-high", ignoreCase = true) -> id.substringBeforeLast("-high")
-                id.endsWith("-medium", ignoreCase = true) -> id.substringBeforeLast("-medium")
-                id.endsWith("-med", ignoreCase = true) -> id.substringBeforeLast("-med")
-                id.endsWith("-low", ignoreCase = true) -> id.substringBeforeLast("-low")
-                id.endsWith("-extra-low", ignoreCase = true) -> id.substringBeforeLast("-extra-low")
-                else -> id
-            }
-        }
-        map.getOrPut(baseId) { mutableListOf() }.add(model)
+        map.getOrPut(keyWithoutTier(model)) { mutableListOf() }.add(model)
     }
 
-    return map.map { (baseId, modelList) ->
-        val first = modelList.first()
-        val cleanBaseName = first.baseName.ifBlank {
-            first.displayName
-                .replace(Regex("\\s*\\((High|Medium|Low|Med|Thinking)\\)", RegexOption.IGNORE_CASE), "")
-                .trim()
-        }
+    // Display names the hub reuses for more than one model, compared after trimming so a
+    // stray space cannot hide a duplicate.
+    val nameCounts = models.groupingBy { normalizedName(it) }.eachCount()
 
-        val variants = modelList.map { m ->
-            val label = m.tier?.ifBlank { null } ?: when {
-                m.key.endsWith("-high", ignoreCase = true) || m.id.endsWith("-high", ignoreCase = true) || m.displayName.contains("High", ignoreCase = true) -> "High"
-                m.key.endsWith("-medium", ignoreCase = true) || m.key.endsWith("-med", ignoreCase = true) || m.id.endsWith("-medium", ignoreCase = true) || m.displayName.contains("Medium", ignoreCase = true) || m.displayName.contains("Med", ignoreCase = true) -> "Medium"
-                m.key.endsWith("-low", ignoreCase = true) || m.id.endsWith("-low", ignoreCase = true) || m.displayName.contains("Low", ignoreCase = true) -> "Low"
-                else -> ""
+    val groups = mutableListOf<SubGroupedModel>()
+    for ((baseKey, tierModels) in map) {
+        val first = tierModels.first()
+        val nameIsShared = (nameCounts[normalizedName(first)] ?: 0) > 1
+
+        if (tierModels.size > 1) {
+            // when one of the tiers is the plain model, name the card after it, not after
+            // "… Thinking", which would then also be the label of a pill
+            val titleSource = tierModels.firstOrNull { explicitTier(it) == null } ?: first
+            groups += SubGroupedModel(
+                baseId = baseKey,
+                // models that share a display name can also share their base key here
+                // (2.5 Flash and 2.5 Flash Thinking), so derive that title from the key
+                baseName = if (nameIsShared) nameFromKey(titleSource, models) else cleanBaseName(titleSource),
+                description = first.description,
+                family = first.family,
+                variants = tierModels.map { model ->
+                    ModelVariant(model, explicitTier(model) ?: "Default")
+                }
+            )
+        } else {
+            val model = first
+            groups += SubGroupedModel(
+                baseId = baseKey,
+                // the hub reuses one display name for different models; only then fall back
+                // to the model key, otherwise keep the hub's name, including its tier
+                baseName = if (nameIsShared) nameFromKey(model, models) else model.displayName,
+                description = model.description,
+                family = model.family,
+                variants = listOf(ModelVariant(model, ""))
+            )
+        }
+    }
+    return groups
+}
+
+private val TIER_SUFFIX = Regex(
+    "(?:^|[_\\-])(high|medium|med|low|extra[_\\-]?low|thinking)$",
+    RegexOption.IGNORE_CASE
+)
+
+/** The thinking tier a model declares, either in its display name or as a model-key suffix. */
+private fun explicitTier(model: AiModel): String? {
+    model.tier?.takeIf { it.isNotBlank() }?.let { return it }
+    val match = TIER_SUFFIX.find(model.key.ifBlank { model.id }) ?: return null
+    return match.groupValues[1]
+        .replace('_', ' ')
+        .split(' ')
+        .joinToString(" ") { part ->
+            part.replaceFirstChar { c -> if (c.isLowerCase()) c.titlecase() else c.toString() }
+        }
+}
+
+private fun keyWithoutTier(model: AiModel): String {
+    val key = model.key.ifBlank { model.id }
+    val match = TIER_SUFFIX.find(key) ?: return key
+    return key.substring(0, match.range.first).trim('-', '_', ' ')
+}
+
+/** The display name with surrounding and repeated whitespace removed, for comparisons. */
+private fun normalizedName(model: AiModel): String =
+    model.displayName.trim().replace(Regex("\\s+"), " ")
+
+private fun cleanBaseName(model: AiModel): String =
+    model.baseName.ifBlank {
+        model.displayName
+            .replace(Regex("\\s*\\((High|Medium|Low|Med|Thinking)\\)", RegexOption.IGNORE_CASE), "")
+            .trim()
+    }
+
+/**
+ * A name built from the part of the model key a group of same-named models does not share,
+ * used when the hub gives several models the same display name:
+ * `MODEL_GOOGLE_GEMINI_2_5_FLASH_LITE` next to `MODEL_GOOGLE_GEMINI_3_5_FLASH_LITE` becomes
+ * "Gemini 2.5 Flash Lite" / "Gemini 3.5 Flash Lite".
+ */
+private fun nameFromKey(model: AiModel, allModels: List<AiModel>): String {
+    val name = normalizedName(model)
+    val peers = allModels
+        .filter { normalizedName(it) == name }
+        .map { it.key.ifBlank { it.id } }
+        .ifEmpty { listOf(model.key.ifBlank { model.id }) }
+    val sharedPrefix = peers.reduce { acc, next -> acc.commonPrefixWith(next) }
+    val tokens = model.key.ifBlank { model.id }
+        .removePrefix(sharedPrefix)
+        .split('-', '_', ' ')
+        .filter { it.isNotBlank() }
+    if (tokens.isEmpty()) return name
+
+    val words = mutableListOf<String>()
+    var index = 0
+    while (index < tokens.size) {
+        val token = tokens[index]
+        val next = tokens.getOrNull(index + 1)
+        if (token.length == 1 && token[0].isDigit() && next != null && next.length == 1 && next[0].isDigit()) {
+            words += "$token.$next"
+            index += 2
+        } else {
+            words += when {
+                token in KEY_ACRONYMS -> token
+                // keep "120B", "4o" and plain numbers as they are
+                token.any { it.isDigit() } -> token
+                else -> token.lowercase().replaceFirstChar { it.titlecase() }
             }
-            ModelVariant(m, label)
+            index++
         }
+    }
 
-        SubGroupedModel(
-            baseId = baseId,
-            baseName = cleanBaseName,
-            description = first.description,
-            family = first.family,
-            variants = variants
-        )
+    val derived = words.joinToString(" ")
+    val familyWord = name.split(' ').firstOrNull { it.length > 2 }.orEmpty()
+    return when {
+        derived.isBlank() -> name
+        familyWord.isBlank() -> derived
+        derived.startsWith(familyWord, ignoreCase = true) -> derived
+        else -> "$familyWord $derived"
     }
 }
+
+/** Key words that must stay upper case when a display name is rebuilt from a model key. */
+private val KEY_ACRONYMS = setOf("GPT", "OSS", "AI", "API", "XL", "TTS", "STT")
 
 @Composable
 private fun CategoryModelsSubView(
@@ -506,7 +583,11 @@ private fun CategoryModelsSubView(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "${groupedModels.size} base models • ${models.size} variants",
+                    text = if (groupedModels.size == models.size) {
+                        "${models.size} models"
+                    } else {
+                        "${models.size} models • ${groupedModels.size} groups"
+                    },
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                 )
@@ -533,6 +614,7 @@ private fun CategoryModelsSubView(
                     val model = group.variants.first().model
                     ModelRowItem(
                         model = model,
+                        title = group.baseName,
                         isSelected = model.id == selectedModelId,
                         onSelect = { onSelectModel(model.id) }
                     )
@@ -545,6 +627,7 @@ private fun CategoryModelsSubView(
 /**
  * Multi-tier model card allowing direct selection of thinking effort (High, Medium, Low).
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TieredModelGroupCard(
     group: SubGroupedModel,
@@ -607,11 +690,13 @@ private fun TieredModelGroupCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Thinking Effort Selector Pills
-            Row(
+            // Thinking Effort Selector Pills. A FlowRow, not a Row: a model with four tiers
+            // used to overflow the row, and the last pill was measured at zero width, which
+            // wrapped its text one character per line and stretched the whole card.
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 group.variants.forEach { variant ->
                     val isSelected = variant.model.id == selectedModelId
@@ -769,6 +854,7 @@ private fun CategoryNavigationTile(
 @Composable
 private fun ModelRowItem(
     model: AiModel,
+    title: String,
     isSelected: Boolean,
     onSelect: () -> Unit
 ) {
@@ -797,7 +883,7 @@ private fun ModelRowItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = model.displayName.replace(Regex("\\s*\\(?Thinking\\)?", RegexOption.IGNORE_CASE), "").trim(),
+                text = title.ifBlank { model.displayName },
                 fontSize = 14.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
