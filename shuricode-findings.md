@@ -55,6 +55,9 @@ fix=0 · rotate=1 · ignore=8. The Claude OpenAI-compatible gateway (PR #25) int
 ## Scan `dc064717-367d-421f-a0a8-58382284752a` — commit `9f88e45` (master after PR #28)
 fix=0 · rotate=1 · ignore=8. The drawer filter row + "Continue in another agent" change (PR #28) added no findings: the new `HermesChatBackend.loadMessages` and `ChatViewModel.continueConversationIn` code is clean. Only ① remains, still the embedded Google OAuth secret (`01439769`).
 
+## Scan `4061b1fe-80bb-4aac-bd75-13e07d75bd22` — commit `11d3b6f` (master after PR #30)
+fix=0 · rotate=1 · ignore=8. The compact start-screen picker (PR #30) added no findings — `AgentPicker.kt` only changed sizing constants. Only ① remains.
+
 ---
 
 ## Previous scan `ef0761d7` — commit `a04af8c`
