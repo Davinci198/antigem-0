@@ -338,7 +338,23 @@ class ClaudeChatBackend(
             if (attachedId == id) detachLocked()
             client.delete(id).onFailure { Log.w(TAG, "delete $id failed: ${it.message}") }
         }
-        if (store.currentConversation.value?.id == id) startNewChat()
+        if (store.currentConversation.value?.id == id) {
+            val next = _conversations.value.firstOrNull()
+            if (next != null) selectConversation(next.id) else showEmptyChat()
+        }
+    }
+
+    /**
+     * Leaves no chat open after the last one is deleted: the start screen shows the agent
+     * picker and the first message creates a chat. Deleting a chat never creates another.
+     */
+    private fun showEmptyChat() {
+        detach()
+        store.currentConversation.value = null
+        _messages.value = emptyList()
+        _conversationError.value = null
+        _cacheInfo.value = null
+        _contextUsage.value = null
     }
 
     /** Copies the chat on the bridge (it is a chat of its own right away) and opens the copy. */

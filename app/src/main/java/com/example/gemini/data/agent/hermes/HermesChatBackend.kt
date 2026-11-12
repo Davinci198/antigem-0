@@ -629,19 +629,40 @@ class HermesChatBackend(
     // ── AgentChatBackend ──────────────────────────────────────────────────────
 
     override fun startNewChat() {
+        backendScope.launch { createConversation() }
+    }
+
+    /**
+     * Opens a fresh Hermes chat and makes it the one on screen. A chat is only ever
+     * created by an explicit action (New Chat) or by the first message sent from the
+     * start screen — never to replace a chat that was deleted.
+     */
+    private suspend fun createConversation(): Conversation {
+        disconnectWs()
+        val conv = Conversation(
+            id = UUID.randomUUID().toString(),
+            title = "New Chat",
+            agent = AgentKind.HERMES
+        )
+        activeSession = null
+        _messages.value = emptyList()
+        _isStreaming.value = false
+        _conversationError.value = null
+        _conversations.value = _conversations.value + conv
+        store.currentConversation.value = conv
+        return conv
+    }
+
+    /** Closes the chat on screen without opening another one; the start screen shows the agent picker. */
+    private fun showEmptyChat() {
         backendScope.launch {
             disconnectWs()
-            val conv = Conversation(
-                id = UUID.randomUUID().toString(),
-                title = "New Chat",
-                agent = AgentKind.HERMES
-            )
             activeSession = null
-            _messages.value = emptyList()
+            _startupStatus.value = null
             _isStreaming.value = false
             _conversationError.value = null
-            _conversations.value = _conversations.value + conv
-            store.currentConversation.value = conv
+            _messages.value = emptyList()
+            store.currentConversation.value = null
         }
     }
 
@@ -699,19 +720,15 @@ class HermesChatBackend(
         val local = _conversations.value
         _conversations.value = (local + restored.filter { r -> local.none { it.id == r.id } })
             .sortedByDescending { it.updatedAt }
-        // the app opens with an empty "New Chat"; if nothing was typed into
-        // it, drop the placeholder and land on the most recent restored
-        // conversation instead
+        // The drawn list is restored, but no chat is opened by the restore: the app starts on
+        // the start screen (agent picker) and the user picks a chat from the drawer.
+        // A blank "New Chat" placeholder left from a previous run is dropped.
         val cur = store.currentConversation.value
         if (cur != null && cur.agent == AgentKind.HERMES && cur.title == "New Chat" &&
             _messages.value.none { it.conversationId == cur.id }
         ) {
             _conversations.value = _conversations.value.filter { it.id != cur.id }
             store.currentConversation.value = null
-        }
-        val shown = store.currentConversation.value
-        if (shown == null || _conversations.value.none { it.id == shown.id }) {
-            _conversations.value.firstOrNull()?.let { selectConversation(it.id) }
         }
     }
 
@@ -729,9 +746,13 @@ class HermesChatBackend(
     }
 
     override fun sendMessage(content: String) {
-        val conv = store.currentConversation.value ?: run { startNewChat(); return }
-        if (conv.agent != AgentKind.HERMES) return
-        backendScope.launch { doSend(conv, content) }
+        backendScope.launch {
+            // no chat on screen (start screen) or a chat of another agent: open one, then send
+            // the message into it — the text is never dropped
+            val conv = store.currentConversation.value?.takeIf { it.agent == AgentKind.HERMES }
+                ?: createConversation()
+            doSend(conv, content)
+        }
     }
 
     override fun stopStreaming() {
@@ -759,8 +780,7 @@ class HermesChatBackend(
             _conversations.value = _conversations.value.filter { it.id != id }
             if (store.currentConversation.value?.id == id) {
                 val next = _conversations.value.lastOrNull()
-                store.currentConversation.value = next
-                if (next != null) selectConversation(next.id) else startNewChat()
+                if (next != null) selectConversation(next.id) else showEmptyChat()
             }
         }
     }

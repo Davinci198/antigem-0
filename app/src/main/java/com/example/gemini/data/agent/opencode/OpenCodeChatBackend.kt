@@ -798,8 +798,22 @@ class OpenCodeChatBackend(
                 synchronized(created) { created.remove(id) }
                 publishConversations()
             }
-            if (store.currentConversation.value?.id == id) startNewChat()
+            if (store.currentConversation.value?.id == id) {
+                val next = _conversations.value.firstOrNull { it.id != id }
+                if (next != null) selectConversation(next.id) else showEmptyChat()
+            }
         }
+    }
+
+    /**
+     * Leaves no chat open after the last one is deleted: the start screen shows the agent
+     * picker and the first message creates a chat. Deleting a chat never creates another.
+     */
+    private fun showEmptyChat() {
+        detach()
+        store.currentConversation.value = null
+        _conversationError.value = null
+        _notice.value = null
     }
 
     override fun forkConversation(id: String) {
