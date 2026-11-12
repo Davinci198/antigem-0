@@ -12,7 +12,7 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 - File: `app/src/main/java/com/example/gemini/data/remote/GoogleOAuthManager.kt` (lines 23–33)
 - Severity: high · class: `secret_rotation`
 - Suricode: treat the secret as exposed; rotate at the provider; move the mobile flow to a public-client/PKCE setup with no embedded secret.
-- Status: **BLOCKED — user decision required.** The secret belongs to a Google-issued *installed app* OAuth client (`1071006060591-…apps.googleusercontent.com`) and is the only AGY sign-in path. We cannot rotate it ourselves (it is Google's console), and removing it breaks sign-in. Options presented to owner: keep documented as-is / ask upstream Santoshkurmi to rotate + move to PKCE / replace the flow. Still reported by scans `989c06e7`, `67d4ce63`, `670d9019`, `6cdc45d8`, `6a241e3b` and every scan since (`08b465f1`, `01439769`, `9373013f`) — nothing rotated yet; it is the only finding left.
+- Status: **BLOCKED — user decision required.** The secret belongs to a Google-issued *installed app* OAuth client (`1071006060591-…apps.googleusercontent.com`) and is the only AGY sign-in path. We cannot rotate it ourselves (it is Google's console), and removing it breaks sign-in. Options presented to owner: keep documented as-is / ask upstream Santoshkurmi to rotate + move to PKCE / replace the flow. Still reported by scans `989c06e7`, `67d4ce63`, `670d9019`, `6cdc45d8`, `6a241e3b` and every scan since (`08b465f1`, `01439769`, `9373013f`, `39a92150`) — nothing rotated yet; it is the only finding left.
 
 ### ② fix — `0be27f1d` — Installer extracts a tar entry without a decompressed size limit
 - File: `agy_ide_bridge/pkg/opencode/install.go` (`io.Copy(f, tr)` of `package/bin/opencode`)
@@ -60,6 +60,9 @@ fix=0 · rotate=1 · ignore=8. The compact start-screen picker (PR #30) added no
 
 ## Scan `34b4dffc-f8f8-4e40-86c3-2f1d4f38b087` — commit `bb3da1e` (master after PR #32)
 fix=0 · rotate=1 · ignore=8. The model-visibility change (PR #32) added no findings: `AgyModelService.getAvailableModels`, `AgyChatBackend.recomputeEnabledModels` and the `ChatScreen` picker wiring are clean. Only ① remains, re-reported under a fresh id (`9373013f`): the same embedded Google OAuth client secret, still waiting on the user's own OAuth client (see ① below).
+
+## Scan `4cb6b4b0-9448-4cd8-8231-b0bc62304540` — commit `128ebe4` (master after PR #34)
+fix=0 · rotate=1 · ignore=8. The model-naming change (PR #34) added no findings: `ModelSelectorBottomSheet` only groups by model key and sorts names. Only ① remains, re-reported as `39a92150` — same embedded Google OAuth client secret, unchanged.
 
 ---
 
