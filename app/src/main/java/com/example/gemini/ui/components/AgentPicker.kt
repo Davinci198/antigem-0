@@ -64,6 +64,15 @@ fun AgentPicker(
     statusColors: Map<AgentKind, Color> = emptyMap()
 ) {
     if (agents.size < 2) return
+    val visible = AgentKind.entries.filter { it in agents }
+    // four agents do not fit the start screen at the roomy size: shrink the padding and the
+    // label so "OpenCode" is readable without scrolling (the row still scrolls as a fallback)
+    val compact = visible.size >= 4
+    val chipHPad = if (compact) 8.dp else 14.dp
+    val chipVPad = if (compact) 6.dp else 7.dp
+    val labelSize = if (compact) 11.5.sp else 13.sp
+    val dotSize = if (compact) 6.dp else 7.dp
+    val dotGap = if (compact) 4.dp else 7.dp
     val shape = RoundedCornerShape(20.dp)
     Row(
         modifier = modifier
@@ -74,7 +83,7 @@ fun AgentPicker(
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AgentKind.entries.filter { it in agents }.forEach { agent ->
+        visible.forEach { agent ->
             val isSelected = agent == selected
             val accent = agent.accent()
             Row(
@@ -82,19 +91,20 @@ fun AgentPicker(
                     .clip(RoundedCornerShape(17.dp))
                     .background(if (isSelected) accent.copy(alpha = 0.16f) else Color.Transparent)
                     .clickable { onSelect(agent) }
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                    .padding(horizontal = chipHPad, vertical = chipVPad),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 statusColors[agent]?.let { dot ->
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(dot))
-                    Spacer(Modifier.width(7.dp))
+                    Box(Modifier.size(dotSize).clip(CircleShape).background(dot))
+                    Spacer(Modifier.width(dotGap))
                 }
                 Text(
                     text = agent.label(),
-                    fontSize = 13.sp,
+                    fontSize = labelSize,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (isSelected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }
