@@ -21,6 +21,7 @@ import com.example.gemini.domain.model.ChatAttachment
 import com.example.gemini.domain.model.Conversation
 import com.example.gemini.domain.model.MessageRole
 import com.example.gemini.domain.model.ModelQuota
+import com.example.gemini.ui.components.label
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -41,6 +42,10 @@ data class PendingToolApproval(
     val toolCall: com.example.gemini.domain.model.ToolCall,
     val messageId: String
 )
+
+/** "Continue in another agent": how much of the old chat travels in the hand-off prompt. */
+private const val HANDOFF_MAX_MESSAGES = 30
+private const val HANDOFF_MAX_CHARS = 12_000
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -486,6 +491,101 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Sidebar export / share of an OpenCode chat that is not open. */
     suspend fun loadOpenCodeMessages(conversationId: String): List<ChatMessage> = openCodeBackend.loadMessages(conversationId)
+
+    /** Messages of any chat, open or not; the open one is read from the screen's state. */
+    suspend fun loadConversationMessages(agent: AgentKind, conversationId: String): List<ChatMessage> {
+        if (store.currentConversation.value?.id == conversationId) return store.messages.value
+        return when (agent) {
+            AgentKind.CLAUDE -> claudeBackend.loadMessages(conversationId)
+            AgentKind.OPENCODE -> openCodeBackend.loadMessages(conversationId)
+            AgentKind.HERMES -> hermesBackend.loadMessages(conversationId)
+            else -> {
+                val steps = agyHubClient.getCascadeTrajectorySteps(conversationId).getOrElse {
+                    throw IllegalStateException(it.message ?: "the hub did not return the chat")
+                }
+                com.example.gemini.domain.chat.TrajectoryEngine().ingestStepsDirect(steps, conversationId)
+            }
+        }
+    }
+
+    /**
+     * Hands [source] over to [target]: opens a new chat of that agent and sends it the
+     * conversation's transcript, so the other agent carries on with the full context.
+     */
+    fun continueConversationIn(source: Conversation, target: AgentKind) {
+        viewModelScope.launch {
+            val messages = runCatching { loadConversationMessages(source.agent, source.id) }
+                .getOrElse {
+                    com.example.gemini.ui.components.AppToastHelper.showToast(
+                        "Could not read this chat: ${it.message}",
+                        com.example.gemini.ui.components.ChatToastType.ERROR
+                    )
+                    return@launch
+                }
+            val handoff = buildHandoffPrompt(source, messages)
+            if (handoff == null) {
+                com.example.gemini.ui.components.AppToastHelper.showToast(
+                    "Nothing to hand over: this chat has no messages yet.",
+                    com.example.gemini.ui.components.ChatToastType.INFO
+                )
+                return@launch
+            }
+            startNewChat(target)
+            val opened = withTimeoutOrNull(5_000) {
+                store.currentConversation.filterNotNull().first { it.agent == target && it.id != source.id }
+            }
+            if (opened == null) {
+                com.example.gemini.ui.components.AppToastHelper.showToast(
+                    "Could not open the new chat. Try again.",
+                    com.example.gemini.ui.components.ChatToastType.ERROR
+                )
+                return@launch
+            }
+            dispatchMessage(opened.agent, handoff)
+        }
+    }
+
+    /**
+     * The first message of a handed-over chat: the last few turns of [source], capped so a
+     * long chat still fits a single prompt. Null when there is nothing worth sending.
+     */
+    private fun buildHandoffPrompt(source: Conversation, messages: List<ChatMessage>): String? {
+        val usable = messages.filter {
+            (it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT) && it.content.isNotBlank()
+        }
+        if (usable.isEmpty()) return null
+        val picked = usable.takeLast(HANDOFF_MAX_MESSAGES)
+        var truncated = picked.size < usable.size
+        val lines = ArrayDeque<String>()
+        var budget = HANDOFF_MAX_CHARS
+        for (msg in picked.asReversed()) {
+            val text = msg.content.trim()
+            val clipped = if (text.length > budget) {
+                truncated = true
+                text.take(budget)
+            } else text
+            val line = "${if (msg.role == MessageRole.USER) "User" else "Assistant"}: $clipped"
+            if (line.length + 2 > budget) {
+                truncated = true
+                break
+            }
+            lines.addFirst(line)
+            budget -= line.length + 2
+            if (clipped.length < text.length) break
+        }
+        val from = source.agent.label()
+        val title = source.title.ifBlank { "Untitled chat" }.replace("\"", "'")
+        return buildString {
+            append("I'm moving this chat from ").append(from).append(" to you. ")
+            append("Here is the conversation so far so you can carry on with the full context — ")
+            append("do not repeat it back to me.\n\n")
+            append("<handoff from=\"").append(from).append("\" title=\"").append(title).append("\">\n")
+            lines.forEach { append(it).append("\n\n") }
+            if (truncated) append("(Only the most recent part of the conversation is included.)\n\n")
+            append("</handoff>\n\n")
+            append("Continue from here.")
+        }
+    }
 
     fun renameConversation(id: String, title: String) {
         // AGY titles live in the hub's annotations and are set through the chat itself; this fork's AGY backend has no rename call

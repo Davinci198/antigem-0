@@ -1,6 +1,7 @@
 package com.example.gemini.ui.drawer
 
 import com.example.gemini.ui.components.accent
+import com.example.gemini.ui.components.label
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import androidx.compose.animation.AnimatedVisibility
@@ -110,6 +111,13 @@ fun ChatHistoryDrawer(
     /** Antigravity runs: its hub start-up and first sync drive the list's loading states. */
     agyEnabled: Boolean = true,
     claudeActions: ClaudeDrawerActions? = null,
+    /** Agents the user has turned on; "Continue in another agent" offers these, minus the chat's own. */
+    enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = emptySet(),
+    /**
+     * Hands [Conversation] over to another agent: a new chat of that agent is opened and seeded
+     * with the conversation's transcript. Null hides the menu item.
+     */
+    onContinueConversation: ((Conversation, com.example.gemini.domain.model.AgentKind) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -822,9 +830,12 @@ fun ChatHistoryDrawer(
             }
 
             if (hasBothAgents || agentFilter != null) {
+                // the chips do not fit side by side on a phone: scroll them instead of squeezing
+                // the labels (a squeezed "OpenCode" used to wrap onto three lines)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                         .padding(horizontal = 12.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
@@ -842,6 +853,8 @@ fun ChatHistoryDrawer(
                             fontSize = 11.5.sp,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             color = if (selected) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(if (selected) accent.copy(alpha = 0.14f) else Color.Transparent)
@@ -974,6 +987,8 @@ fun ChatHistoryDrawer(
                                         onForkConversation = onForkConversation,
                                         onRequestDelete = { conversationToDelete = it },
                                         claudeActions = claudeActions,
+                                        enabledAgents = enabledAgents,
+                                        onContinueConversation = onContinueConversation,
                                         onTerminateInstance = { inst, title ->
                                             instanceToTerminate = inst to title
                                         }
@@ -1083,6 +1098,8 @@ fun ChatHistoryDrawer(
                                             onForkConversation = onForkConversation,
                                             onRequestDelete = { conversationToDelete = it },
                                             claudeActions = claudeActions,
+                                            enabledAgents = enabledAgents,
+                                            onContinueConversation = onContinueConversation,
                                             onTerminateInstance = { inst, title ->
                                                 instanceToTerminate = inst to title
                                             }
@@ -1425,7 +1442,9 @@ private fun ChatHistoryItemRow(
     onForkConversation: (String) -> Unit,
     onRequestDelete: (Conversation) -> Unit,
     onTerminateInstance: (com.example.gemini.data.remote.AgyActiveInstance, String) -> Unit,
-    claudeActions: ClaudeDrawerActions? = null
+    claudeActions: ClaudeDrawerActions? = null,
+    enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = emptySet(),
+    onContinueConversation: ((Conversation, com.example.gemini.domain.model.AgentKind) -> Unit)? = null
 ) {
     val isSubagent = depth > 0
     val startPadding = if (isSubagent) (12 + (depth * 14)).dp else 0.dp
@@ -1614,6 +1633,11 @@ private fun ChatHistoryItemRow(
 
         var menuExpanded by remember { mutableStateOf(false) }
         var showRename by remember { mutableStateOf(false) }
+        var showContinueDialog by remember { mutableStateOf(false) }
+        // the other agents a chat can be handed over to
+        val continueTargets = remember(enabledAgents, conv.agent) {
+            enabledAgents.filter { it != conv.agent }
+        }
         // Claude Code and OpenCode chats are renamed, exported and shared through claudeActions, which routes by agent
         val isClaudeConv = conv.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
         val isOpenCodeConv = conv.agent == com.example.gemini.domain.model.AgentKind.OPENCODE
@@ -1639,6 +1663,17 @@ private fun ChatHistoryItemRow(
                     }, enabled = newTitle.isNotBlank()) { Text("Save") }
                 },
                 dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } }
+            )
+        }
+
+        if (showContinueDialog) {
+            ContinueInAgentDialog(
+                targets = continueTargets,
+                onPick = { target ->
+                    showContinueDialog = false
+                    onContinueConversation?.invoke(conv, target)
+                },
+                onDismiss = { showContinueDialog = false }
             )
         }
 
@@ -1694,6 +1729,23 @@ private fun ChatHistoryItemRow(
                         onForkConversation(conv.id)
                     }
                 )
+                if (onContinueConversation != null && continueTargets.isNotEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("Continue in another agent", fontSize = 13.5.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Share,
+                                contentDescription = null,
+                                tint = GeminiBlue,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            showContinueDialog = true
+                        }
+                    )
+                }
                 if (isManagedConv && claudeActions != null) {
                     DropdownMenuItem(
                         text = { Text("Rename", fontSize = 13.5.sp) },
@@ -2299,6 +2351,55 @@ fun SearchChatsDialog(
             }
         }
     }
+}
+
+/** Picks the agent that takes over a chat. The hand-off itself (new chat + transcript) is the caller's job. */
+@Composable
+private fun ContinueInAgentDialog(
+    targets: List<com.example.gemini.domain.model.AgentKind>,
+    onPick: (com.example.gemini.domain.model.AgentKind) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Continue in another agent", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "A new chat opens in the agent you pick, seeded with this conversation's transcript (last 30 messages).",
+                    fontSize = 12.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                targets.forEach { agent ->
+                    val accent = agent.accent()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onPick(agent) }
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(accent, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = agent.label(),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 /** Claude-specific chat actions for the sidebar (Claude chats are loaded and renamed through the bridge). */

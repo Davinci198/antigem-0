@@ -1095,6 +1095,11 @@ fun ChatScreen(
                         rename = { id, title -> viewModel.renameConversation(id, title) },
                         restart = { id, onDone -> viewModel.claudeBackend.restartChat(id, onDone) }
                     )
+                },
+                enabledAgents = enabledAgents,
+                onContinueConversation = { source, target ->
+                    viewModel.continueConversationIn(source, target)
+                    scope.launch { drawerState.close() }
                 }
             )
         }

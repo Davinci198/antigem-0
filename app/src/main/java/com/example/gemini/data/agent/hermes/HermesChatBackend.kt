@@ -867,23 +867,28 @@ class HermesChatBackend(
         JSONObject(resp).getString("session_id")
     }
 
-    private suspend fun loadHistory(conv: Conversation) = withContext(Dispatchers.IO) {
-        // the bridge keys each session by the app conversation id, so a
-        // conversation never selected this run still has its history on disk
-        val sid = activeSession ?: conv.id
-        val resp = getBridge("/sessions/$sid/history")
-        val arr = JSONObject(resp).optJSONArray("messages") ?: return@withContext
+    private suspend fun loadHistory(conv: Conversation) {
+        _messages.value = loadMessages(conv.id)
+    }
+
+    /**
+     * History of any Hermes chat, open or not. The bridge keys each session by the app
+     * conversation id, so a chat never selected this run still has its history on disk.
+     */
+    suspend fun loadMessages(conversationId: String): List<ChatMessage> = withContext(Dispatchers.IO) {
+        val resp = getBridge("/sessions/$conversationId/history")
+        val arr = JSONObject(resp).optJSONArray("messages") ?: return@withContext emptyList()
         val msgs = mutableListOf<ChatMessage>()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             msgs += ChatMessage(
-                conversationId = conv.id,
+                conversationId = conversationId,
                 role = if (o.optString("role") == "assistant") MessageRole.ASSISTANT else MessageRole.USER,
                 content = o.optString("content"),
                 id = o.optString("id", UUID.randomUUID().toString())
             )
         }
-        _messages.value = msgs
+        msgs
     }
 
     private fun reconnectWs(sid: String) {
