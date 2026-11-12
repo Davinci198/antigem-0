@@ -52,6 +52,9 @@ fix=0 · rotate=1 · ignore=8. The OpenCode model scan (PR #24) introduced no ne
 ## Scan `d6064cbc-7b8d-4b51-9907-b9d28113564d` — commit `1e02a21` (master after PR #25)
 fix=0 · rotate=1 · ignore=8. The Claude OpenAI-compatible gateway (PR #25) introduced no new findings either — the new Go translator files are clean. Only ① remains, now as `01439769`.
 
+## Scan `dc064717-367d-421f-a0a8-58382284752a` — commit `9f88e45` (master after PR #28)
+fix=0 · rotate=1 · ignore=8. The drawer filter row + "Continue in another agent" change (PR #28) added no findings: the new `HermesChatBackend.loadMessages` and `ChatViewModel.continueConversationIn` code is clean. Only ① remains, still the embedded Google OAuth secret (`01439769`).
+
 ---
 
 ## Previous scan `ef0761d7` — commit `a04af8c`
