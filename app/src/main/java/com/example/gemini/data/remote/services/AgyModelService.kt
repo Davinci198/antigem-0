@@ -129,13 +129,13 @@ class AgyModelService {
                 }
             }
 
-            val keysToProcess = if (sortedIds.isNotEmpty()) {
-                sortedIds
-            } else {
-                response.models.mapNotNull { (key, details) ->
-                    if (!details.is_internal && !details.disabled && details.display_name.isNotBlank()) {
-                        key
-                    } else null
+            // The sort groups are a curated order, not the whole catalogue: an account can
+            // expose models no group mentions, and keeping only the sorted ids dropped them
+            // (Google listed four Gemini models, the picker showed one).
+            val keysToProcess = LinkedHashSet<String>(sortedIds)
+            response.models.forEach { (key, details) ->
+                if (!details.is_internal && !details.disabled && details.display_name.isNotBlank()) {
+                    keysToProcess.add(key)
                 }
             }
 
