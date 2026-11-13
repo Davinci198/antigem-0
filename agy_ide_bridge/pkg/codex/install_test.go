@@ -66,6 +66,13 @@ func TestExtractCodexBinaryWritesTheEntry(t *testing.T) {
 	}
 }
 
+func TestMaxBinarySizeFitsTheRealRelease(t *testing.T) {
+	// the shipped codex binary is ~277 MB (290069784 bytes on the 0.167 release); a tighter cap breaks every install
+	if maxBinarySize < 300<<20 {
+		t.Fatalf("maxBinarySize = %d, too tight for the ~277 MB release binary", int64(maxBinarySize))
+	}
+}
+
 func TestExtractCodexBinaryRefusesAnOversizedEntry(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "codex.new")
 
