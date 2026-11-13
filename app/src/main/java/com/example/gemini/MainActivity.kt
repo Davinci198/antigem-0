@@ -106,7 +106,6 @@ class MainActivity : ComponentActivity() {
         com.example.gemini.data.local.LocalTerminalBridge.instance.init(this)
         com.example.gemini.data.notes.NotesRepository.init(this)
         com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.start(this)
-        handleOAuthIntent(intent)
         handleIncomingFileIntent(intent)
         maybeRequestAllFilesAccess()
 
@@ -502,18 +501,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleOAuthIntent(intent)
         handleIncomingFileIntent(intent)
-    }
-
-    private fun handleOAuthIntent(intent: Intent?) {
-        val uri = intent?.data ?: return
-        if (uri.scheme == "http" || uri.scheme == "https" || uri.scheme == "gemini") {
-            val code = uri.getQueryParameter("code")
-            if (code != null) {
-                chatViewModel.handleOAuthCode(code)
-            }
-        }
     }
 
     private fun handleIncomingFileIntent(intent: Intent?) {

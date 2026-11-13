@@ -5,6 +5,11 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
+## Change awaiting scan — `fix/single-login-agy` (on top of `a9dd599`)
+The app's own Google OAuth is gone: `GoogleOAuthManager` (PKCE + loopback callback + embedded client id/secret), `AntigravityApiService` (direct `cloudcode-pa` client) and `ContextCompactor` (its only caller) were deleted, together with the access/refresh token, project and tier state in `AuthPreferences`. Login is now only the agy CLI's own flow, driven through the hub's `Login` RPC, with the credential inside the container — the Mobile Harness model.
+
+① is **not closed by this entry**: it closes only when a scan of the merged commit stops reporting it.
+
 ## Scan `baf5ae11-9cac-4033-ba1e-c26391048fc9` — commit `a04af8c`, finished 2026-11-10 21:11Z
 8 findings: 1 rotate · 2 fix · 7 ignore. (Earlier scan `ef0761d7` on the same commit reported the same set.)
 

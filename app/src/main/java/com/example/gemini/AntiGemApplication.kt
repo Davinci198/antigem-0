@@ -5,9 +5,13 @@ import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.os.Build
 import com.example.gemini.data.adb.AdbConnectManager
+import com.example.gemini.data.preferences.AuthPreferences
 import com.example.gemini.data.updater.PluginUpdateCheckWorker
 import com.example.gemini.data.updater.UpdateCheckWorker
 import com.telemetrydeck.sdk.TelemetryDeck
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.security.MessageDigest
 
 class AntiGemApplication : Application() {
@@ -15,6 +19,8 @@ class AntiGemApplication : Application() {
         super.onCreate()
         UpdateCheckWorker.schedule(this)
         PluginUpdateCheckWorker.schedule(this)
+        // Google sign-in now belongs to the agy CLI; wipe the token older builds kept here.
+        CoroutineScope(Dispatchers.IO).launch { AuthPreferences(this@AntiGemApplication).purgeLegacyOAuthState() }
         // Reconnects adb when Wireless debugging turns back on (it gets a new port every time)
         AdbConnectManager.init(this)
         // Fork builds are signed with a different key, so analytics stays off for them.
