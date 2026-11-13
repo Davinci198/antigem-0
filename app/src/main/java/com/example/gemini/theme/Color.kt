@@ -46,4 +46,7 @@ object AppColors {
 
     /** Warm accent: creative or experimental features. */
     val accentPink: Color get() = Color(0xFFEC4899)
+
+    /** A confirmed, healthy state. */
+    val success: Color get() = QuotaGreen
 }

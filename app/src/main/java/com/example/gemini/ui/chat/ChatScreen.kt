@@ -159,8 +159,9 @@ fun ChatScreen(
     val isClaudeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
     val isHermesChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.HERMES
     val isOpenCodeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.OPENCODE
+    val isCodexChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.CODEX
     // the Antigravity hub's connection state only speaks for Antigravity chats; each other agent has its own
-    val isAgyChat = !isClaudeChat && !isHermesChat && !isOpenCodeChat
+    val isAgyChat = !isClaudeChat && !isHermesChat && !isOpenCodeChat && !isCodexChat
     val openCodeBackend = viewModel.openCodeBackend
     val openCodePending by openCodeBackend.pendingPermissions.collectAsState()
     val openCodeState by openCodeBackend.state.collectAsState()
@@ -172,6 +173,20 @@ fun ChatScreen(
     var openCodeSettingsPage by remember { mutableStateOf<com.example.gemini.ui.opencode.OpenCodeSettingsPage?>(null) }
     LaunchedEffect(Unit) {
         openCodeBackend.toasts.collect {
+            com.example.gemini.ui.components.AppToastHelper.showToast(it, com.example.gemini.ui.components.ChatToastType.INFO)
+        }
+    }
+    val codexBackend = viewModel.codexBackend
+    val codexPending by codexBackend.pendingApprovals.collectAsState()
+    val codexState by codexBackend.state.collectAsState()
+    val codexStatus by codexBackend.status.collectAsState()
+    val codexAccount by codexBackend.account.collectAsState()
+    val codexModelsError by codexBackend.modelsError.collectAsState()
+    val codexLimits by codexBackend.rateLimits.collectAsState()
+    // the Codex page Settings opens on (Server & install for the Install button, Account for Sign in, MCP for /mcp)
+    var codexSettingsPage by remember { mutableStateOf<com.example.gemini.ui.codex.CodexSettingsPage?>(null) }
+    LaunchedEffect(Unit) {
+        codexBackend.toasts.collect {
             com.example.gemini.ui.components.AppToastHelper.showToast(it, com.example.gemini.ui.components.ChatToastType.INFO)
         }
     }
@@ -447,7 +462,42 @@ fun ChatScreen(
             onRestartServer = restartLocalServer
         )
     } else null
-    val agentEntries = listOfNotNull(agyEntry, claudeEntry, hermesEntry, openCodeEntry)
+    val codexEntry = if (com.example.gemini.domain.model.AgentKind.CODEX in enabledAgents) {
+        com.example.gemini.ui.agents.codexStatusEntry(
+            state = codexState,
+            status = codexStatus,
+            account = codexAccount,
+            serverRestarting = serverRestarting,
+            // installs right away; Settings → Codex shows the progress
+            onSetup = {
+                codexBackend.startCliJob("install")
+                codexSettingsPage = com.example.gemini.ui.codex.CodexSettingsPage.SERVER
+                showSettingsDialog = true
+            },
+            // starts the sign-in; Settings → Codex shows the code or the browser link
+            onSignIn = {
+                codexBackend.startLogin(deviceCode = false)
+                codexSettingsPage = com.example.gemini.ui.codex.CodexSettingsPage.ACCOUNT
+                showSettingsDialog = true
+            },
+            onRestartServer = restartLocalServer,
+            onRetry = { codexBackend.retryConnections() }
+        )
+    } else null
+    val agentEntries = listOfNotNull(agyEntry, claudeEntry, hermesEntry, openCodeEntry, codexEntry)
+
+    // Codex's "/" commands that open a screen of the app instead of going to Codex
+    val handleCodexCommand: (com.example.gemini.data.agent.codex.CodexChatBackend.AppCommand) -> Unit = { cmd ->
+        when (cmd) {
+            com.example.gemini.data.agent.codex.CodexChatBackend.AppCommand.MODEL_PICKER -> showModelSelector = true
+            com.example.gemini.data.agent.codex.CodexChatBackend.AppCommand.SETTINGS -> showSettingsDialog = true
+            com.example.gemini.data.agent.codex.CodexChatBackend.AppCommand.MCP -> {
+                codexSettingsPage = com.example.gemini.ui.codex.CodexSettingsPage.MCP
+                showSettingsDialog = true
+            }
+            com.example.gemini.data.agent.codex.CodexChatBackend.AppCommand.NEW_CHAT -> viewModel.startNewChat(com.example.gemini.domain.model.AgentKind.CODEX)
+        }
+    }
 
     // Slash commands Claude's CLI only shows in a terminal: the app opens its own screen instead
     val handleClaudeCommand: (com.example.gemini.data.agent.claude.ClaudeAppCommand) -> Unit = { cmd ->
@@ -549,7 +599,11 @@ fun ChatScreen(
     val pluginActionErrorMessage by viewModel.pluginActionErrorMessage.collectAsState()
 
     var allSlashCommands by remember { mutableStateOf(com.example.gemini.data.remote.SlashCommandsCache.getCachedSync()) }
-    val effectiveSlashCommands = if (isClaudeChat) claudeSlashCommands else if (isOpenCodeChat) emptyList() else allSlashCommands
+    val codexSlashCommands by codexBackend.slashCommands.collectAsState()
+    val effectiveSlashCommands = if (isClaudeChat) claudeSlashCommands
+        else if (isCodexChat) codexSlashCommands
+        else if (isOpenCodeChat) emptyList()
+        else allSlashCommands
 
     LaunchedEffect(agyHubUrl, systemConnectionState) {
         if (systemConnectionState.isHubOnline) {
@@ -810,6 +864,7 @@ fun ChatScreen(
     // The Claude Code-style working row: under the reply for as long as the agent works, but not while it waits for
     // the user (an approval or a question)
     val waitingForUser = (isClaudeChat && claudePending.isNotEmpty()) || (isOpenCodeChat && openCodePending.isNotEmpty()) ||
+        (isCodexChat && codexPending.isNotEmpty()) ||
         lastToolCalls.any { it.status == "PENDING_APPROVAL" || it.status == "AWAITING_CHOICE" }
     val showWorkingRow = workingAnimationEnabled && (isRunningOrStreaming || holdingTail) && !waitingForUser && !footerShown
 
@@ -831,6 +886,16 @@ fun ChatScreen(
                 selectedModelId.isNotBlank() -> selectedModelId.substringAfter('/')
                 else -> "Choose model"
             }
+        )
+        isCodexChat -> enabledModels.find { it.id == selectedModelId } ?: AiModel(
+            id = selectedModelId.ifBlank { "default" },
+            displayName = when {
+                isRefreshingModels -> "Loading models…"
+                codexModelsError != null -> "No models"
+                selectedModelId.isNotBlank() -> selectedModelId
+                else -> "Choose model"
+            },
+            family = com.example.gemini.domain.model.ModelFamily.OTHER
         )
         isHermesChat -> {
             // the pill shows the picked model: a preset id, "@provider/model"
@@ -1078,6 +1143,8 @@ fun ChatScreen(
                         agyAuth = agyAuthInfo,
                         claudeStatus = claudeStatus,
                         openCode = openCodeEntry,
+                        codex = codexEntry,
+                        codexEmail = codexAccount?.email,
                         onClick = { showAccountsDialog = true }
                     )
                 },
@@ -1085,6 +1152,7 @@ fun ChatScreen(
                     com.example.gemini.ui.drawer.ClaudeDrawerActions(
                         loadMessages = { id ->
                             if (viewModel.openCodeBackend.conversations.value.any { it.id == id }) viewModel.loadOpenCodeMessages(id)
+                            else if (viewModel.codexBackend.conversations.value.any { it.id == id }) viewModel.loadCodexMessages(id)
                             else viewModel.loadClaudeMessages(id)
                         },
                         rename = { id, title -> viewModel.renameConversation(id, title) },
@@ -1548,6 +1616,24 @@ fun ChatScreen(
                                         secondaryLabel = if (openCodeState == com.example.gemini.data.agent.opencode.OpenCodeState.CHECKING) null else "Server logs",
                                         onSecondary = { showLocalServerOutputDialog = true }
                                     )
+                                } else if (isCodexChat && codexState != com.example.gemini.data.agent.codex.CodexState.READY) {
+                                    com.example.gemini.ui.agents.AgentSetupPrompt(
+                                        agent = com.example.gemini.domain.model.AgentKind.CODEX,
+                                        title = when (codexState) {
+                                            com.example.gemini.data.agent.codex.CodexState.CHECKING -> "Starting Codex…"
+                                            com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED -> "Codex is not installed"
+                                            com.example.gemini.data.agent.codex.CodexState.SIGNED_OUT -> "Sign in to Codex"
+                                            else -> "Codex is unavailable"
+                                        },
+                                        message = if (codexState == com.example.gemini.data.agent.codex.CodexState.CHECKING)
+                                            "Waiting for the server to come up. This takes a few seconds after the app opens."
+                                        else codexEntry?.detail ?: codexState.label,
+                                        statusColor = codexEntry?.color,
+                                        actionLabel = codexEntry?.action?.label,
+                                        onAction = { codexEntry?.action?.onClick?.invoke() },
+                                        secondaryLabel = if (codexState == com.example.gemini.data.agent.codex.CodexState.CHECKING) null else "Server logs",
+                                        onSecondary = { showLocalServerOutputDialog = true }
+                                    )
                                 } else when (if (isAgyChat) systemConnectionState.status else null) {
                                     com.example.gemini.data.remote.SystemStatus.CHECKING_AUTH -> {
                                         com.example.gemini.ui.components.NewChatCheckingAuthPromptCard()
@@ -1751,7 +1837,7 @@ fun ChatScreen(
                                     if (showWorkingRow) {
                                         item(key = "working_spinner", contentType = "working_spinner") {
                                             com.example.gemini.ui.components.AgentWorkingSpinner(
-                                                color = if (isClaudeChat) com.example.gemini.ui.components.ClaudeAccent else if (isOpenCodeChat) com.example.gemini.ui.components.OpenCodeAccent else com.example.gemini.ui.components.AgyAccent,
+                                                color = if (isClaudeChat) com.example.gemini.ui.components.ClaudeAccent else if (isOpenCodeChat) com.example.gemini.ui.components.OpenCodeAccent else if (isCodexChat) com.example.gemini.ui.components.CodexAccent else com.example.gemini.ui.components.AgyAccent,
                                                 compacting = isClaudeChat && claudeCompacting,
                                                 // leaves in the frame the reply's footer arrives, which fades in in its place
                                                 modifier = Modifier.animateItem(fadeInSpec = tween(180), placementSpec = null, fadeOutSpec = null)
@@ -2074,8 +2160,10 @@ fun ChatScreen(
                 }
 
                 // Agent prompts docked above the input (both agents): permission requests, then questions
-                val approvalItems = remember(pendingApprovals, claudePending, openCodePending, isClaudeChat, isOpenCodeChat) {
-                    if (isOpenCodeChat) {
+                val approvalItems = remember(pendingApprovals, claudePending, openCodePending, codexPending, isClaudeChat, isOpenCodeChat, isCodexChat) {
+                    if (isCodexChat) {
+                        com.example.gemini.ui.codex.codexApprovalItems(codexPending, codexBackend, messages)
+                    } else if (isOpenCodeChat) {
                         com.example.gemini.ui.opencode.openCodeApprovalItems(openCodePending, openCodeBackend)
                     } else if (isClaudeChat) {
                         com.example.gemini.ui.claude.claudeApprovalItems(claudePending, claudeBackend)
@@ -2097,14 +2185,18 @@ fun ChatScreen(
                 ) {
                     com.example.gemini.ui.agents.AgentApprovalPanel(
                         items = approvalItems.ifEmpty { lastApprovalItems[0] },
-                        onAllowAll = if (isOpenCodeChat) {
+                        onAllowAll = if (isCodexChat) {
+                            { codexPending.forEach { codexBackend.approve(it.key) } }
+                        } else if (isOpenCodeChat) {
                             { openCodePending.forEach { openCodeBackend.replyPermission(it.id, "once") } }
                         } else if (isClaudeChat) {
                             { claudePending.filter { it.toolName != "ExitPlanMode" }.forEach { claudeBackend.approveToolAlways(it.toolUseId, -1) } }
                         } else {
                             { viewModel.approveAllPendingTools(pendingApprovals) }
                         },
-                        onDenyAll = if (isOpenCodeChat) {
+                        onDenyAll = if (isCodexChat) {
+                            { codexPending.forEach { codexBackend.deny(it.key) } }
+                        } else if (isOpenCodeChat) {
                             { openCodePending.forEach { openCodeBackend.replyPermission(it.id, "reject") } }
                         } else if (isClaudeChat) {
                             { claudePending.forEach { claudeBackend.rejectToolById(it.toolUseId, null) } }
@@ -2114,9 +2206,9 @@ fun ChatScreen(
                     )
                 }
 
-                val pendingQuestion = remember(messages, isClaudeChat, isOpenCodeChat) {
+                val pendingQuestion = remember(messages, isClaudeChat, isOpenCodeChat, isCodexChat) {
                     com.example.gemini.ui.agents.findPendingQuestion(
-                        if (isOpenCodeChat) com.example.gemini.domain.model.AgentKind.OPENCODE else if (isClaudeChat) com.example.gemini.domain.model.AgentKind.CLAUDE else com.example.gemini.domain.model.AgentKind.AGY,
+                        if (isCodexChat) com.example.gemini.domain.model.AgentKind.CODEX else if (isOpenCodeChat) com.example.gemini.domain.model.AgentKind.OPENCODE else if (isClaudeChat) com.example.gemini.domain.model.AgentKind.CLAUDE else com.example.gemini.domain.model.AgentKind.AGY,
                         messages
                     )
                 }
@@ -2158,12 +2250,20 @@ fun ChatScreen(
                 if (isOpenCodeChat) {
                     com.example.gemini.ui.opencode.OpenCodeControlsStrip(openCodeBackend)
                 }
+                if (isCodexChat) {
+                    com.example.gemini.ui.codex.CodexControlsStrip(codexBackend)
+                }
 
                 // Chat Input Bar with Bottom Model & Thinking Selector Pills (Claude Android Style)
                 ChatInputBar(
-                    isOnline = if (isOpenCodeChat) !openCodeState.isBlocking else if (isClaudeChat) !claudeState.isBlocking else if (isHermesChat) systemConnectionState.isBridgeOnline else systemConnectionState.canSend,
-                    isAuth = if (isOpenCodeChat) true else if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else if (isHermesChat) true else systemConnectionState.isAuth,
-                    offlineMessage = if (isOpenCodeChat) when (openCodeState) {
+                    isOnline = if (isCodexChat) codexState != com.example.gemini.data.agent.codex.CodexState.OFFLINE && codexState != com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED && codexState != com.example.gemini.data.agent.codex.CodexState.DISABLED && codexState != com.example.gemini.data.agent.codex.CodexState.OUTDATED
+                        else if (isOpenCodeChat) !openCodeState.isBlocking else if (isClaudeChat) !claudeState.isBlocking else if (isHermesChat) systemConnectionState.isBridgeOnline else systemConnectionState.canSend,
+                    isAuth = if (isCodexChat) codexState != com.example.gemini.data.agent.codex.CodexState.SIGNED_OUT else if (isOpenCodeChat) true else if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else if (isHermesChat) true else systemConnectionState.isAuth,
+                    offlineMessage = if (isCodexChat) when (codexState) {
+                        com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED -> "Codex is not installed on the server. See Settings → Codex."
+                        com.example.gemini.data.agent.codex.CodexState.DISABLED, com.example.gemini.data.agent.codex.CodexState.OUTDATED -> "Restart the server to use Codex."
+                        else -> "The server is offline. Start it to send messages."
+                    } else if (isOpenCodeChat) when (openCodeState) {
                         com.example.gemini.data.agent.opencode.OpenCodeState.NOT_INSTALLED -> "OpenCode is not installed on the server. See Settings → OpenCode."
                         com.example.gemini.data.agent.opencode.OpenCodeState.DISABLED, com.example.gemini.data.agent.opencode.OpenCodeState.OUTDATED -> "Restart the server to use OpenCode."
                         else -> "The server is offline. Start it to send messages."
@@ -2196,6 +2296,7 @@ fun ChatScreen(
                     isStreaming = isActivelyRunning,
                     isBackgroundActive = isBackgroundActive,
                     onSendMessage = { text ->
+                        val codexCmd = if (isCodexChat && attachments.isEmpty()) codexBackend.appCommand(text) else null
                         val appCmd = if (isClaudeChat && attachments.isEmpty()) claudeBackend.appCommand(text) else null
                         val unreadable = if (isClaudeChat) attachments.filter { a ->
                             a.isAudio || a.mimeType?.startsWith("audio/") == true || a.mimeType?.startsWith("video/") == true
@@ -2210,6 +2311,8 @@ fun ChatScreen(
                         }
                         if (appCmd != null) {
                             handleClaudeCommand(appCmd)
+                        } else if (codexCmd != null) {
+                            handleCodexCommand(codexCmd)
                         } else {
                             viewModel.sendMessage(text)
                             userSentMessageTrigger++
@@ -2246,6 +2349,11 @@ fun ChatScreen(
             account = viewModel.claudeAccount,
             onDismiss = { showModelSelector = false }
         )
+    } else if (showModelSelector && isCodexChat) {
+        com.example.gemini.ui.codex.CodexModelSheet(
+            backend = codexBackend,
+            onOpenSettings = { codexSettingsPage = com.example.gemini.ui.codex.CodexSettingsPage.ACCOUNT; showSettingsDialog = true }
+        ) { showModelSelector = false }
     } else if (showModelSelector && isOpenCodeChat) {
         com.example.gemini.ui.opencode.OpenCodeModelSheet(
             openCodeBackend,
@@ -2420,6 +2528,8 @@ fun ChatScreen(
             initialClaudePage = claudeSettingsPage,
             openCode = viewModel.openCodeBackend,
             initialOpenCodePage = openCodeSettingsPage,
+            codex = viewModel.codexBackend,
+            initialCodexPage = codexSettingsPage,
             enabledAgents = enabledAgents,
             isApplyingAgents = isApplyingAgents,
             onApplyAgents = { viewModel.applyAgents(it) },
@@ -2427,6 +2537,7 @@ fun ChatScreen(
                 showSettingsDialog = false
                 claudeSettingsPage = null
                 openCodeSettingsPage = null
+                codexSettingsPage = null
             }
         )
     }
@@ -2471,6 +2582,18 @@ fun ChatScreen(
             onOpenCodeSettings = {
                 scope.launch { drawerState.close() }
                 openCodeSettingsPage = com.example.gemini.ui.opencode.OpenCodeSettingsPage.PROVIDERS
+                showSettingsDialog = true
+            },
+            codex = codexEntry,
+            codexEmail = codexAccount?.email,
+            codexFacts = listOfNotNull(
+                codexAccount?.plan?.replaceFirstChar { it.uppercase() }?.let { "$it plan" },
+                codexStatus?.version?.let { "Codex $it" },
+                codexLimits?.primary?.let { "${it.usedPercent.toInt()}% of limit used" }
+            ),
+            onCodexSignOut = { viewModel.codexBackend.logout() },
+            onCodexSettings = {
+                scope.launch { drawerState.close() }
                 showSettingsDialog = true
             },
             onDismiss = { showAccountsDialog = false }

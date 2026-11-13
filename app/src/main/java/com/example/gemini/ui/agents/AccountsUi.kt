@@ -123,9 +123,11 @@ fun AccountsButton(
     claudeStatus: ClaudeCliStatus?,
     openCode: AgentStatusEntry? = null,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    codex: AgentStatusEntry? = null,
+    codexEmail: String? = null
 ) {
-    val entries = listOfNotNull(agy, claude, openCode)
+    val entries = listOfNotNull(agy, claude, openCode, codex)
     val needsSignIn = entries.any { it.isSignedOut }
     val single = entries.singleOrNull()
     Surface(
@@ -140,6 +142,7 @@ fun AccountsButton(
                 agy?.let { AccountAvatar(AgentKind.AGY, it, agyAuth.displayName.firstOrNull(), agyAuth.profilePictureUrl?.takeIf { u -> u.isNotBlank() }) }
                 claude?.let { AccountAvatar(AgentKind.CLAUDE, it, claudeStatus?.auth?.email?.firstOrNull()) }
                 openCode?.let { AccountAvatar(AgentKind.OPENCODE, it, null) }
+                codex?.let { AccountAvatar(AgentKind.CODEX, it, codexEmail?.firstOrNull()) }
             }
             Spacer(Modifier.width(7.dp))
             val text = when {
@@ -147,6 +150,7 @@ fun AccountsButton(
                 single?.agent == AgentKind.AGY && single.isReady -> agyAuth.displayName.ifBlank { "Account" }
                 single?.agent == AgentKind.CLAUDE && single.isReady -> claudeStatus?.auth?.email?.substringBefore('@') ?: "Account"
                 single?.agent == AgentKind.OPENCODE && single.isReady -> "OpenCode"
+                single?.agent == AgentKind.CODEX && single.isReady -> codexEmail?.substringBefore('@') ?: "Codex"
                 single != null -> single.label
                 else -> "Accounts"
             }
@@ -178,6 +182,12 @@ fun AccountsDialog(
     openCode: AgentStatusEntry? = null,
     openCodeFacts: List<String> = emptyList(),
     onOpenCodeSettings: () -> Unit = {},
+    codex: AgentStatusEntry? = null,
+    codexEmail: String? = null,
+    /** Plan, version, usage. */
+    codexFacts: List<String> = emptyList(),
+    onCodexSignOut: () -> Unit = {},
+    onCodexSettings: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -296,6 +306,48 @@ fun AccountsDialog(
                         }
                     }
                 }
+
+                codex?.let { entry ->
+                    if (agy != null || claude != null || openCode != null) Spacer(Modifier.height(12.dp))
+                    CodexAccountSection(entry, codexEmail, codexFacts, onCodexSignOut, onCodexSettings, onDismiss)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodexAccountSection(
+    entry: AgentStatusEntry,
+    email: String?,
+    facts: List<String>,
+    onSignOut: () -> Unit,
+    onSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AccountSection(
+        entry = entry,
+        avatar = { AccountAvatar(AgentKind.CODEX, entry, email?.firstOrNull(), size = 44.dp) },
+        title = AgentKind.CODEX.label(),
+        subtitle = if (entry.isReady) email ?: "Signed in" else entry.detail,
+        facts = facts
+    ) {
+        if (entry.isReady) {
+            SectionButton("Codex settings", Icons.Outlined.Settings) {
+                onSettings()
+                onDismiss()
+            }
+            SectionButton("Sign out", Icons.AutoMirrored.Outlined.Logout, danger = true) { onSignOut() }
+        } else {
+            entry.action?.let {
+                SectionButton(it.label, primary = AgentKind.CODEX.accent()) {
+                    it.onClick()
+                    onDismiss()
+                }
+            }
+            if (!entry.pending) SectionButton("Codex settings", Icons.Outlined.Settings) {
+                onSettings()
+                onDismiss()
             }
         }
     }

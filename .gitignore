@@ -61,3 +61,5 @@ output/
 .agents/
 flow_mcp/
 finally.zip
+# planning-with-files skill scratch
+.planning/

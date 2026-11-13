@@ -21,6 +21,7 @@ import (
 	// DNS for Android (no /etc/resolv.conf there); a package so `go build main.go` includes it too
 	_ "gemini-server/pkg/androiddns"
 	"gemini-server/pkg/claude"
+	"gemini-server/pkg/codex"
 	"gemini-server/pkg/config"
 	"gemini-server/pkg/handlers"
 	"gemini-server/pkg/hermes"
@@ -55,6 +56,8 @@ Flags:
   --no-opencode             Disable OpenCode (no /api/opencode endpoints, never runs the opencode CLI)
   --hermes-bin <path>       Custom path to the Hermes Agent CLI (default: hermes on PATH)
   --no-hermes               Disable Hermes Agent (no /api/hermes endpoints, never runs the hermes CLI)
+  --codex-bin <path>        Custom path to the Codex CLI (default: codex on PATH or ~/.codex/bin)
+  --no-codex                Disable Codex (no /api/codex endpoints, never runs the codex CLI)
   -d, --dir <path>          Custom workspace directory
   -h, --help                Show help documentation`)
 }
@@ -139,6 +142,8 @@ func main() {
 	var noClaude bool
 	var customOpenCodeBin string
 	var noOpenCode bool
+	var customCodexBin string
+	var noCodex bool
 	var customHermesBin string
 	var noHermes bool
 	var forceStart bool
@@ -190,6 +195,15 @@ func main() {
 			}
 		case arg == "--no-opencode":
 			noOpenCode = true
+		case strings.HasPrefix(arg, "--codex-bin="):
+			customCodexBin = strings.TrimPrefix(arg, "--codex-bin=")
+		case arg == "--codex-bin":
+			if i+1 < len(os.Args) {
+				customCodexBin = os.Args[i+1]
+				i++
+			}
+		case arg == "--no-codex":
+			noCodex = true
 		case strings.HasPrefix(arg, "--hermes-bin="):
 			customHermesBin = strings.TrimPrefix(arg, "--hermes-bin=")
 		case arg == "--hermes-bin":
@@ -357,6 +371,19 @@ func main() {
 	} else {
 		openCodeMgr = opencode.NewManager(cfg.HomeDir, cfg.WorkspaceDir, customOpenCodeBin)
 		mux.Handle("/api/opencode/", openCodeMgr)
+	}
+
+	// Codex: one `codex app-server` (JSON-RPC over stdio, no port) for all its chats; off with --no-codex
+	var codexMgr *codex.Manager
+	if noCodex {
+		mux.HandleFunc("/api/codex/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"success":false,"disabled":true,"error":"Codex is turned off in the app"}`))
+		})
+	} else {
+		codexMgr = codex.NewManager(cfg.HomeDir, cfg.WorkspaceDir, customCodexBin)
+		mux.Handle("/api/codex/", codexMgr)
 	}
 
 	// Hermes Agent CLI sessions; off with --no-hermes
@@ -679,6 +706,9 @@ func main() {
 	}
 	if openCodeMgr != nil {
 		openCodeMgr.StopAll()
+	}
+	if codexMgr != nil {
+		codexMgr.StopAll()
 	}
 	if hermesMgr != nil {
 		hermesMgr.StopAll()
