@@ -1,13 +1,35 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Auto Backup rules for devices older than API 31. Android 12+ reads
+   data_extraction_rules.xml instead; the two files must stay in sync.
+
+   The app keeps three kinds of data:
+     - things worth restoring: notes, terminal/agent preferences, chat uploads index
+     - credentials: the local bridge security token, the Termux SSH password, and the
+       agent logins that live inside the container (agy, Claude Code, OpenCode)
+     - a full Linux rootfs under files/: tens of thousands of files, far past the 25 MB
+       backup quota
+
+   Credentials are never backed up (they must be re-entered / re-provisioned on a new
+   device), and the container is excluded because a backup of it would both fail the
+   quota and copy those credentials into Google Drive.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Container: rootfs, agents' homes and their credential files, SSH keys, temp dirs. -->
+    <exclude domain="file" path="usr" />
+    <exclude domain="file" path="home" />
+    <exclude domain="file" path="ubuntu" />
+    <exclude domain="file" path="bin" />
+    <exclude domain="file" path="lib" />
+    <exclude domain="file" path="sysdata" />
+    <exclude domain="file" path="tmp" />
+    <exclude domain="file" path="shm" />
+    <exclude domain="file" path="extensions" />
+    <exclude domain="file" path="browser-extensions" />
+
+    <!-- auth_prefs (DataStore) holds "security_token" and "termux_ssh_pass" in clear text. -->
+    <exclude domain="file" path="datastore" />
+
+    <!-- Mirror of the DataStore settings; repeats the security token. -->
+    <exclude domain="sharedpref" path="anti_gem_sync_prefs.xml" />
 </full-backup-content>

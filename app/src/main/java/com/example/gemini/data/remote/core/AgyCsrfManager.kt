@@ -29,7 +29,7 @@ class AgyCsrfManager {
     fun setCachedToken(hubUrl: String = "", newToken: String) {
         if (newToken.isNotBlank()) {
             token = newToken
-            Log.d(TAG, "⚡ [AgyCsrfManager] CSRF token updated (${newToken.take(8)}...)")
+            Log.d(TAG, "⚡ [AgyCsrfManager] CSRF token updated (${newToken.length} chars)")
         }
     }
 

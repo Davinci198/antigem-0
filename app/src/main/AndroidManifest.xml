@@ -34,9 +34,19 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
 
+    <!--
+        Cleartext stays enabled on purpose. The hub and the bridge are plain HTTP servers on
+        127.0.0.1 by default, and Servers & Connectivity lets the user point them at another
+        host on the LAN (the form builds http://host:port), so blocking cleartext would cut
+        the app off from its own backend. The built-in browser tab also loads plain http
+        sites on request. What protects the local API is the security token, not TLS; see
+        backup_rules.xml for how that token is kept out of backups.
+    -->
     <application
         android:name=".AntiGemApplication"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:largeHeap="true"
         android:hasFragileUserData="true"
         android:manageSpaceActivity="com.example.gemini.ui.settings.ManageSpaceActivity"
