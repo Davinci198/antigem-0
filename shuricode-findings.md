@@ -5,6 +5,14 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
+## Scan `d0b3f2de` and `db7ae8dd` — commit `9d11db1` (master after PR #36)
+fix=0 · rotate=1 · ignore=8. ① is still reported, but the code it names no longer exists:
+
+- `app/src/main/java/com/example/gemini/data/remote/GoogleOAuthManager.kt` returns 404 from the contents API at `9d11db1`, and the recursive tree for that commit has no such path.
+- The APK built by CI on the same commit (`antigem-standard-signed`, run `43400956030`) contains **no** `GOCSPX`, no client id, no `accounts.google.com`, no `oauth2.googleapis.com` and no `cloudcode-pa.googleapis.com` in `classes*.dex`.
+
+So the shipped app cannot leak that secret any more. The remaining report points at a file that exists only in history (6 commits before this merge). It stays open until a scan stops reporting it or the secret is rotated at Google — rotation is not ours to do, it is upstream's OAuth client.
+
 ## Change awaiting scan — `fix/single-login-agy` (on top of `a9dd599`)
 The app's own Google OAuth is gone: `GoogleOAuthManager` (PKCE + loopback callback + embedded client id/secret), `AntigravityApiService` (direct `cloudcode-pa` client) and `ContextCompactor` (its only caller) were deleted, together with the access/refresh token, project and tier state in `AuthPreferences`. Login is now only the agy CLI's own flow, driven through the hub's `Login` RPC, with the credential inside the container — the Mobile Harness model.
 
