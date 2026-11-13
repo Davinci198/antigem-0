@@ -1,19 +1,40 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Auto Backup / device transfer rules for API 31+. Mirrors backup_rules.xml, which
+   Android 11 and older use instead.
+
+   Excluded on purpose: the Linux container (rootfs plus the agy, Claude Code and OpenCode
+   credentials inside it), the DataStore that holds the bridge security token and the
+   Termux SSH password, and the SharedPreferences mirror of that DataStore. A restore must
+   not bring credentials to the new device; the agents sign in again on first use.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="usr" />
+        <exclude domain="file" path="home" />
+        <exclude domain="file" path="ubuntu" />
+        <exclude domain="file" path="bin" />
+        <exclude domain="file" path="lib" />
+        <exclude domain="file" path="sysdata" />
+        <exclude domain="file" path="tmp" />
+        <exclude domain="file" path="shm" />
+        <exclude domain="file" path="extensions" />
+        <exclude domain="file" path="browser-extensions" />
+        <exclude domain="file" path="datastore" />
+        <exclude domain="sharedpref" path="anti_gem_sync_prefs.xml" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="usr" />
+        <exclude domain="file" path="home" />
+        <exclude domain="file" path="ubuntu" />
+        <exclude domain="file" path="bin" />
+        <exclude domain="file" path="lib" />
+        <exclude domain="file" path="sysdata" />
+        <exclude domain="file" path="tmp" />
+        <exclude domain="file" path="shm" />
+        <exclude domain="file" path="extensions" />
+        <exclude domain="file" path="browser-extensions" />
+        <exclude domain="file" path="datastore" />
+        <exclude domain="sharedpref" path="anti_gem_sync_prefs.xml" />
     </device-transfer>
-    -->
 </data-extraction-rules>

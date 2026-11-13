@@ -5,6 +5,47 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
+## Change awaiting scan — `fix/backup-rules` (on top of `b825b1b`)
+Backup and cleartext hardening, the last two items of the security list.
+
+**Auto Backup never applied its rules.** `res/xml/backup_rules.xml` and
+`res/xml/data_extraction_rules.xml` existed but the manifest never referenced them, so
+`allowBackup="true"` backed up the whole app data dir: the DataStore holding
+`security_token` and `termux_ssh_pass`, its SharedPreferences mirror, and the entire Linux
+container (rootfs plus the agy, Claude Code and OpenCode credentials inside it — far past
+the 25 MB quota, so the backup would also fail).
+
+Both files now carry real `<exclude>` entries and the manifest points at them
+(`android:fullBackupContent`, `android:dataExtractionRules`), for cloud backup and device
+transfer alike:
+
+| Excluded | Why |
+|---|---|
+| `file`: `usr`, `home`, `ubuntu`, `bin`, `lib`, `sysdata`, `tmp`, `shm` | container rootfs, agent homes, their credential files, SSH keys |
+| `file`: `extensions`, `browser-extensions` | downloaded browser runtime, no user data |
+| `file`: `datastore` | `security_token` and `termux_ssh_pass`, both plain text |
+| `sharedpref`: `anti_gem_sync_prefs.xml` | mirror of the same DataStore, repeats the token |
+
+Kept on purpose: `file/notes` (user notes) and the ordinary preference files
+(`agent_prefs`, `claude_code_prefs`, `opencode_prefs`, `termux_ide_prefs`,
+`anti_gem_terminal_prefs`, `chat_uploads`, `hermes_model_health`, `telemetry_device_prefs`).
+A restore therefore brings notes and settings, never credentials; every agent signs in
+again on the new device. MCP server headers and env vars (API keys) live in the
+container's `mcp_config.json`, so the same exclusion covers them.
+
+**`usesCleartextTraffic` stays `true` — a decision, not an oversight.** The hub and the
+bridge are plain HTTP servers on `127.0.0.1`, `Servers & Connectivity` builds
+`http://host:port` for a remote host by design, and the in-app browser tab loads plain
+http sites on request. Blocking cleartext would cut the app off from its own backend. What
+authenticates the local API is `security_token`, and that token is now out of backups.
+The manifest carries a comment saying so, so a future reader does not flip the flag
+blindly.
+
+**No OAuth scopes and no token logging left.** `grep` for `drive.file`, `userinfo.email`,
+`oauth2` and Google endpoints returns nothing outside deleted files. The one remaining
+credential in logcat — the CSRF token's first 8 characters, printed on every update in
+`AgyCsrfManager.setCachedToken` — now logs the token length instead.
+
 ## Scan `d0b3f2de` and `db7ae8dd` — commit `9d11db1` (master after PR #36)
 fix=0 · rotate=1 · ignore=8. ① is still reported, but the code it names no longer exists:
 
