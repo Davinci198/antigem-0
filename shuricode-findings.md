@@ -25,6 +25,13 @@ download and its sha256 verification are untouched.
 truncated entry, a missing binary and a symlink entry. `go build ./...`, `go vet` and
 `go test ./pkg/codex/` are green.
 
+### Correction to PR #41 — the cap was too tight
+A real install on the device failed with `the codex binary in the archive is 290069784 bytes
+(limit 268435456)`: the shipped `codex` binary is **~277 MB**, so the 256 MB cap rejected the
+genuine release. The bound itself is right (it is what the finding asked for); the constant was
+not. Raised to 512 MB, with a test that keeps it above the real binary, and the size-limit test
+still points at `maxBinarySize+1` so the refusal path stays covered.
+
 ### Confirmed — scan `ff0c0ea0` — commit `a6a5eb9` (master after PR #41)
 fix=0 · rotate=1 · policy=0 · ignore=8. The installer finding is gone: the same scan no longer
 reports it, which is what closes it — not the commit that changed the code. The register is

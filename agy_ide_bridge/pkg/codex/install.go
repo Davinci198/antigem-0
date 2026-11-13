@@ -28,9 +28,10 @@ import (
 
 const latestReleaseURL = "https://api.github.com/repos/openai/codex/releases/latest"
 
-// maxBinarySize caps the codex binary extracted from the release archive (~100 MB in practice). A malformed archive
-// can claim any size in its tar header, so the entry is refused (and the copy bounded) rather than trusted.
-const maxBinarySize = 256 << 20
+// maxBinarySize caps the codex binary extracted from the release archive. The real one is ~277 MB, so the cap must
+// stay well above it: a malformed archive can claim any size in its tar header, but a tight cap rejects the genuine
+// build (that happened at 256 MB). The entry is still refused above this and the copy is bounded to the header size.
+const maxBinarySize = 512 << 20
 
 // installJob is the one install / update that can run at a time; the app polls it.
 type installJob struct {
