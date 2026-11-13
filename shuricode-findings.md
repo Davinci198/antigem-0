@@ -5,7 +5,16 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
-## Change awaiting scan — `fix/backup-rules` (on top of `b825b1b`)
+## Scan `fa470923` — commit `b680f2d` (master after PR #38)
+fix=0 · rotate=1 · ignore=8. The backup-rules change is clean: no new findings, and the
+register did not move — ① (history-only OAuth secret) is still the only open item.
+
+The shipped APK was checked rather than only the sources: `apkanalyzer manifest print` shows
+`fullBackupContent` and `dataExtractionRules` on `<application>`, and the two compiled
+resource files inside the APK (`res/Qq.xml`, `res/4j.xml`) are the backup rules with the
+excludes. `usesCleartextTraffic` stays `true` by decision; the manifest comment gives the reason.
+
+## PR #38 — backup and cleartext hardening (merged as `b680f2d`)
 Backup and cleartext hardening, the last two items of the security list.
 
 **Auto Backup never applied its rules.** `res/xml/backup_rules.xml` and
