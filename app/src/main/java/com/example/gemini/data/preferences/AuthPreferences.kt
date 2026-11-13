@@ -14,12 +14,16 @@ private val Context.dataStore by preferencesDataStore(name = "auth_prefs")
 class AuthPreferences(private val context: Context) {
 
     companion object {
-        val ACCESS_TOKEN = stringPreferencesKey("access_token")
-        val REFRESH_TOKEN = stringPreferencesKey("refresh_token")
-        val EXPIRES_AT = androidx.datastore.preferences.core.longPreferencesKey("expires_at")
-        val PROJECT_ID = stringPreferencesKey("project_id")
-        val SUBSCRIPTION_TIER = stringPreferencesKey("subscription_tier")
-        val USER_EMAIL = stringPreferencesKey("user_email")
+        // Google sign-in belongs to the agy CLI running in the container. The app never
+        // holds a Google token, so these keys exist only to delete what older builds left
+        // behind (see purgeLegacyOAuthState).
+        private val LEGACY_ACCESS_TOKEN = stringPreferencesKey("access_token")
+        private val LEGACY_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
+        private val LEGACY_EXPIRES_AT = androidx.datastore.preferences.core.longPreferencesKey("expires_at")
+        private val LEGACY_PROJECT_ID = stringPreferencesKey("project_id")
+        private val LEGACY_SUBSCRIPTION_TIER = stringPreferencesKey("subscription_tier")
+        private val LEGACY_USER_EMAIL = stringPreferencesKey("user_email")
+        private val LEGACY_OAUTH_PURGED = androidx.datastore.preferences.core.booleanPreferencesKey("legacy_oauth_purged")
         val TERMUX_SSH_HOST = stringPreferencesKey("termux_ssh_host")
         val TERMUX_SSH_PORT = stringPreferencesKey("termux_ssh_port")
         val TERMUX_SSH_USER = stringPreferencesKey("termux_ssh_user")
@@ -186,13 +190,6 @@ class AuthPreferences(private val context: Context) {
         currentHubUrl = url
         url
     }
-
-    val accessToken: Flow<String?> = context.dataStore.data.map { it[ACCESS_TOKEN] }
-    val refreshToken: Flow<String?> = context.dataStore.data.map { it[REFRESH_TOKEN] }
-    val expiresAt: Flow<Long?> = context.dataStore.data.map { it[EXPIRES_AT] }
-    val projectId: Flow<String?> = context.dataStore.data.map { it[PROJECT_ID] ?: "rising-fact-p41fc" }
-    val subscriptionTier: Flow<String?> = context.dataStore.data.map { it[SUBSCRIPTION_TIER] ?: "pro" }
-    val userEmail: Flow<String?> = context.dataStore.data.map { it[USER_EMAIL] }
 
     fun getThemeModeSync(): String {
         val cached = syncPrefs.getString("app_theme_mode", null)
@@ -413,28 +410,6 @@ class AuthPreferences(private val context: Context) {
                 prefs[LOCAL_TOOLS_INSTALL_DATE] = System.currentTimeMillis()
                 prefs[LOCAL_TOOLS_VERSION] = version
             }
-        }
-    }
-
-    suspend fun saveTokens(accessToken: String, refreshToken: String?, email: String? = null, expiresInSeconds: Long? = 3600) {
-        context.dataStore.edit { prefs ->
-            prefs[ACCESS_TOKEN] = accessToken
-            if (refreshToken != null) {
-                prefs[REFRESH_TOKEN] = refreshToken
-            }
-            if (email != null) {
-                prefs[USER_EMAIL] = email
-            }
-            if (expiresInSeconds != null) {
-                prefs[EXPIRES_AT] = System.currentTimeMillis() + (expiresInSeconds * 1000)
-            }
-        }
-    }
-
-    suspend fun saveProjectInfo(projectId: String, tier: String) {
-        context.dataStore.edit { prefs ->
-            prefs[PROJECT_ID] = projectId
-            prefs[SUBSCRIPTION_TIER] = tier
         }
     }
 
@@ -807,12 +782,22 @@ class AuthPreferences(private val context: Context) {
         context.dataStore.edit { it[IS_TERMINAL_LAUNCHER_ENABLED] = enabled }
     }
 
-    suspend fun clearAuth() {
+    /**
+     * Older builds ran their own Google OAuth flow and kept the access/refresh token in
+     * this DataStore. Sign-in now belongs to the agy CLI, which owns the credential inside
+     * the container, so the first launch after the update deletes what is left behind —
+     * including the copy Auto Backup may already hold.
+     */
+    suspend fun purgeLegacyOAuthState() {
         context.dataStore.edit { prefs ->
-            prefs.remove(ACCESS_TOKEN)
-            prefs.remove(REFRESH_TOKEN)
-            prefs.remove(EXPIRES_AT)
-            prefs.remove(USER_EMAIL)
+            if (prefs[LEGACY_OAUTH_PURGED] == true) return@edit
+            prefs.remove(LEGACY_ACCESS_TOKEN)
+            prefs.remove(LEGACY_REFRESH_TOKEN)
+            prefs.remove(LEGACY_EXPIRES_AT)
+            prefs.remove(LEGACY_PROJECT_ID)
+            prefs.remove(LEGACY_SUBSCRIPTION_TIER)
+            prefs.remove(LEGACY_USER_EMAIL)
+            prefs[LEGACY_OAUTH_PURGED] = true
         }
     }
 }

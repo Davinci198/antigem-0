@@ -204,9 +204,6 @@ fun ChatScreen(
     val enabledModelIds by viewModel.enabledModelIds.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val quotas by viewModel.quotas.collectAsState()
-    val userEmail by viewModel.userEmail.collectAsState()
-    val projectId by viewModel.projectId.collectAsState()
-    val tier by viewModel.tier.collectAsState()
     val summarizingModelName by viewModel.summarizingModelName.collectAsState()
     val pendingQueuedUserMessage by viewModel.pendingQueuedUserMessage.collectAsState()
     val contextWindowLimit by viewModel.contextWindowLimit.collectAsState()
@@ -522,8 +519,6 @@ fun ChatScreen(
     var pendingMessageAction by remember { mutableStateOf<PendingMessageAction?>(null) }
     val thinkingPref by viewModel.thinkingPreference.collectAsState()
     val terminatedToolDialogState by viewModel.terminatedToolDialog.collectAsState()
-    val isOAuthServerListening by viewModel.isOAuthServerListening.collectAsState()
-    val isOAuthServerLoading by viewModel.isOAuthServerLoading.collectAsState()
     val isConversationsLoading by viewModel.isConversationsLoading.collectAsState()
     val hasReceivedInitialSync by viewModel.hasReceivedInitialSync.collectAsState()
     val isLoadingConversation by viewModel.isLoadingConversation.collectAsState()
@@ -2294,14 +2289,9 @@ fun ChatScreen(
         modifier = Modifier.fillMaxSize()
     ) {
         SettingsDialog(
-            userEmail = userEmail,
-            projectId = projectId,
-            tier = tier,
             availableModels = availableModels,
             enabledModelIds = enabledModelIds,
             quotas = quotas,
-            isServerListening = isOAuthServerListening,
-            isServerLoading = isOAuthServerLoading,
             contextWindowLimit = contextWindowLimit,
             summaryModelId = summaryModelIdPref,
             isDevModeEnabled = isDevModeEnabled,
@@ -2322,20 +2312,6 @@ fun ChatScreen(
             terminalTheme = terminalTheme,
             isLocalToolsEnabled = isLocalToolsEnabled,
             isLocalToolsInstalled = isLocalToolsInstalled,
-            onLoginWithGoogle = {
-                val url = viewModel.getGoogleOAuthUrl()
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                context.startActivity(intent)
-            },
-            onToggleServer = { enable ->
-                viewModel.toggleOAuthServer(enable)
-            },
-            onLogout = {
-                viewModel.logout()
-            },
-            onManualTokenEntered = { token ->
-                viewModel.applyManualInput(token)
-            },
             onToggleModelEnabled = { modelId, isEnabled ->
                 viewModel.setModelEnabled(modelId, isEnabled)
             },
