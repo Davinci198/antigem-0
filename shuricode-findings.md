@@ -30,6 +30,10 @@ fix=0 · rotate=1 · policy=0 · ignore=8. The installer finding is gone: the sa
 reports it, which is what closes it — not the commit that changed the code. The register is
 back to ① alone.
 
+Scan `f39bf66c` — commit `6f840c7` (master after the docs PR #42) reports the same:
+fix=0 · rotate=1 · policy=0 · ignore=8. A ledger-only commit adds no finding, so ① stays the
+single open item.
+
 ## Scan `fa470923` — commit `b680f2d` (master after PR #38)
 fix=0 · rotate=1 · ignore=8. The backup-rules change is clean: no new findings, and the
 register did not move — ① (history-only OAuth secret) is still the only open item.
