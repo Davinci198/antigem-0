@@ -21,9 +21,14 @@ written, the entry must be a regular file (no symlink), the copy is `io.CopyN` b
 declared size, and a short entry is an error instead of a half-written binary. The GitHub
 download and its sha256 verification are untouched.
 
-`pkg/codex/install_test.go` covers the four paths: a normal entry, an oversized header, a
+`pkg/codex/install_test.go` covers five paths: a normal entry, an oversized header, a
 truncated entry, a missing binary and a symlink entry. `go build ./...`, `go vet` and
 `go test ./pkg/codex/` are green.
+
+### Confirmed — scan `ff0c0ea0` — commit `a6a5eb9` (master after PR #41)
+fix=0 · rotate=1 · policy=0 · ignore=8. The installer finding is gone: the same scan no longer
+reports it, which is what closes it — not the commit that changed the code. The register is
+back to ① alone.
 
 ## Scan `fa470923` — commit `b680f2d` (master after PR #38)
 fix=0 · rotate=1 · ignore=8. The backup-rules change is clean: no new findings, and the
@@ -95,7 +100,7 @@ The app's own Google OAuth is gone: `GoogleOAuthManager` (PKCE + loopback callba
 - File: `app/src/main/java/com/example/gemini/data/remote/GoogleOAuthManager.kt` (lines 23–33)
 - Severity: high · class: `secret_rotation`
 - Suricode: treat the secret as exposed; rotate at the provider; move the mobile flow to a public-client/PKCE setup with no embedded secret.
-- Status: **BLOCKED — user decision required.** The secret belongs to a Google-issued *installed app* OAuth client (`1071006060591-…apps.googleusercontent.com`) and is the only AGY sign-in path. We cannot rotate it ourselves (it is Google's console), and removing it breaks sign-in. Options presented to owner: keep documented as-is / ask upstream Santoshkurmi to rotate + move to PKCE / replace the flow. Still reported by scans `989c06e7`, `67d4ce63`, `670d9019`, `6cdc45d8`, `6a241e3b` and every scan since (`08b465f1`, `01439769`, `9373013f`, `39a92150`) — nothing rotated yet; it is the only finding left.
+- Status: **BLOCKED — user decision required.** The secret belongs to a Google-issued *installed app* OAuth client (`1071006060591-…apps.googleusercontent.com`) and is the only AGY sign-in path. We cannot rotate it ourselves (it is Google's console), and removing it breaks sign-in. Options presented to owner: keep documented as-is / ask upstream Santoshkurmi to rotate + move to PKCE / replace the flow. Still reported by scans `989c06e7`, `67d4ce63`, `670d9019`, `6cdc45d8`, `6a241e3b` and every scan since (`08b465f1`, `01439769`, `9373013f`, `39a92150`, `ee59bedf`, `ff0c0ea0`) — nothing rotated yet; it is the only finding left.
 
 ### ② fix — `0be27f1d` — Installer extracts a tar entry without a decompressed size limit
 - File: `agy_ide_bridge/pkg/opencode/install.go` (`io.Copy(f, tr)` of `package/bin/opencode`)
