@@ -28,6 +28,10 @@ import (
 
 const latestReleaseURL = "https://api.github.com/repos/openai/codex/releases/latest"
 
+// maxBinarySize caps the codex binary extracted from the release archive (~100 MB in practice). A malformed archive
+// can claim any size in its tar header, so the entry is refused (and the copy bounded) rather than trusted.
+const maxBinarySize = 256 << 20
+
 // installJob is the one install / update that can run at a time; the app polls it.
 type installJob struct {
 	mu       sync.Mutex
@@ -252,36 +256,10 @@ func (m *Manager) installRelease(ctx context.Context, j *installJob, update bool
 	if err != nil {
 		return err
 	}
-	tr := tar.NewReader(gz)
 	dest := filepath.Join(destDir, "codex")
 	tmp := dest + ".new"
-	found := false
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if filepath.Base(hdr.Name) != "codex-"+target {
-			continue
-		}
-		f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(f, tr); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return err
-		}
-		f.Close()
-		found = true
-		break
-	}
-	if !found {
-		return errors.New("the download has no codex binary")
+	if err := extractCodexBinary(gz, target, tmp); err != nil {
+		return err
 	}
 	// a running app-server keeps its (old, now unlinked) binary until it restarts
 	if err := os.Rename(tmp, dest); err != nil {
@@ -296,6 +274,50 @@ func (m *Manager) installRelease(ctx context.Context, j *installJob, update bool
 	}
 	m.afterInstall(j)
 	return nil
+}
+
+// extractCodexBinary writes the archive's codex-<target> entry to tmp. The entry's declared size is checked before
+// anything is written, so a malformed archive cannot fill the disk through a huge (or unterminated) entry.
+func extractCodexBinary(r io.Reader, target, tmp string) error {
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if filepath.Base(hdr.Name) != "codex-"+target {
+			continue
+		}
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+			return errors.New("the codex binary in the archive is not a regular file")
+		}
+		if hdr.Size <= 0 || hdr.Size > maxBinarySize {
+			return fmt.Errorf("the codex binary in the archive is %d bytes (limit %d)", hdr.Size, int64(maxBinarySize))
+		}
+		f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+		if err != nil {
+			return err
+		}
+		written, copyErr := io.CopyN(f, tr, hdr.Size)
+		closeErr := f.Close()
+		if copyErr != nil {
+			os.Remove(tmp)
+			return copyErr
+		}
+		if closeErr != nil {
+			os.Remove(tmp)
+			return closeErr
+		}
+		if written != hdr.Size {
+			os.Remove(tmp)
+			return fmt.Errorf("the codex binary in the archive is truncated (%d of %d bytes)", written, hdr.Size)
+		}
+		return nil
+	}
+	return errors.New("the download has no codex binary")
 }
 
 // handleInstall: GET /api/codex/cli/job; POST /api/codex/cli/{install|update}.

@@ -5,6 +5,26 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
+## Scan `ee59bedf` — commit `8444343` (master after PR #40, the Codex port)
+fix=1 · rotate=1 · policy=0 · ignore=8. The Codex port added one real finding; the register
+otherwise did not move — ① (history-only OAuth secret) is still the only rotate item.
+
+| Verdict | Finding | Where |
+|---|---|---|
+| fix | Bound extracted tar entry size when installing Codex | `agy_ide_bridge/pkg/codex/install.go` |
+| rotate | Google OAuth client secret embedded in shipped Android code | ① below (history only) |
+
+The Codex install path downloads the official release tarball and extracts one entry with
+`io.Copy(f, tr)`; a tar header can claim any size, so a malformed archive could fill the disk.
+Fixed in this change: `hdr.Size` is now checked against a 256 MB cap before anything is
+written, the entry must be a regular file (no symlink), the copy is `io.CopyN` bounded to the
+declared size, and a short entry is an error instead of a half-written binary. The GitHub
+download and its sha256 verification are untouched.
+
+`pkg/codex/install_test.go` covers the four paths: a normal entry, an oversized header, a
+truncated entry, a missing binary and a symlink entry. `go build ./...`, `go vet` and
+`go test ./pkg/codex/` are green.
+
 ## Scan `fa470923` — commit `b680f2d` (master after PR #38)
 fix=0 · rotate=1 · ignore=8. The backup-rules change is clean: no new findings, and the
 register did not move — ① (history-only OAuth secret) is still the only open item.
