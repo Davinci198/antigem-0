@@ -116,7 +116,7 @@ object AttachedFiles {
         prefs.edit().putStringSet(chatId, prefs.getStringSet(chatId, emptySet()).orEmpty() + folders).apply()
     }
 
-    /** A chat got its final id (a new Codex chat's temporary id is replaced once its thread exists). */
+    /** A chat got its final id (a chat's temporary id is replaced once its session exists). */
     @Synchronized
     fun moveCopies(context: Context, fromId: String, toId: String) {
         if (fromId == toId) return

@@ -97,8 +97,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     COMMANDS("Commands & Permissions", "Auto-run policy, sandbox mode, and tool approvals"),
     CLAUDE("Claude Code", "Account, models, permissions, MCP, plugins & memory"),
     OPENCODE("OpenCode", "Server, providers, custom OpenAI-compatible endpoints & approvals"),
-    CODEX("Codex", "Account, usage limits, permissions, MCP, server & install"),
-    AGENTS("Agents", "Run Antigravity, Claude Code, Hermes, OpenCode or Codex"),
+    AGENTS("Agents", "Run Antigravity, Claude Code, Hermes or OpenCode"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
     ADB_CONNECT("ADB Connect", "Connect the terminal's adb to this phone over Wireless debugging"),
@@ -233,9 +232,6 @@ fun SettingsDialog(
     openCode: com.example.gemini.data.agent.opencode.OpenCodeChatBackend? = null,
     /** Opens on this OpenCode page (e.g. Server & install from an Install button). */
     initialOpenCodePage: com.example.gemini.ui.opencode.OpenCodeSettingsPage? = null,
-    codex: com.example.gemini.data.agent.codex.CodexChatBackend? = null,
-    /** Opens on this Codex page (e.g. Server & install from an Install button). */
-    initialCodexPage: com.example.gemini.ui.codex.CodexSettingsPage? = null,
     enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = setOf(com.example.gemini.domain.model.AgentKind.AGY),
     isApplyingAgents: Boolean = false,
     onApplyAgents: (Set<com.example.gemini.domain.model.AgentKind>) -> Unit = {},
@@ -243,21 +239,14 @@ fun SettingsDialog(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var currentSection by remember { mutableStateOf(if (initialClaudePage != null && claude != null) SettingsSection.CLAUDE else if (initialOpenCodePage != null && openCode != null) SettingsSection.OPENCODE else if (initialCodexPage != null && codex != null) SettingsSection.CODEX else SettingsSection.MAIN) }
+    var currentSection by remember { mutableStateOf(if (initialClaudePage != null && claude != null) SettingsSection.CLAUDE else if (initialOpenCodePage != null && openCode != null) SettingsSection.OPENCODE else SettingsSection.MAIN) }
     var claudePage by remember { mutableStateOf(initialClaudePage ?: com.example.gemini.ui.claude.ClaudeSettingsPage.ACCOUNT) }
     var openCodePage by remember { mutableStateOf(initialOpenCodePage ?: com.example.gemini.ui.opencode.OpenCodeSettingsPage.SERVER) }
-    var codexPage by remember { mutableStateOf(initialCodexPage ?: com.example.gemini.ui.codex.CodexSettingsPage.ACCOUNT) }
     // a page asked for while the dialog is already open (an Install button, the model picker, "Providers & settings")
     LaunchedEffect(initialOpenCodePage) {
         if (initialOpenCodePage != null && openCode != null) {
             openCodePage = initialOpenCodePage
             currentSection = SettingsSection.OPENCODE
-        }
-    }
-    LaunchedEffect(initialCodexPage) {
-        if (initialCodexPage != null && codex != null) {
-            codexPage = initialCodexPage
-            currentSection = SettingsSection.CODEX
         }
     }
     // Hoisted so the main list keeps its position while a sub-section is open
@@ -293,10 +282,9 @@ fun SettingsDialog(
                     // an agent page names itself here (it has no header of its own)
                     val isClaudePage = currentSection == SettingsSection.CLAUDE && claude != null
                     val isOpenCodePage = currentSection == SettingsSection.OPENCODE && openCode != null
-                    val isCodexPage = currentSection == SettingsSection.CODEX && codex != null
                     Column {
                         Text(
-                            text = if (isClaudePage) "Claude Code · ${claudePage.title}" else if (isOpenCodePage) "OpenCode · ${openCodePage.title}" else if (isCodexPage) "Codex · ${codexPage.title}" else currentSection.title,
+                            text = if (isClaudePage) "Claude Code · ${claudePage.title}" else if (isOpenCodePage) "OpenCode · ${openCodePage.title}" else currentSection.title,
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -305,7 +293,7 @@ fun SettingsDialog(
                         )
                         if (currentSection != SettingsSection.MAIN) {
                             Text(
-                                text = if (isClaudePage) claudePage.subtitle else if (isOpenCodePage) openCodePage.subtitle else if (isCodexPage) codexPage.subtitle else currentSection.subtitle,
+                                text = if (isClaudePage) claudePage.subtitle else if (isOpenCodePage) openCodePage.subtitle else currentSection.subtitle,
                                 fontSize = 11.5.sp,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                                 maxLines = 1,
@@ -389,14 +377,6 @@ fun SettingsDialog(
                                 com.example.gemini.ui.opencode.OpenCodeSettingsGroup(backend, cardBg) { page ->
                                     openCodePage = page
                                     currentSection = SettingsSection.OPENCODE
-                                }
-                            }
-                        },
-                        codexGroup = codex?.let { backend ->
-                            {
-                                com.example.gemini.ui.codex.CodexSettingsGroup(backend, cardBg) { page ->
-                                    codexPage = page
-                                    currentSection = SettingsSection.CODEX
                                 }
                             }
                         },
@@ -582,9 +562,6 @@ fun SettingsDialog(
                         // the dialog's header is this screen's Back button, as for the other agent pages
                         com.example.gemini.ui.opencode.OpenCodeSettingsScreen(openCode, openCodePage)
                     }
-                    SettingsSection.CODEX -> if (codex != null) {
-                        com.example.gemini.ui.codex.CodexSettingsScreen(codex, codexPage)
-                    }
                     SettingsSection.UTILITIES -> UtilitiesSubScreen(
                         cardBg = cardBg,
                         cardBorder = cardBorder,
@@ -628,7 +605,6 @@ private fun MainSettingsMenu(
     scrollState: androidx.compose.foundation.ScrollState,
     claudeGroup: (@Composable () -> Unit)? = null,
     openCodeGroup: (@Composable () -> Unit)? = null,
-    codexGroup: (@Composable () -> Unit)? = null,
     enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = setOf(com.example.gemini.domain.model.AgentKind.AGY),
     onNavigate: (SettingsSection) -> Unit
 ) {
@@ -636,7 +612,6 @@ private fun MainSettingsMenu(
     val claudeOn = com.example.gemini.domain.model.AgentKind.CLAUDE in enabledAgents
     val hermesOn = com.example.gemini.domain.model.AgentKind.HERMES in enabledAgents
     val openCodeOn = com.example.gemini.domain.model.AgentKind.OPENCODE in enabledAgents
-    val codexOn = com.example.gemini.domain.model.AgentKind.CODEX in enabledAgents
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -654,7 +629,6 @@ private fun MainSettingsMenu(
                 hermesOn -> "Hermes Agent only"
                 claudeOn -> "Claude Code only"
                 openCodeOn -> "OpenCode only"
-                codexOn -> "Codex only"
                 else -> "Antigravity only"
             },
             badgeText = "${enabledAgents.size} on",
@@ -773,11 +747,6 @@ private fun MainSettingsMenu(
         if (openCodeGroup != null && openCodeOn) {
             SettingsGroupHeader("OpenCode", com.example.gemini.ui.components.OpenCodeAccent, "Any provider, its own API keys")
             openCodeGroup()
-        }
-
-        if (codexGroup != null && codexOn) {
-            SettingsGroupHeader("Codex", com.example.gemini.ui.components.CodexAccent, "OpenAI's Codex CLI, with your ChatGPT account")
-            codexGroup()
         }
 
         SettingsGroupHeader("App", MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), "Shared by both agents")
