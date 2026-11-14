@@ -72,12 +72,7 @@ private val AGENT_OPTIONS = listOf(
         "Open-source coding agent: 200+ providers with your own keys, any OpenAI-compatible API, and free models."
     ),
     AgentOption(
-        setOf(AgentKind.CODEX),
-        "Codex",
-        "OpenAI's Codex CLI on this device: sign in with your ChatGPT account."
-    ),
-    AgentOption(
-        setOf(AgentKind.AGY, AgentKind.CLAUDE, AgentKind.HERMES, AgentKind.OPENCODE, AgentKind.CODEX),
+        setOf(AgentKind.AGY, AgentKind.CLAUDE, AgentKind.HERMES, AgentKind.OPENCODE),
         "All Agents",
         "Pick the agent for each new chat. All agents share the chat list, status and accounts."
     )
@@ -106,7 +101,6 @@ fun AgentSelector(selected: Set<AgentKind>, onSelect: (Set<AgentKind>) -> Unit, 
                             AgentMark(AgentKind.CLAUDE, size = 30.dp, modifier = Modifier.offset(x = 13.dp, y = 4.dp))
                             AgentMark(AgentKind.HERMES, size = 30.dp, modifier = Modifier.offset(x = 26.dp, y = 8.dp))
                             AgentMark(AgentKind.OPENCODE, size = 30.dp, modifier = Modifier.offset(x = 39.dp, y = 12.dp))
-                            AgentMark(AgentKind.CODEX, size = 30.dp, modifier = Modifier.offset(x = 52.dp, y = 16.dp))
                         }
                     }
                     Spacer(Modifier.width(12.dp))
@@ -145,13 +139,12 @@ fun AgentChoiceDialog(onConfirm: (Set<AgentKind>) -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp)
         ) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                // one mark per agent, stepping down the row; five marks stay inside the card at 36 dp
+                // one mark per agent, stepping down the row; four marks stay inside the card at 36 dp
                 Box(Modifier.size(width = 116.dp, height = 64.dp)) {
                     AgentMark(AgentKind.AGY, size = 36.dp)
                     AgentMark(AgentKind.CLAUDE, size = 36.dp, modifier = Modifier.offset(x = 20.dp, y = 6.dp))
                     AgentMark(AgentKind.HERMES, size = 36.dp, modifier = Modifier.offset(x = 40.dp, y = 12.dp))
                     AgentMark(AgentKind.OPENCODE, size = 36.dp, modifier = Modifier.offset(x = 60.dp, y = 18.dp))
-                    AgentMark(AgentKind.CODEX, size = 36.dp, modifier = Modifier.offset(x = 80.dp, y = 24.dp))
                 }
                 Spacer(Modifier.height(14.dp))
                 Text("Choose your agent", fontSize = 20.sp, fontWeight = FontWeight.Bold)

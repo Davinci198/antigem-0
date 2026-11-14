@@ -217,53 +217,6 @@ fun openCodeStatusEntry(
     }
 }
 
-fun codexStatusEntry(
-    state: com.example.gemini.data.agent.codex.CodexState,
-    status: com.example.gemini.data.agent.codex.CodexStatus?,
-    account: com.example.gemini.data.agent.codex.CodexAccount?,
-    serverRestarting: Boolean,
-    onSetup: () -> Unit,
-    onSignIn: () -> Unit,
-    onRestartServer: () -> Unit,
-    onRetry: () -> Unit
-): AgentStatusEntry {
-    val color = when (state) {
-        com.example.gemini.data.agent.codex.CodexState.READY -> SystemStatus.READY.dotColor
-        com.example.gemini.data.agent.codex.CodexState.CHECKING -> SystemStatus.STARTING.dotColor
-        com.example.gemini.data.agent.codex.CodexState.SIGNED_OUT -> ClaudeStatus.SIGNED_OUT.dotColor
-        com.example.gemini.data.agent.codex.CodexState.OFFLINE,
-        com.example.gemini.data.agent.codex.CodexState.DISABLED,
-        com.example.gemini.data.agent.codex.CodexState.OUTDATED -> SystemStatus.OFFLINE.dotColor
-        else -> ClaudeStatus.ERROR.dotColor
-    }
-    if (serverRestarting) {
-        return AgentStatusEntry(AgentKind.CODEX, "Restarting…", SystemStatus.STARTING.dotColor, "The local server is restarting.", pending = true)
-    }
-    fun entry(detail: String? = null, action: AgentStatusAction? = null) = AgentStatusEntry(
-        AgentKind.CODEX, state.label, color, detail, action,
-        pending = state == com.example.gemini.data.agent.codex.CodexState.CHECKING,
-        isReady = state == com.example.gemini.data.agent.codex.CodexState.READY,
-        isSignedOut = state == com.example.gemini.data.agent.codex.CodexState.SIGNED_OUT
-    )
-    return when (state) {
-        com.example.gemini.data.agent.codex.CodexState.CHECKING -> entry("Starting… waiting for the server.")
-        com.example.gemini.data.agent.codex.CodexState.READY -> entry(
-            listOfNotNull(account?.email, account?.plan?.replaceFirstChar { it.uppercase() }, status?.version?.let { "Codex $it" })
-                .joinToString(" · ").ifBlank { null }
-        )
-        com.example.gemini.data.agent.codex.CodexState.SIGNED_OUT -> entry("Sign in with your ChatGPT account to use Codex.", AgentStatusAction("Sign in", onSignIn))
-        com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED -> entry(
-            if (status?.termux_package == true) "Codex is not installed yet (pkg install codex). The app can install it for you."
-            else "Codex is not installed yet. The app can install it for you.",
-            AgentStatusAction("Install", onSetup)
-        )
-        com.example.gemini.data.agent.codex.CodexState.DISABLED -> entry("The server was started with Codex off.", AgentStatusAction("Restart", onRestartServer))
-        com.example.gemini.data.agent.codex.CodexState.OUTDATED -> entry("This server has no Codex support yet. Update it.", AgentStatusAction("Restart", onRestartServer))
-        com.example.gemini.data.agent.codex.CodexState.OFFLINE -> entry("The server is not running.", AgentStatusAction("Start", onRestartServer))
-        com.example.gemini.data.agent.codex.CodexState.ERROR -> entry(status?.error, AgentStatusAction("Retry", onRetry))
-    }
-}
-
 /** The two-agent form: [top] (Antigravity) over [bottom] (Claude Code). */
 @Composable
 fun AgentStatusDot(top: Color, bottom: Color?, modifier: Modifier = Modifier, size: Dp = 11.dp, pulsing: Boolean = false) =
@@ -311,7 +264,6 @@ fun AgentMark(agent: AgentKind, modifier: Modifier = Modifier, size: Dp = 32.dp,
                 AgentKind.CLAUDE -> Text("✻", color = accent, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.5f).sp)
                 AgentKind.HERMES -> Text("☤", color = accent, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.5f).sp)
                 AgentKind.OPENCODE -> Text("</>", color = accent, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.3f).sp, maxLines = 1)
-                AgentKind.CODEX -> Text(">_", color = accent, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.36f).sp, maxLines = 1)
             }
         }
         if (statusColor != null) {
@@ -396,9 +348,8 @@ fun AgentStatusIndicator(
     val claude = entries.find { it.agent == AgentKind.CLAUDE }
     val hermes = entries.find { it.agent == AgentKind.HERMES }
     val openCode = entries.find { it.agent == AgentKind.OPENCODE }
-    val codex = entries.find { it.agent == AgentKind.CODEX }
     // one slice per agent that has an entry (an agent the app does not run has none)
-    val colors = listOfNotNull(agy, claude, hermes, openCode, codex).map { it.color }
+    val colors = listOfNotNull(agy, claude, hermes, openCode).map { it.color }
     Box(
         modifier = modifier.size(36.dp).clip(CircleShape).clickable { open = true },
         contentAlignment = Alignment.Center

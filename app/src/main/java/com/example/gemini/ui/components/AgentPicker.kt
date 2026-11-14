@@ -37,15 +37,11 @@ val HermesAccent = Color(0xFF8B5CF6)
 /** OpenCode accent — its brand green. */
 val OpenCodeAccent = Color(0xFF10B981)
 
-/** Codex accent — its brand violet. */
-val CodexAccent = Color(0xFF8B5CF6)
-
 fun AgentKind.label(): String = when (this) {
     AgentKind.AGY -> "Antigravity"
     AgentKind.CLAUDE -> "Claude Code"
     AgentKind.HERMES -> "Hermes"
     AgentKind.OPENCODE -> "OpenCode"
-    AgentKind.CODEX -> "Codex"
 }
 
 fun AgentKind.accent(): Color = when (this) {
@@ -53,7 +49,6 @@ fun AgentKind.accent(): Color = when (this) {
     AgentKind.CLAUDE -> ClaudeAccent
     AgentKind.HERMES -> HermesAccent
     AgentKind.OPENCODE -> OpenCodeAccent
-    AgentKind.CODEX -> CodexAccent
 }
 
 /**
@@ -152,18 +147,5 @@ fun HermesBadge(modifier: Modifier = Modifier) {
             .padding(horizontal = 5.dp, vertical = 1.dp)
     ) {
         Text(text = "Hermes", fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = HermesAccent)
-    }
-}
-
-/** Small badge marking a Codex conversation in lists. */
-@Composable
-fun CodexBadge(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(CodexAccent.copy(alpha = 0.16f))
-            .padding(horizontal = 5.dp, vertical = 1.dp)
-    ) {
-        Text(text = "Codex", fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = CodexAccent)
     }
 }
