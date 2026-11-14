@@ -5,6 +5,11 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
+## Scan `d047be64` — commit `ade1689` (master before PR #46, the Codex removal)
+fix=0 · rotate=1 · policy=0 · ignore=8. No new findings: the register did not move — ① (history-only
+OAuth secret) is still the only rotate item, reported fresh as `9e820ba1`. The scan ran on master
+before the removal branch merged; the confirming scan runs after PR #46 lands on master.
+
 ## Scan `ee59bedf` — commit `8444343` (master after PR #40, the Codex port)
 fix=1 · rotate=1 · policy=0 · ignore=8. The Codex port added one real finding; the register
 otherwise did not move — ① (history-only OAuth secret) is still the only rotate item.
