@@ -366,6 +366,8 @@ fun ChatScreen(
 
     val agyAuthInfo by viewModel.agyAuthInfo.collectAsState()
     val isAuthBusy by viewModel.isAuthBusy.collectAsState()
+    val agyAccounts by viewModel.agyAccounts.collectAsState()
+    val agyAccountsBusy by viewModel.agyAccountsBusy.collectAsState()
 
     // Per-agent health for the status dot, accounts, new-chat picker and empty chat (only enabled agents)
     val enabledAgents by viewModel.enabledAgents.collectAsState()
@@ -1078,7 +1080,10 @@ fun ChatScreen(
                         agyAuth = agyAuthInfo,
                         claudeStatus = claudeStatus,
                         openCode = openCodeEntry,
-                        onClick = { showAccountsDialog = true }
+                        onClick = {
+                            showAccountsDialog = true
+                            viewModel.refreshAgyAccounts()
+                        }
                     )
                 },
                 claudeActions = remember(viewModel) {
@@ -2473,6 +2478,15 @@ fun ChatScreen(
                 openCodeSettingsPage = com.example.gemini.ui.opencode.OpenCodeSettingsPage.PROVIDERS
                 showSettingsDialog = true
             },
+            agyAccounts = agyAccounts,
+            agyAccountsBusy = agyAccountsBusy,
+            agySwitchBlocked = isActivelyRunning,
+            onAgyAddAccount = { viewModel.addAgyAccount() },
+            onAgySwitchAccount = { viewModel.switchAgyAccount(it) },
+            onAgyDeleteAccount = { viewModel.deleteAgyAccount(it) },
+            onAgyRenameAccount = { account, label -> viewModel.renameAgyAccount(account, label) },
+            onAgyRefreshAccounts = { viewModel.refreshAgyAccounts() },
+            onAgySaveCurrentAccount = { viewModel.saveCurrentAgyAccount() },
             onDismiss = { showAccountsDialog = false }
         )
     }

@@ -278,6 +278,7 @@ class AgyChatBackend(
                     _isAuthBusy.value = false
                     _pendingLoginUrl.value = null
                     loginPollJob?.cancel()
+                    maybeSavePendingAccount()
                     if (userInitiated) {
                         _authFeedbackMessage.tryEmit("Signed in as ${info.displayName.ifBlank { info.email }}")
                     }
@@ -343,6 +344,7 @@ class AgyChatBackend(
                             _isAuthBusy.value = false
                             _pendingLoginUrl.value = null
                             _authFeedbackMessage.tryEmit("Signed in successfully!")
+                            maybeSavePendingAccount()
                             refreshQuotas(force = true)
                             break
                         }
@@ -399,6 +401,172 @@ class AgyChatBackend(
             } finally {
                 _isAuthBusy.value = false
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- AGY multi-account
+
+    private val _agyAccounts = MutableStateFlow(com.example.gemini.data.remote.AgyAccountsState())
+    val agyAccounts: StateFlow<com.example.gemini.data.remote.AgyAccountsState> = _agyAccounts.asStateFlow()
+
+    private val _agyAccountsBusy = MutableStateFlow(false)
+    val agyAccountsBusy: StateFlow<Boolean> = _agyAccountsBusy.asStateFlow()
+
+    // Set while an "add account" sign-in is running, so the freshly signed-in account is saved
+    // automatically once the login poll sees it.
+    private var pendingAccountSave = false
+
+    fun refreshAgyAccounts() {
+        backendScope.launch {
+            com.example.gemini.data.remote.AgyAccountStore.list()
+                .onSuccess { _agyAccounts.value = it }
+                .onFailure { android.util.Log.d("ChatViewModel", "AGY account list failed: ${it.message}") }
+        }
+    }
+
+    /** Saves the account AGY is signed into, so it can be switched back to later. */
+    fun saveCurrentAgyAccount(notify: Boolean = true, onDone: ((Boolean) -> Unit)? = null) {
+        backendScope.launch {
+            val info = _agyAuthInfo.value
+            val result = com.example.gemini.data.remote.AgyAccountStore.saveCurrent(
+                label = "",
+                promptCredits = info.availablePromptCredits,
+                flowCredits = info.availableFlowCredits,
+                plan = info.planName.ifBlank { info.userTier }
+            )
+            result.onSuccess {
+                if (notify) _authFeedbackMessage.tryEmit("Account saved: ${it.email}")
+                refreshAgyAccounts()
+            }.onFailure {
+                _authFeedbackMessage.tryEmit("Could not save this account: ${it.message}")
+            }
+            onDone?.invoke(result.isSuccess)
+        }
+    }
+
+    /**
+     * Adds another AGY account: keeps a snapshot of the current one, signs out, and starts the normal
+     * Google sign-in. The account that comes back from the browser is saved automatically.
+     */
+    fun addAgyAccount() {
+        if (_agyAccountsBusy.value) return
+        if (!isNetworkConnected()) {
+            _authFeedbackMessage.tryEmit("Cannot add an account: no internet connection.")
+            return
+        }
+        _agyAccountsBusy.value = true
+        backendScope.launch {
+            val info = _agyAuthInfo.value
+            val saved = com.example.gemini.data.remote.AgyAccountStore.saveCurrent(
+                label = "",
+                promptCredits = info.availablePromptCredits,
+                flowCredits = info.availableFlowCredits,
+                plan = info.planName.ifBlank { info.userTier }
+            )
+            if (saved.isFailure) {
+                _authFeedbackMessage.tryEmit("Could not save the current account: ${saved.exceptionOrNull()?.message}")
+                _agyAccountsBusy.value = false
+                return@launch
+            }
+            refreshAgyAccounts()
+
+            // Only sign out once the current account is safely on disk.
+            runCatching { agyHubClient.authLogout(AuthPreferences.currentHubUrl) }
+            _agyAuthInfo.value = com.example.gemini.data.remote.AgyHubClient.AgyAuthInfo(
+                status = com.example.gemini.data.remote.AgyHubClient.AgyAuthStatus.UNAUTHENTICATED,
+                isLoggedIn = false
+            )
+            agyBridgeService.updateAuthState(isAuth = false, isChecking = false)
+            pendingAccountSave = true
+            _authFeedbackMessage.tryEmit("Current account saved. Sign in with the account you want to add.")
+            _isAuthBusy.value = false
+            loginToAgyHub(force = true)
+            _agyAccountsBusy.value = false
+        }
+    }
+
+    /** Called whenever a sign-in completes, to store the account when "add account" asked for it. */
+    private fun maybeSavePendingAccount() {
+        if (!pendingAccountSave) return
+        pendingAccountSave = false
+        saveCurrentAgyAccount(notify = true)
+    }
+
+    /**
+     * Switches AGY to a saved account. The hub is restarted by the bridge, so the swap is polled until
+     * it finishes. Blocked while a reply or task is running: the restart would cut it off.
+     */
+    fun switchAgyAccount(account: com.example.gemini.data.remote.AgyAccount) {
+        if (_agyAccountsBusy.value) return
+        if (isAnyGenerationOrTaskActive.value) {
+            _authFeedbackMessage.tryEmit("Wait for the current answer to finish before switching accounts.")
+            return
+        }
+        _agyAccountsBusy.value = true
+        backendScope.launch {
+            val info = _agyAuthInfo.value
+            val started = com.example.gemini.data.remote.AgyAccountStore.switchTo(
+                id = account.id,
+                promptCredits = info.availablePromptCredits,
+                flowCredits = info.availableFlowCredits,
+                plan = info.planName.ifBlank { info.userTier }
+            )
+            if (started.isFailure) {
+                _authFeedbackMessage.tryEmit("Cannot switch account: ${started.exceptionOrNull()?.message}")
+                refreshAgyAccounts()
+                _agyAccountsBusy.value = false
+                return@launch
+            }
+
+            _authFeedbackMessage.tryEmit("Switching to ${account.displayName}…")
+            var phase = "switching"
+            var message = ""
+            val startTime = System.currentTimeMillis()
+            while (System.currentTimeMillis() - startTime < 180_000) {
+                delay(1500)
+                val state = com.example.gemini.data.remote.AgyAccountStore.status().getOrNull() ?: continue
+                // status() only reports the swap; merge it so the account list stays on screen.
+                _agyAccounts.value = _agyAccounts.value.copy(
+                    switchPhase = state.switchPhase,
+                    switchMessage = state.switchMessage,
+                    switchTargetId = state.switchTargetId,
+                    switchTargetEmail = state.switchTargetEmail
+                )
+                phase = state.switchPhase
+                message = state.switchMessage
+                if (phase == "ready" || phase == "failed") break
+            }
+
+            if (phase == "ready") {
+                _authFeedbackMessage.tryEmit("Switched to ${account.displayName}.")
+                checkAgyAuthStatus(userInitiated = false)
+                refreshQuotas(force = true)
+            } else if (phase == "failed") {
+                _authFeedbackMessage.tryEmit(message.ifBlank { "Account switch failed; the previous account is still active." })
+            } else {
+                _authFeedbackMessage.tryEmit("Account switch is taking too long. Check Settings once the hub is back.")
+            }
+            refreshAgyAccounts()
+            _agyAccountsBusy.value = false
+        }
+    }
+
+    fun deleteAgyAccount(account: com.example.gemini.data.remote.AgyAccount) {
+        backendScope.launch {
+            com.example.gemini.data.remote.AgyAccountStore.delete(account.id)
+                .onSuccess {
+                    _authFeedbackMessage.tryEmit("Removed ${account.displayName}.")
+                    refreshAgyAccounts()
+                }
+                .onFailure { _authFeedbackMessage.tryEmit("Could not remove the account: ${it.message}") }
+        }
+    }
+
+    fun renameAgyAccount(account: com.example.gemini.data.remote.AgyAccount, label: String) {
+        backendScope.launch {
+            com.example.gemini.data.remote.AgyAccountStore.label(account.id, label)
+                .onSuccess { refreshAgyAccounts() }
+                .onFailure { _authFeedbackMessage.tryEmit("Could not rename the account: ${it.message}") }
         }
     }
 

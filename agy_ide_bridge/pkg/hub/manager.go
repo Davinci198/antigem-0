@@ -685,6 +685,60 @@ func (m *HubManager) Stop() {
 	m.setStatus(HubStatusStopped, "")
 }
 
+// Port reports the hub port the supervisor talks to.
+func (m *HubManager) Port() string {
+	return m.HubPort
+}
+
+// Restart stops the hub, waits for the port to be actually free, and starts a
+// fresh process. AGY reads its credential file once, at startup, and keeps the
+// refreshed token in memory; a plain Stop()+Start() is not enough because Start()
+// probes the port first and would treat the still-closing old process as external,
+// skipping the restart and leaving the old account signed in.
+func (m *HubManager) Restart() error {
+	if m.Disabled {
+		return fmt.Errorf("Antigravity is turned off in the app")
+	}
+
+	m.Stop()
+
+	// Stop() signals the child and waits at most a second; the socket can linger longer.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if !m.IsPortActive() {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	if m.IsPortActive() {
+		// The hub was started outside this bridge (isExternal), so Stop() left it alone.
+		_ = exec.Command("pkill", "-9", "-f", "agy --hub").Run()
+		_ = exec.Command("pkill", "-9", "-f", "--hub-port=").Run()
+		for i := 0; i < 40; i++ {
+			if !m.IsPortActive() {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	if m.IsPortActive() {
+		return fmt.Errorf("the AGY hub on port %s is still running and could not be stopped", m.HubPort)
+	}
+
+	// The monitor goroutine exits when Stop() closes monitorStop; re-arm it for the new process.
+	m.mu.Lock()
+	select {
+	case <-m.monitorStop:
+		m.monitorStop = make(chan struct{})
+	default:
+	}
+	m.mu.Unlock()
+	m.StartContinuousMonitor()
+
+	return m.Start()
+}
+
 func (m *HubManager) handleHubLine(line string) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {

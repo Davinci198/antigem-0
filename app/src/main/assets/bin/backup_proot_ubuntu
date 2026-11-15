@@ -47,6 +47,7 @@ EXCLUDE_PATTERNS=(
     "root/.gemini/jetski-standalone-oauth-token*"
     "root/.gemini/*oauth*"
     "root/.gemini/*token*"
+    "root/.antigem/agy-accounts/*"
     "root/.bash_history"
     "root/.zsh_history"
     "root/.antigem_bridge/*token*"
@@ -91,6 +92,7 @@ TOTAL_FILES=$( { find . "${FIND_PRUNE[@]}" \
        -a ! -path "./root/.gemini/jetski-standalone-oauth-token*" \
        -a ! -path "./root/.gemini/*oauth*" \
        -a ! -path "./root/.gemini/*token*" \
+       -a ! -path "./root/.antigem/agy-accounts/*" \
        -a ! -path "./root/.bash_history" \
        -a ! -path "./root/.zsh_history" \
        -a ! -path "./root/.antigem_bridge/*token*" \

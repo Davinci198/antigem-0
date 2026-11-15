@@ -27,18 +27,31 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Login
 import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +67,8 @@ import androidx.compose.ui.window.Dialog
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.example.gemini.data.agent.claude.ClaudeCliStatus
+import com.example.gemini.data.remote.AgyAccount
+import com.example.gemini.data.remote.AgyAccountsState
 import com.example.gemini.data.remote.AgyHubClient
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.components.accent
@@ -178,6 +193,15 @@ fun AccountsDialog(
     openCode: AgentStatusEntry? = null,
     openCodeFacts: List<String> = emptyList(),
     onOpenCodeSettings: () -> Unit = {},
+    agyAccounts: AgyAccountsState = AgyAccountsState(),
+    agyAccountsBusy: Boolean = false,
+    agySwitchBlocked: Boolean = false,
+    onAgyAddAccount: () -> Unit = {},
+    onAgySwitchAccount: (AgyAccount) -> Unit = {},
+    onAgyDeleteAccount: (AgyAccount) -> Unit = {},
+    onAgyRenameAccount: (AgyAccount, String) -> Unit = { _, _ -> },
+    onAgyRefreshAccounts: () -> Unit = {},
+    onAgySaveCurrentAccount: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -238,6 +262,21 @@ fun AccountsDialog(
                     }
                 }
 
+                if (agy?.isReady == true) {
+                    Spacer(Modifier.height(8.dp))
+                    AgyAccountsList(
+                        state = agyAccounts,
+                        busy = agyAccountsBusy,
+                        switchBlocked = agySwitchBlocked,
+                        onSwitch = onAgySwitchAccount,
+                        onDelete = onAgyDeleteAccount,
+                        onRename = onAgyRenameAccount,
+                        onRefresh = onAgyRefreshAccounts,
+                        onSaveCurrent = onAgySaveCurrentAccount,
+                        onAdd = onAgyAddAccount
+                    )
+                }
+
                 if (agy != null && claude != null) Spacer(Modifier.height(12.dp))
 
                 claude?.let { entry ->
@@ -296,6 +335,269 @@ fun AccountsDialog(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Saved AGY accounts under the main AGY card. AGY only keeps one account on disk, so the list is
+ * about swapping: a saved account can be activated (hub restart, blocked while AGY is replying),
+ * renamed or removed. Credits of the inactive accounts are the last numbers seen before switching.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AgyAccountsList(
+    state: AgyAccountsState,
+    busy: Boolean,
+    switchBlocked: Boolean,
+    onSwitch: (AgyAccount) -> Unit,
+    onDelete: (AgyAccount) -> Unit,
+    onRename: (AgyAccount, String) -> Unit,
+    onRefresh: () -> Unit,
+    onSaveCurrent: () -> Unit,
+    onAdd: () -> Unit
+) {
+    var renameTarget by remember { mutableStateOf<AgyAccount?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    val accent = AgentKind.AGY.accent()
+    // The signed-in account is only worth saving when it is not already in the list.
+    val currentSaved = state.activeEmail.isNotBlank() &&
+        state.accounts.any { it.email.equals(state.activeEmail, ignoreCase = true) }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.03f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Saved accounts",
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(13.dp),
+                        strokeWidth = 1.5.dp,
+                        color = accent
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                IconButton(onClick = onRefresh, enabled = !busy, modifier = Modifier.size(26.dp)) {
+                    Icon(
+                        Icons.Outlined.Refresh,
+                        "Refresh saved accounts",
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = if (busy) 0.3f else 0.6f)
+                    )
+                }
+            }
+
+            if (state.accounts.isEmpty()) {
+                Text(
+                    "The account you are signed into is not saved yet. Save it to switch back to it later.",
+                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                )
+            } else {
+                state.accounts.forEach { account ->
+                    AgyAccountRow(
+                        account = account,
+                        isActive = state.isActive(account),
+                        busy = busy,
+                        switchBlocked = switchBlocked,
+                        onSwitch = { onSwitch(account) },
+                        onEdit = {
+                            renameTarget = account
+                            renameText = account.label
+                        },
+                        onDelete = { onDelete(account) }
+                    )
+                }
+            }
+
+            if (busy && state.switchMessage.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    state.switchMessage,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            if (busy) {
+                Text(
+                    "Working…",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            } else {
+                // "Save current" never signs out; "Add account" does, to sign in with another Google account.
+                if (!currentSaved) {
+                    SectionButton(
+                        "Save current account",
+                        Icons.Outlined.Check,
+                        primary = if (state.accounts.isEmpty()) accent else null
+                    ) { onSaveCurrent() }
+                }
+                SectionButton(
+                    "Add account",
+                    Icons.Outlined.Add,
+                    primary = if (currentSaved) accent else null
+                ) { onAdd() }
+            }
+            if (switchBlocked && state.accounts.any { !state.isActive(it) }) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Switching is disabled while AGY is answering.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                )
+            }
+        }
+    }
+
+    renameTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename account", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Column {
+                    Text(target.email, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        singleLine = true,
+                        label = { Text("Name") },
+                        placeholder = { Text(target.email) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRename(target, renameText.trim())
+                    renameTarget = null
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AgyAccountRow(
+    account: AgyAccount,
+    isActive: Boolean,
+    busy: Boolean,
+    switchBlocked: Boolean,
+    onSwitch: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val accent = AgentKind.AGY.accent()
+    val subtitle = when {
+        account.needsRelogin -> "Sign in again for this account"
+        account.promptCredits != null && account.promptCredits <= 0L -> "Out of prompt credits"
+        account.promptCredits != null -> "${account.promptCredits} prompt credits left"
+        else -> "Credits not checked yet"
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(24.dp).clip(CircleShape).background(accent.copy(alpha = if (isActive) 0.9f else 0.25f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                (account.displayName.firstOrNull() ?: '•').uppercaseChar().toString(),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (isActive) Color.White else accent
+            )
+        }
+        Spacer(Modifier.width(9.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                account.displayName,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                if (account.displayName != account.email) account.email else subtitle,
+                fontSize = 10.5.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (account.displayName != account.email) {
+                Text(
+                    subtitle,
+                    fontSize = 10.5.sp,
+                    color = if (account.needsRelogin) Color(0xFFEF4444) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (isActive) {
+            Text(
+                "Active",
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = accent,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(accent.copy(alpha = 0.12f))
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
+            )
+            IconButton(onClick = onEdit, enabled = !busy, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Outlined.Edit,
+                    "Rename ${account.email}",
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = if (busy) 0.3f else 0.6f)
+                )
+            }
+        } else {
+            IconButton(
+                onClick = onSwitch,
+                enabled = !busy && !switchBlocked,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.SwapHoriz,
+                    "Switch to ${account.email}",
+                    modifier = Modifier.size(16.dp),
+                    tint = accent.copy(alpha = if (busy || switchBlocked) 0.35f else 1f)
+                )
+            }
+            IconButton(onClick = onEdit, enabled = !busy, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Outlined.Edit,
+                    "Rename ${account.email}",
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = if (busy) 0.3f else 0.6f)
+                )
+            }
+            IconButton(onClick = onDelete, enabled = !busy, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Outlined.Delete,
+                    "Remove ${account.email}",
+                    modifier = Modifier.size(15.dp),
+                    tint = Color(0xFFEF4444).copy(alpha = if (busy) 0.35f else 0.9f)
+                )
             }
         }
     }
