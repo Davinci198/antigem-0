@@ -236,11 +236,20 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if body.ProviderID != "" {
 		if p := findAppProvider(m.homeDir, body.ProviderID); p != nil {
 			// Hermes runs a custom endpoint as provider "custom" with the
-			// endpoint and key carried on the session itself.
-			sess.gwProvider = "custom"
+			// endpoint and key carried on the session itself. Endpoints Hermes
+			// already speaks natively (Kilo's keyless gateway) ride their
+			// builtin slug instead: a custom route stamps a Bearer key and
+			// Kilo answers 401 to any non-empty token.
 			sess.gwProviderID = body.ProviderID
-			sess.gwBaseURL = p.BaseURL
-			sess.gwAPIKey = p.APIKey
+			if builtin := hermesBuiltinProvider(p.BaseURL); builtin != "" {
+				sess.gwProvider = builtin
+				sess.gwBaseURL = ""
+				sess.gwAPIKey = ""
+			} else {
+				sess.gwProvider = "custom"
+				sess.gwBaseURL = p.BaseURL
+				sess.gwAPIKey = p.APIKey
+			}
 			if body.Model == "" && len(p.Models) > 0 {
 				sess.gwModel = p.Models[0].ID
 			}

@@ -147,6 +147,32 @@ private val PRESETS = listOf(
             models = listOf(ClaudeProviderModel("glm-4.6", "GLM 4.6", context_length = 200_000))
         )
     ),
+    Preset(
+        "Kilo Free", "Kilo's keyless free gateway (x-api-key; any non-empty Bearer is rejected).",
+        ClaudeProvider(
+            name = "Kilo Free", base_url = "https://api.kilo.ai/api/gateway",
+            api_key = "no-key-required", auth_mode = "x-api-key",
+            models_url = "https://api.kilo.ai/api/gateway/v1/models",
+            models = listOf(
+                ClaudeProviderModel("nvidia/nemotron-3.5-lightning:free", "Nemotron 3.5 Lightning (free)", context_length = 1_000_000),
+                ClaudeProviderModel("nvidia/nemotron-3.5-super-vl:free", "Nemotron 3.5 Super VL (free)", context_length = 1_000_000),
+                ClaudeProviderModel("nvidia/nemotron-3-ultra-550b-a55b:free", "Nemotron 3 Ultra (free)", context_length = 1_000_000),
+                ClaudeProviderModel("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "Nemotron 3 Nano Omni (free)", context_length = 256_000),
+                ClaudeProviderModel("kilo-auto/free", "Auto Free", context_length = 256_000),
+                ClaudeProviderModel("baidu/ernie-5.5-flash-preview:free", "ERNIE 5.5 Flash (free)", context_length = 1_024_000),
+                ClaudeProviderModel("inclusionai/ling-3.2-flash:free", "Ling 3.2 Flash (free)", context_length = 1_048_576),
+                ClaudeProviderModel("particle-ai/particle-1:free", "Particle-1 (free)", context_length = 1_048_576),
+                ClaudeProviderModel("dots-studio/dots-3-note-preview:free", "Dots3-Note Preview (free)", context_length = 512_000),
+                ClaudeProviderModel("reflection/beam-free", "Beam 1.0 (Free)", context_length = 1_048_576),
+                ClaudeProviderModel("humansand/ampersand-v0.1", "Ampersand v0.1", context_length = 1_000_000),
+                ClaudeProviderModel("cohere/north-mini-code:free", "North Mini Code (free)", context_length = 256_000),
+                ClaudeProviderModel("liquid/lfm-3-1.7b:free", "LFM3-1.7B (free)", context_length = 262_144),
+                ClaudeProviderModel("stealth/glyph-cluster", "Glyph Cluster", context_length = 256_000),
+                ClaudeProviderModel("openrouter/free", "OpenRouter Free Models Router", context_length = 200_000),
+                ClaudeProviderModel("openrouter/auto", "Auto Router", context_length = 2_000_000)
+            )
+        )
+    ),
     Preset("Custom", "Any endpoint that speaks the Anthropic Messages API.", ClaudeProvider())
 )
 

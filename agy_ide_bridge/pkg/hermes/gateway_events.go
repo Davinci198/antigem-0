@@ -335,11 +335,23 @@ func (m *Manager) handleSetModel(w http.ResponseWriter, r *http.Request, sess *S
 		}
 		sess.mu.Lock()
 		sess.gwModel = body.Model
-		sess.gwProvider = "custom"
 		sess.gwProviderID = body.ProviderID
-		sess.gwBaseURL = p.BaseURL
-		sess.gwAPIKey = p.APIKey
-		live := gwID != "" && sess.gwProviderAtCreate != "custom"
+		// Endpoints Hermes already speaks natively (Kilo) ride their builtin
+		// slug with no base_url/key; anything else stays on "custom".
+		if builtin := hermesBuiltinProvider(p.BaseURL); builtin != "" {
+			sess.gwProvider = builtin
+			sess.gwBaseURL = ""
+			sess.gwAPIKey = ""
+		} else {
+			sess.gwProvider = "custom"
+			sess.gwBaseURL = p.BaseURL
+			sess.gwAPIKey = p.APIKey
+		}
+		// A gateway session is pinned to whatever created it: the Hermes
+		// default (""), an app custom endpoint ("custom"), or a builtin
+		// (kilo). Only the default takes a mid-chat provider switch as
+		// deferred-to-next-chat; pinned sessions keep the wire they started on.
+		live := gwID != "" && sess.gwProviderAtCreate == ""
 		sess.mu.Unlock()
 		m.persistSession(sess)
 		if live {
@@ -472,6 +484,24 @@ func normalizeBaseURL(raw string) string {
 		}
 	}
 	return base
+}
+
+// hermesBuiltinProvider maps an app provider's base URL to the Hermes builtin
+// provider slug that already speaks that endpoint, or "" when none matches.
+//
+// Kilo's gateway answers 200 to a keyless OpenAI wire but 401 INVALID_TOKEN to
+// any non-empty Authorization Bearer, so a session must reach it as builtin
+// provider "kilo" (no base_url/api_key on the wire). Routing it as anonymous
+// "custom" always stamps a key and dies.
+func hermesBuiltinProvider(baseURL string) string {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return ""
+	}
+	if strings.EqualFold(u.Hostname(), "api.kilo.ai") {
+		return "kilo"
+	}
+	return ""
 }
 
 // findAppProvider returns the provider with this id, or nil.
@@ -686,7 +716,9 @@ func probeOpenAICompatible(baseURL, apiKey, model string, timeout time.Duration)
 		return 0, err.Error()
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
+	// Kilo's gateway 401s on any non-empty Bearer (even a placeholder), so a
+	// builtin-routed base is probed keyless — the same wire the turns use.
+	if apiKey != "" && hermesBuiltinProvider(baseURL) == "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	client := &http.Client{Timeout: timeout}

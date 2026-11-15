@@ -135,10 +135,19 @@ func (m *Manager) restoreSession(id string) *Session {
 	}
 	if rec.ProviderID != "" {
 		if p := findAppProvider(m.homeDir, rec.ProviderID); p != nil {
-			s.gwProvider = "custom"
-			s.gwBaseURL = p.BaseURL
-			s.gwAPIKey = p.APIKey
-			s.gwProviderAtCreate = "custom"
+			// Same mapping as handleCreate: a builtin base (Kilo) restores as
+			// its Hermes slug with no wire key, so a reopened chat does not
+			// revert to "custom" and 401.
+			if builtin := hermesBuiltinProvider(p.BaseURL); builtin != "" {
+				s.gwProvider = builtin
+				s.gwBaseURL = ""
+				s.gwAPIKey = ""
+			} else {
+				s.gwProvider = "custom"
+				s.gwBaseURL = p.BaseURL
+				s.gwAPIKey = p.APIKey
+			}
+			s.gwProviderAtCreate = s.gwProvider
 		}
 	}
 	m.mu.Lock()
