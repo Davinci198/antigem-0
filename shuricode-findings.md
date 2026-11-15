@@ -5,6 +5,13 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
+## Scan `2ae4daac` — commit `f2bb7ea` (master after PR #50, Kilo Free)
+fix=0 · rotate=1 · policy=0 · ignore=8. The Kilo Free endpoint (builtin routing in
+`pkg/hermes`, one-shot seeds in `pkg/claude`/`pkg/opencode`, the keyless `writeConfig`
+fix, and the Claude preset) added no findings — the seeded placeholder key is a
+documented no-op (`x-api-key: no-key-required`), not a real credential. ① (the embedded
+Google OAuth secret) is still the only rotate item, reported fresh as `f9f8841a`.
+
 ## Scan `fc0a7ed3` — commit `88170d3` (master after PR #48, the AGY multi-account)
 fix=0 · rotate=1 · policy=0 · ignore=8. No new findings: the AGY multi-account feature
 (credential-profile store in the guest, swap handlers, account UI) did not move the register —
