@@ -20,6 +20,8 @@ import (
 
 	// DNS for Android (no /etc/resolv.conf there); a package so `go build main.go` includes it too
 	_ "gemini-server/pkg/androiddns"
+
+	"gemini-server/pkg/agyaccounts"
 	"gemini-server/pkg/claude"
 	"gemini-server/pkg/config"
 	"gemini-server/pkg/handlers"
@@ -381,6 +383,13 @@ func main() {
 	mux.HandleFunc("/api/shutdown", h.ShutdownHandler)
 	mux.HandleFunc("/api/auth/login-url", h.GetLoginURLHandler)
 	mux.HandleFunc("/api/auth/start-login", h.StartLoginHandler)
+	// Multi-account AGY: saved credential snapshots and the swap between them
+	mux.HandleFunc("/api/agy/accounts", h.AgyAccountsHandler)
+	mux.HandleFunc("/api/agy/accounts/save", h.AgyAccountsSaveHandler)
+	mux.HandleFunc("/api/agy/accounts/switch", h.AgyAccountsSwitchHandler)
+	mux.HandleFunc("/api/agy/accounts/status", h.AgyAccountsStatusHandler)
+	mux.HandleFunc("/api/agy/accounts/delete", h.AgyAccountsDeleteHandler)
+	mux.HandleFunc("/api/agy/accounts/label", h.AgyAccountsLabelHandler)
 	mux.HandleFunc("/api/models", h.ModelsHandler)
 	mux.HandleFunc("/api/models/refresh", h.ModelsHandler)
 	mux.HandleFunc("/api/quotas", h.QuotasHandler)
@@ -651,6 +660,7 @@ func main() {
 		hubMgr.SetStopped()
 	}
 	h.HubManager = hubMgr
+	h.Accounts = agyaccounts.NewManager(cfg.HomeDir, hubMgr)
 	wsHub.StatusProv = hubMgr
 	wsHub.HubPort = hubPort
 	hubMgr.OnLoginURL = h.HandleLoginURL

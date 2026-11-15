@@ -58,6 +58,7 @@ EXCLUDE_PATTERNS=(
     "home/.gemini/jetski-standalone-oauth-token*"
     "home/.gemini/*oauth*"
     "home/.gemini/*token*"
+    "home/.antigem/agy-accounts/*"
     "home/.bash_history"
     "home/.zsh_history"
 )
@@ -72,6 +73,7 @@ TOTAL_FILES=$( { find usr home \
        -a ! -path "home/.gemini/jetski-standalone-oauth-token*" \
        -a ! -path "home/.gemini/*oauth*" \
        -a ! -path "home/.gemini/*token*" \
+       -a ! -path "home/.antigem/agy-accounts/*" \
        -a ! -name ".bash_history" \
        -a ! -name ".zsh_history" \
     \) 2>/dev/null || true; } | wc -l)

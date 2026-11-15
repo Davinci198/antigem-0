@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"gemini-server/pkg/agyaccounts"
 	"gemini-server/pkg/config"
 	"gemini-server/pkg/hub"
 	"gemini-server/pkg/models"
@@ -45,6 +46,7 @@ type Handler struct {
 	HubManager *hub.HubManager
 	Hub        Broadcaster
 	OnShutdown func()
+	Accounts   *agyaccounts.Manager
 
 	lastLoginURL   string
 	lastLoginURLMu sync.RWMutex

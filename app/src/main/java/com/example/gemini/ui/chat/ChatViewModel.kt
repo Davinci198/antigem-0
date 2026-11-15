@@ -263,6 +263,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun checkAgyAuthStatus(userInitiated: Boolean = false) = agyBackend.checkAgyAuthStatus(userInitiated)
     fun loginToAgyHub(force: Boolean = false) = agyBackend.loginToAgyHub(force)
     fun logoutFromAgyHub() = agyBackend.logoutFromAgyHub()
+    val agyAccounts = agyBackend.agyAccounts
+    val agyAccountsBusy = agyBackend.agyAccountsBusy
+    fun refreshAgyAccounts() = agyBackend.refreshAgyAccounts()
+    fun addAgyAccount() = agyBackend.addAgyAccount()
+    fun switchAgyAccount(account: com.example.gemini.data.remote.AgyAccount) = agyBackend.switchAgyAccount(account)
+    fun deleteAgyAccount(account: com.example.gemini.data.remote.AgyAccount) = agyBackend.deleteAgyAccount(account)
+    fun renameAgyAccount(account: com.example.gemini.data.remote.AgyAccount, label: String) = agyBackend.renameAgyAccount(account, label)
+    fun saveCurrentAgyAccount() = agyBackend.saveCurrentAgyAccount()
     val activeInstances = agyBackend.activeInstances
     val isAnyGenerationOrTaskActive = agyBackend.isAnyGenerationOrTaskActive
     val isCurrentChatActivelyRunning = byAgent(agyBackend.isCurrentChatActivelyRunning, claudeBackend.isCurrentChatActivelyRunning, agyBackend.isCurrentChatActivelyRunning, openCodeBackend.isCurrentChatActivelyRunning)
