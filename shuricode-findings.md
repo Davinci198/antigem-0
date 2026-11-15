@@ -5,6 +5,11 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
+## Scan `fc0a7ed3` — commit `88170d3` (master after PR #48, the AGY multi-account)
+fix=0 · rotate=1 · policy=0 · ignore=8. No new findings: the AGY multi-account feature
+(credential-profile store in the guest, swap handlers, account UI) did not move the register —
+① (the embedded Google OAuth secret) is still the only rotate item, reported fresh as `f9f8841a`.
+
 ## Scan `3b45e2f6` — commit `530614a` (master after PR #46, the Codex removal)
 fix=0 · rotate=1 · policy=0 · ignore=8. The confirming scan promised by `d047be64`: the Codex
 removal (PR #46) added no findings and closed none either — the register did not move. ① (the
