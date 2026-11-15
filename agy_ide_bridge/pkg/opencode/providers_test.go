@@ -79,7 +79,9 @@ func TestCustomProvidersRoundTrip(t *testing.T) {
 		t.Fatalf("model missing: %+v", o.Models)
 	}
 	a := cfg.Providers["my-local-ollama-2"]
-	if a.Package != "@opencode/ai/providers/anthropic-compatible" || a.Settings["apiKey"] != "none" {
+	// a keyless entry must carry an empty apiKey, not a placeholder Bearer:
+	// Kilo's gateway 401s on any non-empty token (the old "none" did).
+	if a.Package != "@opencode/ai/providers/anthropic-compatible" || a.Settings["apiKey"] != "" {
 		t.Fatalf("anthropic provider config: %+v", a)
 	}
 	if l, ok := cfg.Providers["lmstudio"]; !ok || l.Settings["baseURL"] != "" {

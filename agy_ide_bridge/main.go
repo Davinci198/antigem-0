@@ -334,6 +334,13 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	// Seed the shared Kilo Free endpoint into the Claude and OpenCode stores
+	// once (marker files make it one-shot). Hermes reads
+	// ~/.claude/agy_providers.json directly for its model picker, so this runs
+	// even when a manager below is flag-gated off.
+	claude.SeedKiloFree(cfg.HomeDir)
+	opencode.SeedKiloFree(cfg.HomeDir)
+
 	// Claude Code CLI sessions (process manager + NDJSON WebSocket relay); off with --no-claude
 	var claudeMgr *claude.Manager
 	if noClaude {

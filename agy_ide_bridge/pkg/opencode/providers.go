@@ -120,8 +120,11 @@ func (m *Manager) writeConfig() error {
 		if p.APIKey != "" {
 			settings["apiKey"] = p.APIKey
 		} else {
-			// local servers (Ollama, LM Studio) take no key, but the SDK wants one
-			settings["apiKey"] = "none"
+			// Keyless endpoints (Kilo's gateway, local servers) must send no
+			// Authorization at all: "" is omitted by the SDK, while the old
+			// "none" placeholder was a non-empty Bearer — Kilo answered 401
+			// INVALID_TOKEN to it (measured: omitted/"" → 200).
+			settings["apiKey"] = ""
 		}
 		models := map[string]interface{}{}
 		for _, md := range p.Models {
