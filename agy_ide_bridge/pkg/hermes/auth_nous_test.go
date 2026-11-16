@@ -83,3 +83,47 @@ func TestCreateRoutesNousToBuiltin(t *testing.T) {
 		t.Fatalf("Nous builtin must not carry endpoint or key: base=%q key=%q", baseURL, apiKey)
 	}
 }
+
+// A Nous pick on a chat that has no gateway session yet must land on the
+// session itself (model + builtin provider, no endpoint or key): the next turn
+// creates the gateway session from these fields, and that is the only path that
+// ever ran a Nous model correctly.
+func TestNousModelPickPersistsForTheNextTurn(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".hermes"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".hermes", "auth.json"),
+		[]byte(`{"providers":{"nous":{"access_token":"token"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{homeDir: home, sessions: make(map[string]*Session)}
+	id := "nous-pick-session"
+	m.session(id)
+
+	body := `{"model":"meituan/longcat-2.5:free","provider_id":"nous"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/hermes/sessions/"+id+"/model", strings.NewReader(body))
+	res := httptest.NewRecorder()
+	m.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("model pick returned %d: %s", res.Code, res.Body.String())
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["deferred"] != true {
+		t.Fatalf("a chat without a gateway session must defer to create, got %v", payload)
+	}
+
+	s := m.session(id)
+	s.mu.Lock()
+	model, provider, baseURL, apiKey := s.gwModel, s.gwProvider, s.gwBaseURL, s.gwAPIKey
+	s.mu.Unlock()
+	if model != "meituan/longcat-2.5:free" || provider != "nous" {
+		t.Fatalf("stored model/provider = %q/%q", model, provider)
+	}
+	if baseURL != "" || apiKey != "" {
+		t.Fatalf("Nous builtin must not carry endpoint or key: base=%q key=%q", baseURL, apiKey)
+	}
+}

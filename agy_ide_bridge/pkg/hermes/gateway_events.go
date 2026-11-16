@@ -341,6 +341,31 @@ func (m *Manager) handleSetModel(w http.ResponseWriter, r *http.Request, sess *S
 			sess.gwAPIKey = ""
 			sess.mu.Unlock()
 			m.persistSession(sess)
+			if gwID == "" {
+				writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true,
+					"message": "Nous model applies to the new chat."})
+				return
+			}
+			// Apply the pick to the chat that is already open. A gateway session
+			// keeps running the model/provider it was created with, and a Nous
+			// account's configured default is a *paid* model: a deferred pick made
+			// every turn of the chat answer "requires available credits" even after
+			// the user chose a free model here. The gateway accepts a live model
+			// pick together with its provider (session.mutate -> model switch).
+			if err := m.gw.ensure(); err == nil {
+				res, serr := m.gw.setModel(gwID, body.Model, "nous")
+				if serr == nil {
+					if status, _ := res["status"].(string); status == "confirmation_required" {
+						msg, _ := res["confirm_message"].(string)
+						writeJSON(w, http.StatusOK, obj{"success": false, "error": msg,
+							"message": "Hermes asks for confirmation before this model (cost guard); confirm it in a Hermes terminal or start a new chat."})
+						return
+					}
+					writeJSON(w, http.StatusOK, obj{"success": true, "model": res["model"]})
+					return
+				}
+				log.Printf("[hermes] nous model switch failed on %s: %v", shortID(gwID), serr)
+			}
 			writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true,
 				"message": "Nous model applies from the next chat."})
 			return
