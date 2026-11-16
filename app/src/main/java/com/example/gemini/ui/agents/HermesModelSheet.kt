@@ -109,7 +109,9 @@ fun HermesModelSheet(
     // smart default: after a scan a 300-model list is useless with the dead
     // ones mixed in, so "Working" is the sensible default; when everything is
     // dead ALL is the only filter that still shows a row, and its error reasons
-    // are what the user needs to see.
+    // are what the user needs to see. Models with no verdict at all stay visible
+    // under "Working": a provider added after the last scan (Nous, right after
+    // the sign-in) would otherwise look like it has no models.
     // Providers whose models are folded away. Expanded by default: the header
     // carries the provider name the flat list used to repeat on every row.
     var collapsedProviders by remember { mutableStateOf(setOf<String>()) }
@@ -152,7 +154,11 @@ fun HermesModelSheet(
             e.providerLabel.contains(search, true)
         val matchesFilter = when (filter) {
             ScanFilter.ALL -> true
-            ScanFilter.WORKING -> health[e.key]?.ok == true
+            // "Working" hides the models a scan proved dead, not the ones nothing
+            // has measured yet: a provider that was just added (Nous, right after
+            // the sign-in) has no verdict at all, and hiding it made a full
+            // catalog look empty.
+            ScanFilter.WORKING -> health[e.key]?.ok != false
             ScanFilter.BROKEN -> health[e.key]?.ok == false
         }
         matchesQuery && matchesFilter
@@ -304,6 +310,7 @@ fun HermesModelSheet(
                             item(key = "provider:$providerId") {
                                 val groupOk = entries.count { health[it.key]?.ok == true }
                                 val groupBroken = entries.count { health[it.key]?.ok == false }
+                                val groupUnmeasured = entries.count { health[it.key] == null }
                                 CollapsibleSheetSection(
                                     title = entries.first().providerLabel,
                                     trailing = when {
@@ -311,7 +318,11 @@ fun HermesModelSheet(
                                             (scanningProvider == null || scanningProvider == providerId) &&
                                             entries.any { health[it.key] == null } -> "measuring…"
                                         groupOk + groupBroken == 0 -> "${entries.size} modele"
-                                        else -> "$groupOk funcționale · $groupBroken defecte"
+                                        else -> listOfNotNull(
+                                            groupOk.takeIf { it > 0 }?.let { "$it funcționale" },
+                                            groupUnmeasured.takeIf { it > 0 }?.let { "$it nemăsurate" },
+                                            groupBroken.takeIf { it > 0 }?.let { "$it defecte" },
+                                        ).joinToString(" · ")
                                     },
                                     expanded = providerId !in collapsedProviders,
                                     onToggle = {
@@ -370,7 +381,13 @@ fun HermesModelSheet(
                                             )
                                             Column(Modifier.weight(1f)) {
                                                 Text(e.label, fontWeight = if (isSel) FontWeight.Bold else FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
-                                                Text("${e.providerLabel} · ${e.modelId}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), maxLines = 1)
+                                                Text(
+                                                    "${e.providerLabel} · ${e.modelId}" +
+                                                        if (e.needsCredits) " · necesită credite" else "",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                                    maxLines = 1,
+                                                )
                                             }
                                             v?.let { r ->
                                                 Text(

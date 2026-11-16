@@ -78,7 +78,18 @@ private fun scanFailureVerdict(reason: String) = HermesModelHealth(
 )
 
 /** One provider row of Hermes' own model picker (the gateway's model.options). */
-data class HermesPresetProvider(val slug: String, val name: String, val models: List<String>)
+data class HermesPresetProvider(
+    val slug: String,
+    val name: String,
+    val models: List<String>,
+    /**
+     * Models the gateway lists but flags as needing credits on the signed-in
+     * account (Nous Portal does this for everything outside the free tier).
+     * They stay selectable: the flag comes from the plan, and a probe can still
+     * answer, so it is a warning and not a verdict.
+     */
+    val unavailable: Set<String> = emptySet(),
+)
 
 /** One model of an app custom provider (the bridge strips the key). */
 data class HermesCustomModel(val id: String, val name: String)
@@ -111,6 +122,8 @@ data class HermesModelEntry(
     val providerId: String,
     val providerLabel: String,
     val isCustom: Boolean,
+    /** Gateway says this model needs credits on the current account. Still selectable. */
+    val needsCredits: Boolean = false,
 ) {
     /** Stable key for health results and list items. */
     val key: String get() = "$providerId|$modelId"
@@ -163,6 +176,7 @@ internal fun mergeHermesCatalog(
                     providerId = mirror.id,
                     providerLabel = mirror.name.ifBlank { mirror.id },
                     isCustom = true,
+                    needsCredits = id in preset.unavailable,
                 )
             }
         }
@@ -188,6 +202,7 @@ private fun presetEntry(preset: HermesPresetProvider, id: String) = HermesModelE
     providerId = preset.slug,
     providerLabel = preset.name.ifBlank { preset.slug },
     isCustom = false,
+    needsCredits = id in preset.unavailable,
 )
 
 /**
@@ -625,10 +640,17 @@ class HermesChatBackend(
                         }
                     }
                 }
+                val unavailable = mutableSetOf<String>()
+                p.optJSONArray("unavailable_models")?.let { arr ->
+                    for (j in 0 until arr.length()) {
+                        arr.optString(j).takeIf { it.isNotBlank() }?.let { unavailable += it }
+                    }
+                }
                 presets += HermesPresetProvider(
                     slug = p.optString("slug"),
                     name = p.optString("name").ifBlank { p.optString("slug") },
-                    models = ids
+                    models = ids,
+                    unavailable = unavailable,
                 )
             }
         }
