@@ -574,10 +574,23 @@ fun SettingsDialog(
                         val scope = rememberCoroutineScope()
                         com.example.gemini.ui.agents.HermesSettingsPage(
                             binaryPath = ap.getHermesBinaryPathSync(),
-                            providerCount = claude?.backend?.providers?.value?.size,
                             mcpCount = mcpServers.size,
                             pluginCount = installedPlugins.size,
                             onSaveBinaryPath = { path -> scope.launch { ap.saveHermesBinaryPath(path) } },
+                            onOpenProviders = {
+                                if (claude != null) {
+                                    claudePage = com.example.gemini.ui.claude.ClaudeSettingsPage.PROVIDERS
+                                    currentSection = SettingsSection.CLAUDE
+                                }
+                            },
+                            onOpenMcp = { currentSection = SettingsSection.MCP },
+                            onOpenMemory = {
+                                if (claude != null) {
+                                    claudePage = com.example.gemini.ui.claude.ClaudeSettingsPage.MEMORY
+                                    currentSection = SettingsSection.CLAUDE
+                                }
+                            },
+                            onOpenPlugins = { currentSection = SettingsSection.SKILLS_PLUGINS },
                             onBack = { currentSection = SettingsSection.MAIN }
                         )
                     }
