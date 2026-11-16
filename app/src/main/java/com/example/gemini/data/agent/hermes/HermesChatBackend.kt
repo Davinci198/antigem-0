@@ -367,6 +367,7 @@ class HermesChatBackend(
                                 ok = o.optBoolean("ok", false),
                                 latencyMs = o.optLong("latency_ms", 0L),
                                 error = o.optString("error").takeIf { it.isNotBlank() },
+                                transient = !o.optBoolean("ok", false),
                             )
                         )
                     }
@@ -383,6 +384,7 @@ class HermesChatBackend(
                 latencyMs = verdict.latency_ms,
                 error = verdict.error.takeIf { it.isNotBlank() },
                 status = verdict.status,
+                transient = !verdict.ok,
             )
         }.toMap()
         val merged = legacy + shared
@@ -486,6 +488,12 @@ class HermesChatBackend(
                                 latencyMs = latencyMs,
                                 error = error,
                                 status = httpStatusOf(error),
+                                // A model that did not verify is not trusted as dead:
+                                // the failure may be the gateway reconnecting, a
+                                // throttle, or an endpoint that recovered. Only
+                                // verified (ok) models persist; failures are
+                                // re-probed on the next scan.
+                                transient = !ok,
                             )
                             _modelHealth.value = _modelHealth.value + (entry.key to verdict)
                             // The custom providers are shared with Claude; writing
