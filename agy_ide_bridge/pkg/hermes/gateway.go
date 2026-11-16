@@ -575,28 +575,63 @@ func (g *gateway) models(sessionID string) (obj, error) {
 	return g.call("model.options", params, 60*time.Second)
 }
 
+// gatewayCall is the JSON-RPC seam setModel retries through: production uses
+// (*gateway).call, tests script a fake.
+type gatewayCall func(method string, params obj, timeout time.Duration) (obj, error)
+
 // setModel switches a live session's model (Ink's session.mutate model). A
 // provider the gateway does not know is refused; the caller falls back to a
 // fresh session for custom endpoints.
 func (g *gateway) setModel(gwID, model, provider string) (obj, error) {
-	snap, err := g.call("session.resume", obj{"session_id": gwID}, callTimeout)
-	if err != nil {
-		return nil, err
-	}
-	g.noteView(gwID, snap, true)
 	payload := obj{"model": model}
 	if provider != "" {
 		payload["provider"] = provider
 	}
-	v := g.viewOf(gwID)
-	return g.call("session.mutate", obj{
-		"session_id":          gwID,
-		"request_id":          uuid.New().String(),
-		"expected_revision":   jsonInt(snap["revision"]),
-		"expected_generation": v.gen,
-		"operation":           "model",
-		"payload":             payload,
-	}, callTimeout)
+	return g.setModelWith(g.call, gwID, payload)
+}
+
+// setModelWith retries a switch that lost a race with a turn which finished
+// after this connection's last snapshot: the gateway refuses with
+// revision_conflict / stale_generation, and the fences it reports ride on a
+// snapshot the caller may not have applied, so every retry re-reads the
+// session before fencing again. Any other refusal (unknown model, busy
+// session, disconnected gateway) is returned at once.
+func (g *gateway) setModelWith(call gatewayCall, gwID string, payload obj) (obj, error) {
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		snap, err := call("session.resume", obj{"session_id": gwID}, callTimeout)
+		if err != nil {
+			return nil, err
+		}
+		g.noteView(gwID, snap, true)
+		res, err := call("session.mutate", obj{
+			"session_id":          gwID,
+			"request_id":          uuid.New().String(),
+			"expected_revision":   jsonInt(snap["revision"]),
+			"expected_generation": g.viewOf(gwID).gen,
+			"operation":           "model",
+			"payload":             payload,
+		}, callTimeout)
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if !mutateRace(err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+// mutateRace reports whether a refused model switch is the retryable
+// revision/generation race instead of a real refusal.
+func mutateRace(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "revision_conflict") || strings.Contains(msg, "stale_generation")
 }
 
 // history reads a session's stored transcript as display rows.
