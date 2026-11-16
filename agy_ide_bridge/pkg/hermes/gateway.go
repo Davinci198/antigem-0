@@ -51,10 +51,15 @@ import (
 )
 
 const (
-	gatewayProtocol   = "hermes-gateway-v1"
-	attachTimeout     = 180 * time.Second // a cold gateway start takes 33–62 s on this phone, more in proot
-	callTimeout       = 30 * time.Second
-	createTimeout     = 180 * time.Second
+	gatewayProtocol = "hermes-gateway-v1"
+	attachTimeout   = 180 * time.Second // a cold gateway start takes 33–62 s on this phone, more in proot
+	callTimeout     = 30 * time.Second
+	createTimeout   = 180 * time.Second
+	// A model pick rides out a busy window (Hermes holds the session's
+	// mutation lock through post-turn finalize, and a reconnecting gateway
+	// answers nothing for a while), so it gets its own, larger budget.
+	pickCallTimeout   = 35 * time.Second
+	pickBudget        = 75 * time.Second
 	reconnectDelay    = 3 * time.Second
 	reconnectMaxDelay = 30 * time.Second
 )
@@ -575,28 +580,108 @@ func (g *gateway) models(sessionID string) (obj, error) {
 	return g.call("model.options", params, 60*time.Second)
 }
 
+// gatewayCall is the JSON-RPC seam setModel retries through: production uses
+// (*gateway).call, tests script a fake.
+type gatewayCall func(method string, params obj, timeout time.Duration) (obj, error)
+
 // setModel switches a live session's model (Ink's session.mutate model). A
 // provider the gateway does not know is refused; the caller falls back to a
 // fresh session for custom endpoints.
 func (g *gateway) setModel(gwID, model, provider string) (obj, error) {
-	snap, err := g.call("session.resume", obj{"session_id": gwID}, callTimeout)
-	if err != nil {
-		return nil, err
-	}
-	g.noteView(gwID, snap, true)
 	payload := obj{"model": model}
 	if provider != "" {
 		payload["provider"] = provider
 	}
-	v := g.viewOf(gwID)
-	return g.call("session.mutate", obj{
-		"session_id":          gwID,
-		"request_id":          uuid.New().String(),
-		"expected_revision":   jsonInt(snap["revision"]),
-		"expected_generation": v.gen,
-		"operation":           "model",
-		"payload":             payload,
-	}, callTimeout)
+	// The real seam re-establishes the connection before every attempt and,
+	// when a call times out on a session with no running turn, drops the
+	// socket: a lost reply leaves the pending map waiting on a dead pipe, so
+	// every later call would time out too — the retry then reconnects instead
+	// of failing four times in a row. A running turn keeps its connection:
+	// dropping it would cut the turn's event stream.
+	pickCall := func(method string, params obj, timeout time.Duration) (obj, error) {
+		if err := g.ensure(); err != nil {
+			return nil, err
+		}
+		res, err := g.call(method, params, timeout)
+		if err != nil && isCallTimeout(err) && !g.viewOf(gwID).running {
+			g.drop(err)
+		}
+		return res, err
+	}
+	return g.setModelWith(pickCall, gwID, payload)
+}
+
+// setModelWith retries a switch that lost a race with a turn which finished
+// after this connection's last snapshot (revision_conflict /
+// stale_generation) or whose call timed out: the gateway refuses with fences
+// the caller may not have applied, so every retry re-reads the session before
+// fencing again. Any other refusal (unknown model, busy session, disconnected
+// gateway) is returned at once. The whole loop is bounded by pickBudget and
+// four attempts so a wedged gateway cannot hold the picker forever.
+func (g *gateway) setModelWith(call gatewayCall, gwID string, payload obj) (obj, error) {
+	deadline := time.Now().Add(pickBudget)
+	const maxAttempts = 4
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, lastErr
+		}
+		timeout := remaining
+		if timeout > pickCallTimeout {
+			timeout = pickCallTimeout
+		}
+		snap, err := call("session.resume", obj{"session_id": gwID}, timeout)
+		if err != nil {
+			if !retryablePick(err) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
+		g.noteView(gwID, snap, true)
+		res, err := call("session.mutate", obj{
+			"session_id":          gwID,
+			"request_id":          uuid.New().String(),
+			"expected_revision":   jsonInt(snap["revision"]),
+			"expected_generation": g.viewOf(gwID).gen,
+			"operation":           "model",
+			"payload":             payload,
+		}, timeout)
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if !retryablePick(err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+// mutateRace reports whether a refused model switch is the retryable
+// revision/generation race instead of a real refusal.
+func mutateRace(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "revision_conflict") || strings.Contains(msg, "stale_generation")
+}
+
+// isCallTimeout reports whether a gateway call gave up waiting for its reply.
+func isCallTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), " timed out after ")
+}
+
+// retryablePick is the set of failures a model pick may ride out: the
+// revision race, or a call that timed out (the socket is dropped and the
+// retry reconnects).
+func retryablePick(err error) bool {
+	return mutateRace(err) || isCallTimeout(err)
 }
 
 // history reads a session's stored transcript as display rows.
@@ -617,6 +702,33 @@ func (g *gateway) probeWaiter(gwID string) chan string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.probes[gwID]
+}
+
+// probeRefusal turns a finished probe answer into the reason it is not an
+// answer. Hermes' Nous Portal wrapper reports a credit-gated model as the
+// assistant text ("Billing or credits exhausted: ... requires available
+// credits") and still emits message.complete. A probe that watched only the
+// event type therefore marked such a model healthy at a plausible latency, and
+// the picker offered it as functional while every real turn failed with the
+// same credit error.
+func probeRefusal(text string) string {
+	for _, mark := range []string{
+		"requires available credits",
+		"Billing or credits exhausted",
+		"insufficient_quota",
+		"exceeded your current quota",
+		"no active subscription",
+	} {
+		if !strings.Contains(text, mark) {
+			continue
+		}
+		line := strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
+		if runes := []rune(line); len(runes) > 180 {
+			line = string(runes[:180]) + "…"
+		}
+		return line
+	}
+	return ""
 }
 
 // probeModel answers one health-scan probe: create a scratch gateway session

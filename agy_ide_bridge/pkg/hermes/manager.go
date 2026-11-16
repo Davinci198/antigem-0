@@ -59,6 +59,9 @@ type Manager struct {
 	// through it (warm, model latency only) instead of spawning a fresh
 	// `hermes chat --oneshot` per message. The spawn path stays as fallback.
 	gw *gateway
+
+	nousLoginsMu sync.Mutex
+	nousLogins   map[string]*nousLoginSession
 }
 
 // NewManager creates a Manager. hermesBin may be empty (we search PATH).
@@ -158,6 +161,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.handleListSessions(w)
 	case path == "gateway":
 		m.handleGatewayStatus(w)
+	case strings.HasPrefix(path, "auth/nous/") || path == "auth/nous":
+		m.handleNousAuth(w, r, strings.TrimPrefix(path, "auth/nous/"))
 
 	default:
 		// /sessions/{id}/…
@@ -234,7 +239,15 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	sess.gwBaseURL = ""
 	sess.gwAPIKey = ""
 	if body.ProviderID != "" {
-		if p := findAppProvider(m.homeDir, body.ProviderID); p != nil {
+		if body.ProviderID == "nous" {
+			if !m.nousLoggedIn() {
+				sess.mu.Unlock()
+				writeJSON(w, http.StatusBadRequest, obj{"error": "Nous account is not signed in"})
+				return
+			}
+			sess.gwProviderID = "nous"
+			sess.gwProvider = "nous"
+		} else if p := findAppProvider(m.homeDir, body.ProviderID); p != nil {
 			// Hermes runs a custom endpoint as provider "custom" with the
 			// endpoint and key carried on the session itself. Endpoints Hermes
 			// already speaks natively (Kilo's keyless gateway) ride their
@@ -386,9 +399,9 @@ type Session struct {
 	// launch options for that create; gwProviderAtCreate remembers what the
 	// session was created on, so a mid-chat custom switch can be refused
 	// honestly instead of half-applied.
-	gwID               string
-	gwModel            string
-	gwProvider         string
+	gwID       string
+	gwModel    string
+	gwProvider string
 	// gwProviderID names the app custom provider whose endpoint/key ride the
 	// turn; it is what the on-disk record keeps (the key itself never does).
 	gwProviderID       string

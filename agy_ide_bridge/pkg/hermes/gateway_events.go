@@ -85,8 +85,16 @@ func (m *Manager) routeGatewayEvent(params map[string]interface{}) {
 		if ch := m.gw.probeWaiter(gwID); ch != nil {
 			switch evType {
 			case "message.complete":
+				// A credit-gated model still completes the turn with the
+				// refusal as its text, so the verdict has to read the answer.
+				verdict := "ok"
+				if txt, _ := payload["text"].(string); txt != "" {
+					if reason := probeRefusal(txt); reason != "" {
+						verdict = reason
+					}
+				}
 				select {
-				case ch <- "ok":
+				case ch <- verdict:
 				default:
 				}
 			case "error":
@@ -328,6 +336,52 @@ func (m *Manager) handleSetModel(w http.ResponseWriter, r *http.Request, sess *S
 	sess.mu.Unlock()
 
 	if body.ProviderID != "" {
+		if body.ProviderID == "nous" {
+			if !m.nousLoggedIn() {
+				writeJSON(w, http.StatusBadRequest, obj{"error": "Nous account is not signed in"})
+				return
+			}
+			sess.mu.Lock()
+			sess.gwModel = body.Model
+			sess.gwProviderID = "nous"
+			sess.gwProvider = "nous"
+			sess.gwBaseURL = ""
+			sess.gwAPIKey = ""
+			sess.mu.Unlock()
+			m.persistSession(sess)
+			if gwID == "" {
+				writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true,
+					"message": "Nous model applies to the new chat."})
+				return
+			}
+			// Apply the pick to the chat that is already open. A gateway session
+			// keeps running the model/provider it was created with, and a Nous
+			// account's configured default is a *paid* model: a deferred pick made
+			// every turn of the chat answer "requires available credits" even after
+			// the user chose a free model here. The gateway accepts a live model
+			// pick together with its provider (session.mutate -> model switch).
+			if err := m.gw.ensure(); err == nil {
+				res, serr := m.gw.setModel(gwID, body.Model, "nous")
+				if serr == nil {
+					if status, _ := res["status"].(string); status == "confirmation_required" {
+						msg, _ := res["confirm_message"].(string)
+						writeJSON(w, http.StatusOK, obj{"success": false, "error": msg,
+							"message": "Hermes asks for confirmation before this model (cost guard); confirm it in a Hermes terminal or start a new chat."})
+						return
+					}
+					writeJSON(w, http.StatusOK, obj{"success": true, "model": res["model"]})
+					return
+				}
+				log.Printf("[hermes] nous model switch failed on %s: %v", shortID(gwID), serr)
+				writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true,
+					"error":   serr.Error(),
+					"message": "Hermes refused the live model switch (" + serr.Error() + "); the Nous model applies from the next chat."})
+				return
+			}
+			writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true,
+				"message": "Hermes' gateway is unreachable; the Nous model applies from the next chat."})
+			return
+		}
 		p := findAppProvider(m.homeDir, body.ProviderID)
 		if p == nil {
 			writeJSON(w, http.StatusBadRequest, obj{"error": "unknown provider " + body.ProviderID})
@@ -679,6 +733,10 @@ func (m *Manager) handleModelScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, scanResult(latency, errMsg))
 		return
 	}
+	if body.ProviderID == "nous" && !m.nousLoggedIn() {
+		writeJSON(w, http.StatusBadRequest, obj{"error": "Nous account is not signed in"})
+		return
+	}
 	latency, errMsg, err := m.gw.probeModel(body.Model, body.ProviderID, "", "", probeTimeout)
 	if err != nil {
 		writeJSON(w, http.StatusOK, scanResult(0, err.Error()))
@@ -781,6 +839,14 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	provider := findAppProvider(m.homeDir, body.ProviderID)
 	timeout = scanProbeTimeout(provider, timeout)
+	if body.ProviderID == "nous" && !m.nousLoggedIn() {
+		writeJSON(w, http.StatusBadRequest, obj{"error": "Nous account is not signed in"})
+		return
+	}
+	if body.ProviderID == "nous" {
+		provider = &appProvider{ID: "nous", Name: "Nous", BaseURL: "https://inference-api.nousresearch.com/v1"}
+		timeout = scanProbeTimeout(provider, timeout)
+	}
 	results := make(map[string]obj, len(body.Models))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -802,6 +868,10 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	gatewayProvider := body.ProviderID
 	if direct {
 		gatewayProvider = ""
+	}
+	if body.ProviderID == "nous" {
+		direct = false
+		gatewayProvider = "nous"
 	}
 	deadline := time.Now().Add(scanBatchBudget)
 

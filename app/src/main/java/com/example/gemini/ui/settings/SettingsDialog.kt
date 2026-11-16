@@ -1919,10 +1919,12 @@ private fun ServersSubScreen(
     val initialAgyBinPath = remember { authPrefs.getAgyBinaryPathSync() }
     val initialClaudeBinPath = remember { authPrefs.getClaudeBinaryPathSync() }
     val initialOpenCodeBinPath = remember { authPrefs.getOpenCodeBinaryPathSync() }
+    val initialHermesBinPath = remember { authPrefs.getHermesBinaryPathSync() }
     var bridgeBinPath by remember { mutableStateOf(initialBridgeBinPath) }
     var agyBinPath by remember { mutableStateOf(initialAgyBinPath) }
     var claudeBinPath by remember { mutableStateOf(initialClaudeBinPath) }
     var openCodeBinPath by remember { mutableStateOf(initialOpenCodeBinPath) }
+    var hermesBinPath by remember { mutableStateOf(initialHermesBinPath) }
 
     var hubTestStatus by remember { mutableStateOf<String?>(null) }
     var isTestingHub by remember { mutableStateOf(false) }
@@ -1935,7 +1937,7 @@ private fun ServersSubScreen(
     var showRestartDialog by remember { mutableStateOf(false) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
 
-    val hasUnsavedChanges = remember(sharedHost, hubPort, bridgePort, bridgeBinPath, agyBinPath, claudeBinPath, openCodeBinPath, securityToken) {
+    val hasUnsavedChanges = remember(sharedHost, hubPort, bridgePort, bridgeBinPath, agyBinPath, claudeBinPath, openCodeBinPath, hermesBinPath, securityToken) {
         sharedHost.trim() != initialSharedHost.trim() ||
             hubPort.trim() != initHubPort.trim() ||
             bridgePort.trim() != initBridgePort.trim() ||
@@ -1943,6 +1945,7 @@ private fun ServersSubScreen(
             agyBinPath.trim() != initialAgyBinPath.trim() ||
             claudeBinPath.trim() != initialClaudeBinPath.trim() ||
             openCodeBinPath.trim() != initialOpenCodeBinPath.trim() ||
+            hermesBinPath.trim() != initialHermesBinPath.trim() ||
             securityToken.trim() != initSecurityToken.trim()
     }
 
@@ -1996,6 +1999,7 @@ private fun ServersSubScreen(
                         agyBinPath = initialAgyBinPath
                         claudeBinPath = initialClaudeBinPath
                         openCodeBinPath = initialOpenCodeBinPath
+                        hermesBinPath = initialHermesBinPath
                         securityToken = initSecurityToken
                     },
                     shape = RoundedCornerShape(8.dp)
@@ -2307,10 +2311,22 @@ private fun ServersSubScreen(
                     shape = RoundedCornerShape(10.dp)
                 )
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = hermesBinPath,
+                    onValueChange = { hermesBinPath = it; saveFeedback = null },
+                    label = { Text("Hermes Agent Binary Path") },
+                    placeholder = { Text(authPrefs.getDefaultHermesBinaryPath()) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp)
+                )
+
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "• Passed to the bridge on launch (--bin for AGY, --claude-bin for Claude Code, --opencode-bin for OpenCode) so auto-start executes the designated binary directly without interactive prompts.",
+                    text = "• Passed to the bridge on launch (--bin for AGY, --claude-bin for Claude Code, --opencode-bin for OpenCode, --hermes-bin for Hermes Agent) so auto-start executes the designated binary directly without interactive prompts.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -2333,6 +2349,7 @@ private fun ServersSubScreen(
                         agyBinPath = authPrefs.getDefaultAgyBinaryPath()
                         claudeBinPath = authPrefs.getDefaultClaudeBinaryPath()
                         openCodeBinPath = authPrefs.getDefaultOpenCodeBinaryPath()
+                        hermesBinPath = authPrefs.getDefaultHermesBinaryPath()
                         saveFeedback = "Settings reset to defaults (click Save to apply)."
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -2460,6 +2477,7 @@ private fun ServersSubScreen(
                     authPrefs.saveAgyBinaryPath(agyBinPath.trim().ifBlank { authPrefs.getDefaultAgyBinaryPath() })
                     authPrefs.saveClaudeBinaryPath(claudeBinPath.trim().ifBlank { authPrefs.getDefaultClaudeBinaryPath() })
                     authPrefs.saveOpenCodeBinaryPath(openCodeBinPath.trim().ifBlank { authPrefs.getDefaultOpenCodeBinaryPath() })
+                    authPrefs.saveHermesBinaryPath(hermesBinPath.trim().ifBlank { authPrefs.getDefaultHermesBinaryPath() })
                 }
                 saveFeedback = "✓ Server, Binaries and Security settings saved!"
                 showRestartDialog = true

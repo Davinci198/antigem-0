@@ -133,7 +133,10 @@ func (m *Manager) restoreSession(id string) *Session {
 	if s.msgs == nil {
 		s.msgs = []Message{}
 	}
-	if rec.ProviderID != "" {
+	if rec.ProviderID == "nous" && m.nousLoggedIn() {
+		s.gwProvider = "nous"
+		s.gwProviderAtCreate = "nous"
+	} else if rec.ProviderID != "" {
 		if p := findAppProvider(m.homeDir, rec.ProviderID); p != nil {
 			// Same mapping as handleCreate: a builtin base (Kilo) restores as
 			// its Hermes slug with no wire key, so a reopened chat does not

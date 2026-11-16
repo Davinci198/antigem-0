@@ -93,4 +93,28 @@ class HermesCatalogMergeTest {
 
         assertEquals(setOf("nvidia", "https"), entries.map { it.providerId }.toSet())
     }
+
+    /**
+     * Nous Portal flags most of its catalog as credit-gated on a free account.
+     * The flag must survive the merge as a warning on the row, and it must not
+     * remove the model: a probe can still answer.
+     */
+    @Test
+    fun `credit flags survive the merge and keep the model listed`() {
+        val entries = mergeHermesCatalog(
+            presets = listOf(
+                HermesPresetProvider(
+                    slug = "nous",
+                    name = "Nous Portal",
+                    models = listOf("a/free", "b/paid"),
+                    unavailable = setOf("b/paid"),
+                ),
+            ),
+            custom = emptyList(),
+        )
+
+        assertEquals(listOf("a/free", "b/paid"), entries.map { it.modelId })
+        assertFalse(entries.first { it.modelId == "a/free" }.needsCredits)
+        assertTrue(entries.first { it.modelId == "b/paid" }.needsCredits)
+    }
 }

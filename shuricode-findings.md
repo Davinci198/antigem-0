@@ -189,3 +189,5 @@ fix=0 · rotate=1 · ignore=8. The model-naming change (PR #34) added no finding
 
 ## Previous scan `ef0761d7` — commit `a04af8c`
 2 `fix` + 1 `rotate` + 7 `ignore` — identical set to `baf5ae11` (no drift). Superseded by the entries above.
+## Scan `9e611f21` — commit `94cf23c` (master, triggered by the `feat/hermes-nous-device-login` push)
+fix=0 · rotate=1 · ignore=8. Suricode scans the default branch, so this run covers master at `94cf23c` — one commit before PR #52 — and therefore says nothing about the Nous code itself; the scan that validates it runs after the merge. Only ① remains, the same embedded Google OAuth client secret, re-reported as `7de7d073`, still waiting on the user's own OAuth client.

@@ -39,6 +39,14 @@ import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+data class NousLogin(
+    val loginId: String,
+    val state: String,
+    val url: String,
+    val code: String,
+    val error: String? = null,
+)
+
 private const val TAG = "HermesChatBackend"
 
 /** How many times a dropped stream socket is reconnected before surfacing an error. */
@@ -59,6 +67,8 @@ private const val RESTORE_RETRY_DELAY_MS = 2_000L
  * models get an error verdict instead of staying silently unscanned.
  */
 private const val SCAN_READ_TIMEOUT_SECONDS = 15L * 60L
+/** The model-pick call rides out a gateway reconnect / post-turn finalize window, so it outlives the shared client's 30 s read. */
+private const val PICK_READ_TIMEOUT_SECONDS = 90L
 
 /** The verdict shown for models whose batch never delivered a real answer. */
 private fun scanFailureVerdict(reason: String) = HermesModelHealth(
@@ -70,7 +80,18 @@ private fun scanFailureVerdict(reason: String) = HermesModelHealth(
 )
 
 /** One provider row of Hermes' own model picker (the gateway's model.options). */
-data class HermesPresetProvider(val slug: String, val name: String, val models: List<String>)
+data class HermesPresetProvider(
+    val slug: String,
+    val name: String,
+    val models: List<String>,
+    /**
+     * Models the gateway lists but flags as needing credits on the signed-in
+     * account (Nous Portal does this for everything outside the free tier).
+     * They stay selectable: the flag comes from the plan, and a probe can still
+     * answer, so it is a warning and not a verdict.
+     */
+    val unavailable: Set<String> = emptySet(),
+)
 
 /** One model of an app custom provider (the bridge strips the key). */
 data class HermesCustomModel(val id: String, val name: String)
@@ -103,6 +124,8 @@ data class HermesModelEntry(
     val providerId: String,
     val providerLabel: String,
     val isCustom: Boolean,
+    /** Gateway says this model needs credits on the current account. Still selectable. */
+    val needsCredits: Boolean = false,
 ) {
     /** Stable key for health results and list items. */
     val key: String get() = "$providerId|$modelId"
@@ -155,6 +178,7 @@ internal fun mergeHermesCatalog(
                     providerId = mirror.id,
                     providerLabel = mirror.name.ifBlank { mirror.id },
                     isCustom = true,
+                    needsCredits = id in preset.unavailable,
                 )
             }
         }
@@ -180,6 +204,7 @@ private fun presetEntry(preset: HermesPresetProvider, id: String) = HermesModelE
     providerId = preset.slug,
     providerLabel = preset.name.ifBlank { preset.slug },
     isCustom = false,
+    needsCredits = id in preset.unavailable,
 )
 
 /**
@@ -290,6 +315,13 @@ class HermesChatBackend(
     private val _models = MutableStateFlow<HermesModels?>(null)
     /** The model picker payload (Hermes presets + the app's custom providers). */
     val models: StateFlow<HermesModels?> = _models.asStateFlow()
+    private val _nousLoggedIn = MutableStateFlow(false)
+    val nousLoggedIn: StateFlow<Boolean> = _nousLoggedIn.asStateFlow()
+    private val _nousLogin = MutableStateFlow<NousLogin?>(null)
+    val nousLogin: StateFlow<NousLogin?> = _nousLogin.asStateFlow()
+    private val _nousLoginBusy = MutableStateFlow(false)
+    val nousLoginBusy: StateFlow<Boolean> = _nousLoginBusy.asStateFlow()
+    private var nousLoginPollJob: Job? = null
 
     private val _isRefreshingModels = MutableStateFlow(false)
     val isRefreshingModels: StateFlow<Boolean> = _isRefreshingModels.asStateFlow()
@@ -335,6 +367,7 @@ class HermesChatBackend(
                                 ok = o.optBoolean("ok", false),
                                 latencyMs = o.optLong("latency_ms", 0L),
                                 error = o.optString("error").takeIf { it.isNotBlank() },
+                                transient = !o.optBoolean("ok", false),
                             )
                         )
                     }
@@ -351,6 +384,7 @@ class HermesChatBackend(
                 latencyMs = verdict.latency_ms,
                 error = verdict.error.takeIf { it.isNotBlank() },
                 status = verdict.status,
+                transient = !verdict.ok,
             )
         }.toMap()
         val merged = legacy + shared
@@ -454,6 +488,12 @@ class HermesChatBackend(
                                 latencyMs = latencyMs,
                                 error = error,
                                 status = httpStatusOf(error),
+                                // A model that did not verify is not trusted as dead:
+                                // the failure may be the gateway reconnecting, a
+                                // throttle, or an endpoint that recovered. Only
+                                // verified (ok) models persist; failures are
+                                // re-probed on the next scan.
+                                transient = !ok,
                             )
                             _modelHealth.value = _modelHealth.value + (entry.key to verdict)
                             // The custom providers are shared with Claude; writing
@@ -500,6 +540,7 @@ class HermesChatBackend(
      * the bridge answers with the profile defaults when no session is live. */
     fun refreshModels() {
         refreshHealth()
+        refreshNousStatus()
         backendScope.launch {
             _isRefreshingModels.value = true
             runCatching {
@@ -513,6 +554,85 @@ class HermesChatBackend(
             _isRefreshingModels.value = false
         }
     }
+
+    fun refreshNousStatus() {
+        backendScope.launch {
+            runCatching { JSONObject(getBridge("/auth/nous/status")) }
+                .onSuccess { _nousLoggedIn.value = it.optBoolean("logged_in", false) }
+        }
+    }
+
+    fun startNousLogin() {
+        if (_nousLoginBusy.value) return
+        _nousLoginBusy.value = true
+        _nousLogin.value = null
+        backendScope.launch {
+            runCatching { JSONObject(postBridge("/auth/nous/login", "{}")) }
+                .onSuccess { response ->
+                    val login = response.optJSONObject("login")
+                    if (response.optBoolean("success") && login != null) {
+                        _nousLogin.value = login.toNousLogin()
+                        pollNousLogin(login.optString("login_id"))
+                    } else {
+                        _nousLogin.value = NousLogin("", "error", "", "", response.optString("error"))
+                        _nousLoginBusy.value = false
+                    }
+                }
+                .onFailure {
+                    _nousLogin.value = NousLogin("", "error", "", "", it.message ?: "Could not start Nous login")
+                    _nousLoginBusy.value = false
+                }
+        }
+    }
+
+    fun cancelNousLogin() {
+        val id = _nousLogin.value?.loginId
+        nousLoginPollJob?.cancel()
+        _nousLogin.value = null
+        _nousLoginBusy.value = false
+        if (!id.isNullOrBlank()) backendScope.launch {
+            runCatching { deleteBridge("/auth/nous/login/$id") }
+        }
+    }
+
+    fun dismissNousLogin() {
+        if (_nousLogin.value?.state == "pending") cancelNousLogin()
+        else _nousLogin.value = null
+    }
+
+    private fun pollNousLogin(id: String) {
+        nousLoginPollJob?.cancel()
+        nousLoginPollJob = backendScope.launch {
+            while (true) {
+                delay(1500)
+                val state = runCatching { JSONObject(getBridge("/auth/nous/login/$id")) }
+                    .getOrNull()?.optJSONObject("login") ?: continue
+                val login = state.toNousLogin()
+                _nousLogin.value = login
+                when (login.state) {
+                    "success" -> {
+                        _nousLogin.value = null
+                        _nousLoginBusy.value = false
+                        refreshNousStatus()
+                        refreshModels()
+                        return@launch
+                    }
+                    "error", "cancelled" -> {
+                        _nousLoginBusy.value = false
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
+    private fun JSONObject.toNousLogin() = NousLogin(
+        loginId = optString("login_id"),
+        state = optString("state"),
+        url = optString("url"),
+        code = optString("code"),
+        error = optString("error").takeIf { it.isNotBlank() },
+    )
 
     private fun parseModels(json: JSONObject): HermesModels {
         val presets = mutableListOf<HermesPresetProvider>()
@@ -530,10 +650,17 @@ class HermesChatBackend(
                         }
                     }
                 }
+                val unavailable = mutableSetOf<String>()
+                p.optJSONArray("unavailable_models")?.let { arr ->
+                    for (j in 0 until arr.length()) {
+                        arr.optString(j).takeIf { it.isNotBlank() }?.let { unavailable += it }
+                    }
+                }
                 presets += HermesPresetProvider(
                     slug = p.optString("slug"),
                     name = p.optString("name").ifBlank { p.optString("slug") },
-                    models = ids
+                    models = ids,
+                    unavailable = unavailable,
                 )
             }
         }
@@ -583,7 +710,8 @@ class HermesChatBackend(
                     JSONObject()
                         .put("model", modelId)
                         .put("provider_id", providerId)
-                        .toString()
+                        .toString(),
+                    client = pickClient
                 )
             }.onSuccess { resp ->
                 val o = runCatching { JSONObject(resp) }.getOrNull() ?: return@onSuccess
@@ -607,6 +735,20 @@ class HermesChatBackend(
         bridge.client.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /**
+     * Client for the model-pick call only.
+     *
+     * The bridge retries a pick across a gateway reconnect (up to 75 s), so
+     * the shared [AgyBridgeService.client]'s 30 s read would cut the call
+     * mid-retry and the app would report a failure that was about to resolve.
+     * Give the pick its own ceiling above the bridge's budget.
+     */
+    private val pickClient: OkHttpClient by lazy {
+        bridge.client.newBuilder()
+            .readTimeout(PICK_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .build()
     }
 
@@ -990,7 +1132,20 @@ class HermesChatBackend(
 
     private suspend fun getBridge(path: String): String = withContext(Dispatchers.IO) {
         val req = Request.Builder().url(url(path)).get().build()
-        bridge.client.newCall(req).execute().use { it.body?.string().orEmpty() }
+        bridge.client.newCall(req).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw java.io.IOException("HTTP ${response.code}: $body")
+            body
+        }
+    }
+
+    private suspend fun deleteBridge(path: String): String = withContext(Dispatchers.IO) {
+        val req = Request.Builder().url(url(path)).delete().build()
+        bridge.client.newCall(req).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw java.io.IOException("HTTP ${response.code}: $body")
+            body
+        }
     }
 
     private fun appendMessage(msg: ChatMessage) {
