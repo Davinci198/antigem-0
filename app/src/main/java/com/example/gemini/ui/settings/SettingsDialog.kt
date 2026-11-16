@@ -97,6 +97,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     COMMANDS("Commands & Permissions", "Auto-run policy, sandbox mode, and tool approvals"),
     CLAUDE("Claude Code", "Account, models, permissions, MCP, plugins & memory"),
     OPENCODE("OpenCode", "Server, providers, custom OpenAI-compatible endpoints & approvals"),
+    HERMES("Hermes Agent", "Binary path, account, model & custom providers"),
     AGENTS("Agents", "Run Antigravity, Claude Code, Hermes or OpenCode"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
@@ -388,6 +389,12 @@ fun SettingsDialog(
                                 }
                             }
                         },
+                        hermesGroup = {
+                            val binPath = remember { com.example.gemini.data.preferences.AuthPreferences(LocalContext.current).getHermesBinaryPathSync() }
+                            com.example.gemini.ui.agents.HermesSettingsGroup(binPath, cardBg) {
+                                currentSection = SettingsSection.HERMES
+                            }
+                        },
                         onNavigate = { currentSection = it }
                     )
 
@@ -562,6 +569,14 @@ fun SettingsDialog(
                         // the dialog's header is this screen's Back button, as for the other agent pages
                         com.example.gemini.ui.opencode.OpenCodeSettingsScreen(openCode, openCodePage)
                     }
+                    SettingsSection.HERMES -> {
+                        val ap = remember { com.example.gemini.data.preferences.AuthPreferences(LocalContext.current) }
+                        com.example.gemini.ui.agents.HermesSettingsPage(
+                            binaryPath = ap.getHermesBinaryPathSync(),
+                            onSaveBinaryPath = { ap.saveHermesBinaryPath(it) },
+                            onBack = { currentSection = SettingsSection.MAIN }
+                        )
+                    }
                     SettingsSection.UTILITIES -> UtilitiesSubScreen(
                         cardBg = cardBg,
                         cardBorder = cardBorder,
@@ -605,6 +620,7 @@ private fun MainSettingsMenu(
     scrollState: androidx.compose.foundation.ScrollState,
     claudeGroup: (@Composable () -> Unit)? = null,
     openCodeGroup: (@Composable () -> Unit)? = null,
+    hermesGroup: (@Composable () -> Unit)? = null,
     enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = setOf(com.example.gemini.domain.model.AgentKind.AGY),
     onNavigate: (SettingsSection) -> Unit
 ) {
@@ -612,6 +628,7 @@ private fun MainSettingsMenu(
     val claudeOn = com.example.gemini.domain.model.AgentKind.CLAUDE in enabledAgents
     val hermesOn = com.example.gemini.domain.model.AgentKind.HERMES in enabledAgents
     val openCodeOn = com.example.gemini.domain.model.AgentKind.OPENCODE in enabledAgents
+    val hermesOn = com.example.gemini.domain.model.AgentKind.HERMES in enabledAgents
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -747,6 +764,10 @@ private fun MainSettingsMenu(
         if (openCodeGroup != null && openCodeOn) {
             SettingsGroupHeader("OpenCode", com.example.gemini.ui.components.OpenCodeAccent, "Any provider, its own API keys")
             openCodeGroup()
+        }
+        if (hermesGroup != null && hermesOn) {
+            SettingsGroupHeader("Hermes Agent", MaterialTheme.colorScheme.primary, "Nous Research autonomous agent")
+            hermesGroup()
         }
 
         SettingsGroupHeader("App", MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), "Shared by both agents")
