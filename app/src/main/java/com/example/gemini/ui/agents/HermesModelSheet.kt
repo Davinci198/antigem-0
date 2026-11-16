@@ -1,5 +1,6 @@
 package com.example.gemini.ui.agents
 
+
 import com.example.gemini.ui.components.ScanRed
 import com.example.gemini.ui.components.ScanAmber
 import com.example.gemini.ui.components.ScanGreen
@@ -87,6 +88,9 @@ fun HermesModelSheet(
     val selected by backend.selectedModelId.collectAsState()
     val selectedProvider by backend.selectedProviderId.collectAsState()
     val refreshing by backend.isRefreshingModels.collectAsState()
+    val nousLoggedIn by backend.nousLoggedIn.collectAsState()
+    val nousLogin by backend.nousLogin.collectAsState()
+    val nousLoginBusy by backend.nousLoginBusy.collectAsState()
     val message by backend.modelMessage.collectAsState()
     val health by backend.modelHealth.collectAsState()
     val scanning by backend.isScanning.collectAsState()
@@ -215,6 +219,27 @@ fun HermesModelSheet(
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                             modifier = Modifier.size(20.dp)
                         )
+                    }
+                }
+                if (!nousLoggedIn) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        color = cardColor,
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Nous Research · gratuit", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                Text("Conectează contul Nous pentru a folosi modelele.", fontSize = 11.sp)
+                            }
+                            TextButton(onClick = { backend.startNousLogin() }, enabled = !nousLoginBusy) {
+                                Text(if (nousLoginBusy) "Pornire…" else "Conectare", color = accent)
+                            }
+                        }
                     }
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -363,5 +388,14 @@ fun HermesModelSheet(
                 }
             }
         }
+    }
+    if (nousLogin != null) {
+        NousLoginDialog(
+            login = nousLogin!!,
+            busy = nousLoginBusy,
+            onRetry = { backend.startNousLogin() },
+            onCancel = { backend.cancelNousLogin() },
+            onDismiss = { backend.dismissNousLogin() },
+        )
     }
 }

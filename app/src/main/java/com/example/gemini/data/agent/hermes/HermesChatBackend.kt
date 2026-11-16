@@ -39,6 +39,14 @@ import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+data class NousLogin(
+    val loginId: String,
+    val state: String,
+    val url: String,
+    val code: String,
+    val error: String? = null,
+)
+
 private const val TAG = "HermesChatBackend"
 
 /** How many times a dropped stream socket is reconnected before surfacing an error. */
@@ -290,6 +298,13 @@ class HermesChatBackend(
     private val _models = MutableStateFlow<HermesModels?>(null)
     /** The model picker payload (Hermes presets + the app's custom providers). */
     val models: StateFlow<HermesModels?> = _models.asStateFlow()
+    private val _nousLoggedIn = MutableStateFlow(false)
+    val nousLoggedIn: StateFlow<Boolean> = _nousLoggedIn.asStateFlow()
+    private val _nousLogin = MutableStateFlow<NousLogin?>(null)
+    val nousLogin: StateFlow<NousLogin?> = _nousLogin.asStateFlow()
+    private val _nousLoginBusy = MutableStateFlow(false)
+    val nousLoginBusy: StateFlow<Boolean> = _nousLoginBusy.asStateFlow()
+    private var nousLoginPollJob: Job? = null
 
     private val _isRefreshingModels = MutableStateFlow(false)
     val isRefreshingModels: StateFlow<Boolean> = _isRefreshingModels.asStateFlow()
@@ -500,6 +515,7 @@ class HermesChatBackend(
      * the bridge answers with the profile defaults when no session is live. */
     fun refreshModels() {
         refreshHealth()
+        refreshNousStatus()
         backendScope.launch {
             _isRefreshingModels.value = true
             runCatching {
@@ -513,6 +529,85 @@ class HermesChatBackend(
             _isRefreshingModels.value = false
         }
     }
+
+    fun refreshNousStatus() {
+        backendScope.launch {
+            runCatching { JSONObject(getBridge("/auth/nous/status")) }
+                .onSuccess { _nousLoggedIn.value = it.optBoolean("logged_in", false) }
+        }
+    }
+
+    fun startNousLogin() {
+        if (_nousLoginBusy.value) return
+        _nousLoginBusy.value = true
+        _nousLogin.value = null
+        backendScope.launch {
+            runCatching { JSONObject(postBridge("/auth/nous/login", "{}")) }
+                .onSuccess { response ->
+                    val login = response.optJSONObject("login")
+                    if (response.optBoolean("success") && login != null) {
+                        _nousLogin.value = login.toNousLogin()
+                        pollNousLogin(login.optString("login_id"))
+                    } else {
+                        _nousLogin.value = NousLogin("", "error", "", "", response.optString("error"))
+                        _nousLoginBusy.value = false
+                    }
+                }
+                .onFailure {
+                    _nousLogin.value = NousLogin("", "error", "", "", it.message ?: "Could not start Nous login")
+                    _nousLoginBusy.value = false
+                }
+        }
+    }
+
+    fun cancelNousLogin() {
+        val id = _nousLogin.value?.loginId
+        nousLoginPollJob?.cancel()
+        _nousLogin.value = null
+        _nousLoginBusy.value = false
+        if (!id.isNullOrBlank()) backendScope.launch {
+            runCatching { deleteBridge("/auth/nous/login/$id") }
+        }
+    }
+
+    fun dismissNousLogin() {
+        if (_nousLogin.value?.state == "pending") cancelNousLogin()
+        else _nousLogin.value = null
+    }
+
+    private fun pollNousLogin(id: String) {
+        nousLoginPollJob?.cancel()
+        nousLoginPollJob = backendScope.launch {
+            while (true) {
+                delay(1500)
+                val state = runCatching { JSONObject(getBridge("/auth/nous/login/$id")) }
+                    .getOrNull()?.optJSONObject("login") ?: continue
+                val login = state.toNousLogin()
+                _nousLogin.value = login
+                when (login.state) {
+                    "success" -> {
+                        _nousLogin.value = null
+                        _nousLoginBusy.value = false
+                        refreshNousStatus()
+                        refreshModels()
+                        return@launch
+                    }
+                    "error", "cancelled" -> {
+                        _nousLoginBusy.value = false
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
+    private fun JSONObject.toNousLogin() = NousLogin(
+        loginId = optString("login_id"),
+        state = optString("state"),
+        url = optString("url"),
+        code = optString("code"),
+        error = optString("error").takeIf { it.isNotBlank() },
+    )
 
     private fun parseModels(json: JSONObject): HermesModels {
         val presets = mutableListOf<HermesPresetProvider>()
@@ -990,7 +1085,20 @@ class HermesChatBackend(
 
     private suspend fun getBridge(path: String): String = withContext(Dispatchers.IO) {
         val req = Request.Builder().url(url(path)).get().build()
-        bridge.client.newCall(req).execute().use { it.body?.string().orEmpty() }
+        bridge.client.newCall(req).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw java.io.IOException("HTTP ${response.code}: $body")
+            body
+        }
+    }
+
+    private suspend fun deleteBridge(path: String): String = withContext(Dispatchers.IO) {
+        val req = Request.Builder().url(url(path)).delete().build()
+        bridge.client.newCall(req).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw java.io.IOException("HTTP ${response.code}: $body")
+            body
+        }
     }
 
     private fun appendMessage(msg: ChatMessage) {

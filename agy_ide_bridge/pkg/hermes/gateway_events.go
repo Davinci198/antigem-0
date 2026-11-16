@@ -328,6 +328,23 @@ func (m *Manager) handleSetModel(w http.ResponseWriter, r *http.Request, sess *S
 	sess.mu.Unlock()
 
 	if body.ProviderID != "" {
+		if body.ProviderID == "nous" {
+			if !m.nousLoggedIn() {
+				writeJSON(w, http.StatusBadRequest, obj{"error": "Nous account is not signed in"})
+				return
+			}
+			sess.mu.Lock()
+			sess.gwModel = body.Model
+			sess.gwProviderID = "nous"
+			sess.gwProvider = "nous"
+			sess.gwBaseURL = ""
+			sess.gwAPIKey = ""
+			sess.mu.Unlock()
+			m.persistSession(sess)
+			writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true,
+				"message": "Nous model applies from the next chat."})
+			return
+		}
 		p := findAppProvider(m.homeDir, body.ProviderID)
 		if p == nil {
 			writeJSON(w, http.StatusBadRequest, obj{"error": "unknown provider " + body.ProviderID})
@@ -679,6 +696,10 @@ func (m *Manager) handleModelScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, scanResult(latency, errMsg))
 		return
 	}
+	if body.ProviderID == "nous" && !m.nousLoggedIn() {
+		writeJSON(w, http.StatusBadRequest, obj{"error": "Nous account is not signed in"})
+		return
+	}
 	latency, errMsg, err := m.gw.probeModel(body.Model, body.ProviderID, "", "", probeTimeout)
 	if err != nil {
 		writeJSON(w, http.StatusOK, scanResult(0, err.Error()))
@@ -781,6 +802,14 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	provider := findAppProvider(m.homeDir, body.ProviderID)
 	timeout = scanProbeTimeout(provider, timeout)
+	if body.ProviderID == "nous" && !m.nousLoggedIn() {
+		writeJSON(w, http.StatusBadRequest, obj{"error": "Nous account is not signed in"})
+		return
+	}
+	if body.ProviderID == "nous" {
+		provider = &appProvider{ID: "nous", Name: "Nous", BaseURL: "https://inference-api.nousresearch.com/v1"}
+		timeout = scanProbeTimeout(provider, timeout)
+	}
 	results := make(map[string]obj, len(body.Models))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -802,6 +831,10 @@ func (m *Manager) handleModelScanBatch(w http.ResponseWriter, r *http.Request) {
 	gatewayProvider := body.ProviderID
 	if direct {
 		gatewayProvider = ""
+	}
+	if body.ProviderID == "nous" {
+		direct = false
+		gatewayProvider = "nous"
 	}
 	deadline := time.Now().Add(scanBatchBudget)
 
