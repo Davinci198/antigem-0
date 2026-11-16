@@ -67,6 +67,8 @@ private const val RESTORE_RETRY_DELAY_MS = 2_000L
  * models get an error verdict instead of staying silently unscanned.
  */
 private const val SCAN_READ_TIMEOUT_SECONDS = 15L * 60L
+/** The model-pick call rides out a gateway reconnect / post-turn finalize window, so it outlives the shared client's 30 s read. */
+private const val PICK_READ_TIMEOUT_SECONDS = 90L
 
 /** The verdict shown for models whose batch never delivered a real answer. */
 private fun scanFailureVerdict(reason: String) = HermesModelHealth(
@@ -700,7 +702,8 @@ class HermesChatBackend(
                     JSONObject()
                         .put("model", modelId)
                         .put("provider_id", providerId)
-                        .toString()
+                        .toString(),
+                    client = pickClient
                 )
             }.onSuccess { resp ->
                 val o = runCatching { JSONObject(resp) }.getOrNull() ?: return@onSuccess
@@ -724,6 +727,20 @@ class HermesChatBackend(
         bridge.client.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /**
+     * Client for the model-pick call only.
+     *
+     * The bridge retries a pick across a gateway reconnect (up to 75 s), so
+     * the shared [AgyBridgeService.client]'s 30 s read would cut the call
+     * mid-retry and the app would report a failure that was about to resolve.
+     * Give the pick its own ceiling above the bridge's budget.
+     */
+    private val pickClient: OkHttpClient by lazy {
+        bridge.client.newBuilder()
+            .readTimeout(PICK_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .build()
     }
 

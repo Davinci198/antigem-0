@@ -68,7 +68,7 @@ func TestSetModelStopsOnRealRefusal(t *testing.T) {
 }
 
 // The loop is bounded: a session that keeps refusing still returns.
-func TestSetModelGivesUpAfterThreeRaces(t *testing.T) {
+func TestSetModelGivesUpAfterFourRaces(t *testing.T) {
 	g := newGateway(nil)
 	mutates := 0
 	call := func(method string, params obj, timeout time.Duration) (obj, error) {
@@ -83,7 +83,43 @@ func TestSetModelGivesUpAfterThreeRaces(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "stale_generation") {
 		t.Fatalf("err = %v, want the last race", err)
 	}
-	if mutates != 3 {
-		t.Fatalf("mutates = %d, want 3 attempts", mutates)
+	if mutates != 4 {
+		t.Fatalf("mutates = %d, want 4 attempts", mutates)
+	}
+}
+
+// A timed-out call is ambiguous — the switch may or may not have landed — so
+// the pick retries it instead of giving up after one silent failure.
+func TestSetModelRetriesATimedOutCall(t *testing.T) {
+	g := newGateway(nil)
+	resumes, mutates := 0, 0
+	call := func(method string, params obj, timeout time.Duration) (obj, error) {
+		switch method {
+		case "session.resume":
+			resumes++
+			if resumes == 1 {
+				return nil, fmt.Errorf("session.resume timed out after 35s")
+			}
+			return obj{"revision": float64(5), "execution_generation": float64(1)}, nil
+		case "session.mutate":
+			mutates++
+			if mutates == 1 {
+				return nil, fmt.Errorf("session.mutate timed out after 35s")
+			}
+			return obj{"session_id": "gw-1", "revision": float64(6)}, nil
+		}
+		t.Fatalf("unexpected method %s", method)
+		return nil, nil
+	}
+
+	res, err := g.setModelWith(call, "gw-1", obj{"model": "meituan/longcat-2.5:free", "provider": "nous"})
+	if err != nil {
+		t.Fatalf("setModelWith: %v", err)
+	}
+	if resumes != 3 || mutates != 2 {
+		t.Fatalf("resumes/mutates = %d/%d, want 3/2 (each retry re-reads the session)", resumes, mutates)
+	}
+	if res["revision"] != float64(6) {
+		t.Fatalf("result = %v, want the winning mutate's result", res)
 	}
 }
