@@ -29,3 +29,26 @@ func TestProbeRetriesOn429(t *testing.T) {
 		t.Fatalf("expected a latency, got %d", latency)
 	}
 }
+
+// Nous Portal delivers a credit refusal as ordinary assistant text and still
+// completes the turn, so a probe that trusted message.complete alone reported a
+// dead model as healthy. The refusal must become the verdict instead.
+func TestProbeRefusalReadsTheAnswer(t *testing.T) {
+	refusal := "Billing or credits exhausted: HTTP 404: Model 'anthropic/claude-haiku-4.5' " +
+		"requires available credits. Your account balance is too low to use paid models — " +
+		"add credits at https://portal.nousresearch.com or pick a free model.\n\nSome trailing detail."
+	if got := probeRefusal(refusal); got == "" {
+		t.Fatalf("a credit refusal must not pass as a healthy probe")
+	}
+	cases := map[string]string{
+		"OK":                     "",
+		"Here is the answer: 42": "",
+		"insufficient_quota":     "insufficient_quota",
+		"You exceeded your current quota, please check your plan": "You exceeded your current quota, please check your plan",
+	}
+	for text, want := range cases {
+		if got := probeRefusal(text); (got == "") != (want == "") {
+			t.Fatalf("probeRefusal(%q) = %q, want empty=%v", text, got, want == "")
+		}
+	}
+}

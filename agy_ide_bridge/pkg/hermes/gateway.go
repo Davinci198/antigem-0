@@ -619,6 +619,33 @@ func (g *gateway) probeWaiter(gwID string) chan string {
 	return g.probes[gwID]
 }
 
+// probeRefusal turns a finished probe answer into the reason it is not an
+// answer. Hermes' Nous Portal wrapper reports a credit-gated model as the
+// assistant text ("Billing or credits exhausted: ... requires available
+// credits") and still emits message.complete. A probe that watched only the
+// event type therefore marked such a model healthy at a plausible latency, and
+// the picker offered it as functional while every real turn failed with the
+// same credit error.
+func probeRefusal(text string) string {
+	for _, mark := range []string{
+		"requires available credits",
+		"Billing or credits exhausted",
+		"insufficient_quota",
+		"exceeded your current quota",
+		"no active subscription",
+	} {
+		if !strings.Contains(text, mark) {
+			continue
+		}
+		line := strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
+		if runes := []rune(line); len(runes) > 180 {
+			line = string(runes[:180]) + "…"
+		}
+		return line
+	}
+	return ""
+}
+
 // probeModel answers one health-scan probe: create a scratch gateway session
 // pinned to the model/provider, submit a one-word prompt, wait for the reply
 // or the error, then drop the session. The latency covers the whole turn —

@@ -85,8 +85,16 @@ func (m *Manager) routeGatewayEvent(params map[string]interface{}) {
 		if ch := m.gw.probeWaiter(gwID); ch != nil {
 			switch evType {
 			case "message.complete":
+				// A credit-gated model still completes the turn with the
+				// refusal as its text, so the verdict has to read the answer.
+				verdict := "ok"
+				if txt, _ := payload["text"].(string); txt != "" {
+					if reason := probeRefusal(txt); reason != "" {
+						verdict = reason
+					}
+				}
 				select {
-				case ch <- "ok":
+				case ch <- verdict:
 				default:
 				}
 			case "error":
