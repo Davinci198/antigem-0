@@ -390,10 +390,10 @@ fun SettingsDialog(
                             }
                         },
                         hermesGroup = {
-                            val binPath = remember { com.example.gemini.data.preferences.AuthPreferences(LocalContext.current).getHermesBinaryPathSync() }
-                            com.example.gemini.ui.agents.HermesSettingsGroup(binPath, cardBg) {
-                                currentSection = SettingsSection.HERMES
-                            }
+                            com.example.gemini.ui.agents.HermesSettingsGroup(
+                                com.example.gemini.data.preferences.AuthPreferences(LocalContext.current).getHermesBinaryPathSync(),
+                                cardBg,
+                            ) { currentSection = SettingsSection.HERMES }
                         },
                         onNavigate = { currentSection = it }
                     )
@@ -570,10 +570,11 @@ fun SettingsDialog(
                         com.example.gemini.ui.opencode.OpenCodeSettingsScreen(openCode, openCodePage)
                     }
                     SettingsSection.HERMES -> {
-                        val ap = remember { com.example.gemini.data.preferences.AuthPreferences(LocalContext.current) }
+                        val ap = com.example.gemini.data.preferences.AuthPreferences(LocalContext.current)
+                        val scope = rememberCoroutineScope()
                         com.example.gemini.ui.agents.HermesSettingsPage(
                             binaryPath = ap.getHermesBinaryPathSync(),
-                            onSaveBinaryPath = { ap.saveHermesBinaryPath(it) },
+                            onSaveBinaryPath = { path -> scope.launch { ap.saveHermesBinaryPath(path) } },
                             onBack = { currentSection = SettingsSection.MAIN }
                         )
                     }
@@ -628,7 +629,6 @@ private fun MainSettingsMenu(
     val claudeOn = com.example.gemini.domain.model.AgentKind.CLAUDE in enabledAgents
     val hermesOn = com.example.gemini.domain.model.AgentKind.HERMES in enabledAgents
     val openCodeOn = com.example.gemini.domain.model.AgentKind.OPENCODE in enabledAgents
-    val hermesOn = com.example.gemini.domain.model.AgentKind.HERMES in enabledAgents
     Column(
         modifier = Modifier
             .fillMaxSize()
