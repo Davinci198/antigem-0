@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -28,6 +29,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,76 +51,57 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.components.accent
 
-private data class AgentOption(val agents: Set<AgentKind>, val title: String, val description: String)
+private data class AgentInfo(val kind: AgentKind, val title: String, val description: String)
 
-private val AGENT_OPTIONS = listOf(
-    AgentOption(
-        setOf(AgentKind.AGY),
-        "Antigravity",
-        "Google's coding agent through the agy hub: Gemini and Claude models on your Google plan."
-    ),
-    AgentOption(
-        setOf(AgentKind.CLAUDE),
-        "Claude Code",
-        "Anthropic's Claude Code CLI on this device: your Claude subscription or Anthropic Console account."
-    ),
-    AgentOption(
-        setOf(AgentKind.HERMES),
-        "Hermes Agent",
-        "Nous Research's autonomous agent with local toolset, skills, and persistent memory."
-    ),
-    AgentOption(
-        setOf(AgentKind.OPENCODE),
-        "OpenCode",
-        "Open-source coding agent: 200+ providers with your own keys, any OpenAI-compatible API, and free models."
-    ),
-    AgentOption(
-        setOf(AgentKind.AGY, AgentKind.CLAUDE, AgentKind.HERMES, AgentKind.OPENCODE),
-        "All Agents",
-        "Pick the agent for each new chat. All agents share the chat list, status and accounts."
-    )
+private val AGENT_INFO = listOf(
+    AgentInfo(AgentKind.AGY, "Antigravity", "Google's coding agent through the agy hub: Gemini and Claude models on your Google plan."),
+    AgentInfo(AgentKind.CLAUDE, "Claude Code", "Anthropic's Claude Code CLI on this device: your Claude subscription or Anthropic Console account."),
+    AgentInfo(AgentKind.HERMES, "Hermes Agent", "Nous Research's autonomous agent with local toolset, skills, and persistent memory."),
+    AgentInfo(AgentKind.OPENCODE, "OpenCode", "Open-source coding agent: 200+ providers with your own keys, any OpenAI-compatible API, and free models.")
 )
 
-/** One choice per agent, plus "All Agents"; Antigravity is on by default. */
+/** One independent on/off switch per agent; at least one agent always stays on. */
 @Composable
 fun AgentSelector(selected: Set<AgentKind>, onSelect: (Set<AgentKind>) -> Unit, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        AGENT_OPTIONS.forEach { option ->
-            val isOn = option.agents == selected
-            val accent = if (option.agents.size == 1) option.agents.first().accent() else MaterialTheme.colorScheme.primary
+        AGENT_INFO.forEach { info ->
+            val isOn = info.kind in selected
+            val accent = info.kind.accent()
+            val toggle = {
+                val next = if (isOn) selected - info.kind else selected + info.kind
+                if (next.isNotEmpty()) onSelect(next)
+            }
             Surface(
-                onClick = { onSelect(option.agents) },
                 shape = RoundedCornerShape(16.dp),
                 color = if (isOn) accent.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface,
                 border = BorderStroke(if (isOn) 1.5.dp else 1.dp, if (isOn) accent.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (option.agents.size == 1) {
-                        AgentMark(option.agents.first(), size = 40.dp)
-                    } else {
-                        Box(Modifier.size(width = 82.dp, height = 46.dp)) {
-                            AgentMark(AgentKind.AGY, size = 30.dp)
-                            AgentMark(AgentKind.CLAUDE, size = 30.dp, modifier = Modifier.offset(x = 13.dp, y = 4.dp))
-                            AgentMark(AgentKind.HERMES, size = 30.dp, modifier = Modifier.offset(x = 26.dp, y = 8.dp))
-                            AgentMark(AgentKind.OPENCODE, size = 30.dp, modifier = Modifier.offset(x = 39.dp, y = 12.dp))
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { toggle() },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AgentMark(info.kind, size = 40.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text(info.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Text(info.description, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f))
                         }
                     }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(option.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Text(option.description, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f))
-                    }
                     Spacer(Modifier.width(10.dp))
-                    Box(
-                        Modifier
-                            .size(20.dp)
-                            .clip(CircleShape)
-                            .border(1.5.dp, if (isOn) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (isOn) Box(Modifier.size(10.dp).clip(CircleShape).background(accent))
-                    }
+                    Switch(
+                        checked = isOn,
+                        onCheckedChange = { toggle() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = accent,
+                            checkedTrackColor = accent.copy(alpha = 0.6f),
+                            uncheckedThumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                        )
+                    )
                 }
             }
         }
