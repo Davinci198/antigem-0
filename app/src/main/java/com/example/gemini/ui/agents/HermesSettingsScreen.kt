@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -26,9 +27,36 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.gemini.ui.settings.SettingsRowItem
+import com.example.gemini.ui.settings.SettingsRowList
+
+/** Settings → Hermes Agent: the menu row (inside the "Agents" group in the main menu). */
+@Composable
+fun HermesSettingsGroup(
+    binaryPath: String,
+    cardBg: Color,
+    onOpen: () -> Unit,
+) {
+    SettingsRowList(
+        cardBg = cardBg,
+        nestedScroll = true,
+        groups = listOf(
+            listOf(
+                SettingsRowItem(
+                    Icons.Outlined.Terminal,
+                    MaterialTheme.colorScheme.primary,
+                    "Agent binary",
+                    binaryPath,
+                    null,
+                ) { onOpen() },
+            )
+        ),
+    )
+}
 
 /** A tappable row card on the Hermes settings page. */
 @Composable
