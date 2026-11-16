@@ -79,6 +79,7 @@ class AuthPreferences(private val context: Context) {
         val AGY_BRIDGE_BINARY_PATH = stringPreferencesKey("agy_bridge_binary_path")
         val AGY_BINARY_PATH = stringPreferencesKey("agy_binary_path")
         val CLAUDE_BINARY_PATH = stringPreferencesKey("claude_binary_path")
+        val HERMES_BINARY_PATH = stringPreferencesKey("hermes_binary_path")
         val HAS_SEEN_TERMINAL_LAUNCHER_ONBOARDING = androidx.datastore.preferences.core.booleanPreferencesKey("has_seen_terminal_launcher_onboarding")
         val TERMINAL_LAUNCHER_STYLE = stringPreferencesKey("terminal_launcher_style") // "ANTITERM" or "TERMUX"
         val IS_TERMINAL_LAUNCHER_ENABLED = androidx.datastore.preferences.core.booleanPreferencesKey("is_terminal_launcher_enabled")
@@ -93,6 +94,9 @@ class AuthPreferences(private val context: Context) {
         /** Where the official OpenCode installer (and the app's own installer) puts it. */
         const val DEFAULT_OPENCODE_BINARY_PATH = "~/.opencode/bin/opencode"
         const val DEFAULT_UBUNTU_OPENCODE_BINARY_PATH = "/root/.opencode/bin/opencode"
+        /** Where the Hermes installer puts the CLI in the guest (and in Termux). */
+        const val DEFAULT_HERMES_BINARY_PATH = "~/.local/bin/hermes"
+        const val DEFAULT_UBUNTU_HERMES_BINARY_PATH = "/root/.local/bin/hermes"
 
         const val TOKEN_PREFIX = "x-ag"
         const val TOKEN_SUFFIX = "_9qx"
@@ -756,6 +760,18 @@ class AuthPreferences(private val context: Context) {
 
     fun saveOpenCodeBinaryPath(path: String) {
         syncPrefs.edit().putString("opencode_binary_path", path.trim().ifBlank { getDefaultOpenCodeBinaryPath() }).apply()
+    }
+    fun getDefaultHermesBinaryPath(): String =
+        if (context.packageName == "com.termux") DEFAULT_HERMES_BINARY_PATH else DEFAULT_UBUNTU_HERMES_BINARY_PATH
+    fun getHermesBinaryPathSync(): String =
+        syncPrefs.getString("hermes_binary_path", getDefaultHermesBinaryPath()) ?: getDefaultHermesBinaryPath()
+    val hermesBinaryPath: Flow<String> = context.dataStore.data.map {
+        it[HERMES_BINARY_PATH] ?: getHermesBinaryPathSync()
+    }
+    suspend fun saveHermesBinaryPath(path: String) {
+        val trimmed = path.trim().ifBlank { getDefaultHermesBinaryPath() }
+        syncPrefs.edit().putString("hermes_binary_path", trimmed).apply()
+        context.dataStore.edit { it[HERMES_BINARY_PATH] = trimmed }
     }
 
     val hasSeenTerminalLauncherOnboarding: Flow<Boolean> = context.dataStore.data.map {
