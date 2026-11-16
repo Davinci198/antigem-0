@@ -574,6 +574,7 @@ fun SettingsDialog(
                         val scope = rememberCoroutineScope()
                         com.example.gemini.ui.agents.HermesSettingsPage(
                             binaryPath = ap.getHermesBinaryPathSync(),
+                            providerCount = claude?.backend?.providers?.value?.size,
                             mcpCount = mcpServers.size,
                             pluginCount = installedPlugins.size,
                             onSaveBinaryPath = { path -> scope.launch { ap.saveHermesBinaryPath(path) } },
