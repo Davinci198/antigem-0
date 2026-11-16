@@ -373,9 +373,13 @@ func (m *Manager) handleSetModel(w http.ResponseWriter, r *http.Request, sess *S
 					return
 				}
 				log.Printf("[hermes] nous model switch failed on %s: %v", shortID(gwID), serr)
+				writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true,
+					"error":   serr.Error(),
+					"message": "Hermes refused the live model switch (" + serr.Error() + "); the Nous model applies from the next chat."})
+				return
 			}
 			writeJSON(w, http.StatusOK, obj{"success": true, "deferred": true,
-				"message": "Nous model applies from the next chat."})
+				"message": "Hermes' gateway is unreachable; the Nous model applies from the next chat."})
 			return
 		}
 		p := findAppProvider(m.homeDir, body.ProviderID)
