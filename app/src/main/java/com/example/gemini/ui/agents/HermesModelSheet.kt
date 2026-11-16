@@ -109,9 +109,9 @@ fun HermesModelSheet(
     // smart default: after a scan a 300-model list is useless with the dead
     // ones mixed in, so "Working" is the sensible default; when everything is
     // dead ALL is the only filter that still shows a row, and its error reasons
-    // are what the user needs to see. Models with no verdict at all stay visible
-    // under "Working": a provider added after the last scan (Nous, right after
-    // the sign-in) would otherwise look like it has no models.
+    // are what the user needs to see. "Working" shows only verified models;
+    // the unscanned and the credit-refused fold away until the scan confirms
+    // them.
     // Providers whose models are folded away. Expanded by default: the header
     // carries the provider name the flat list used to repeat on every row.
     var collapsedProviders by remember { mutableStateOf(setOf<String>()) }
@@ -154,11 +154,11 @@ fun HermesModelSheet(
             e.providerLabel.contains(search, true)
         val matchesFilter = when (filter) {
             ScanFilter.ALL -> true
-            // "Working" hides the models a scan proved dead, not the ones nothing
-            // has measured yet: a provider that was just added (Nous, right after
-            // the sign-in) has no verdict at all, and hiding it made a full
-            // catalog look empty.
-            ScanFilter.WORKING -> health[e.key]?.ok != false
+            // "Working" shows only models this scan verified as answering.
+            // Anything else — proven dead, credit-refused, or not yet
+            // measured — is folded away; the ALL filter keeps their reasons
+            // visible when nothing works.
+            ScanFilter.WORKING -> health[e.key]?.ok == true
             ScanFilter.BROKEN -> health[e.key]?.ok == false
         }
         matchesQuery && matchesFilter
