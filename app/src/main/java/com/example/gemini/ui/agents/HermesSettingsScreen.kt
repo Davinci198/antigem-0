@@ -63,6 +63,8 @@ fun HermesSettingsPage(
     binaryPath: String,
     currentModel: String? = null,
     providerCount: Int? = null,
+    mcpCount: Int? = null,
+    pluginCount: Int? = null,
     onSaveBinaryPath: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -120,6 +122,31 @@ fun HermesSettingsPage(
                 Column(Modifier.padding(16.dp)) {
                     Text("Custom providers", fontWeight = FontWeight.SemiBold)
                     Text("$count configured", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                }
+            }
+        }
+        mcpCount?.let { count ->
+            Spacer(Modifier.height(12.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("MCP Servers", fontWeight = FontWeight.SemiBold)
+                    Text("$count server(s) configured", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Memory", fontWeight = FontWeight.SemiBold)
+                Text("Persistent memory via the Hermes profile", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            }
+        }
+        pluginCount?.let { count ->
+            Spacer(Modifier.height(12.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Plugins", fontWeight = FontWeight.SemiBold)
+                    Text("$count plugin(s) installed", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                 }
             }
         }
