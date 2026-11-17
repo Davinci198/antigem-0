@@ -46,11 +46,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import android.widget.Toast
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.claude.SettingsGroupHeader
-import com.example.gemini.ui.components.FileManagerDialog
 import com.example.gemini.ui.components.accent
 
 private data class AgentInfo(val kind: AgentKind, val title: String, val description: String)
@@ -166,7 +169,8 @@ fun AgentsSettingsPage(
 ) {
     var selected by remember(enabled) { mutableStateOf(enabled) }
     var confirm by remember { mutableStateOf(false) }
-    var browsePath by remember { mutableStateOf<String?>(null) }
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text(
             "Agents you turn off do not run at all: the local server starts without them and their settings and chats are hidden (chats stay on disk).",
@@ -183,11 +187,14 @@ fun AgentsSettingsPage(
             "~/dev/antigem/workspace" to "Workspace (repo)",
             "~/dev/antigem/tmp" to "Tmp (repo)",
             "~/dev/tmp" to "Tmp (global)",
-            "~/dev/antigem" to "Repo root (CONTEXT.md)"
+            "~/dev/antigem/CONTEXT.md" to "Prompt comun (CONTEXT.md)"
         )
         workspacePaths.forEach { (path, label) ->
             Surface(
-                onClick = { browsePath = path },
+                onClick = {
+                    clipboard.setText(AnnotatedString(path))
+                    Toast.makeText(context, "Copied: $path", Toast.LENGTH_SHORT).show()
+                },
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
@@ -198,7 +205,7 @@ fun AgentsSettingsPage(
                         Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         Text(path, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     }
-                    Text("Browse", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                    Text("Copy", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -237,12 +244,6 @@ fun AgentsSettingsPage(
                 }) { Text("Restart app") }
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } }
-        )
-    }
-    browsePath?.let { path ->
-        FileManagerDialog(
-            initialPath = path,
-            onDismiss = { browsePath = null }
         )
     }
 }
