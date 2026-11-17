@@ -34,6 +34,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -172,6 +173,7 @@ fun AgentsSettingsPage(
     var selected by remember(enabled) { mutableStateOf(enabled) }
     var confirm by remember { mutableStateOf(false) }
     var browsePath by remember { mutableStateOf<String?>(null) }
+    var openContextFile by remember { mutableStateOf<String?>(null) }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text(
             "Agents you turn off do not run at all: the local server starts without them and their settings and chats are hidden (chats stay on disk).",
@@ -195,8 +197,15 @@ fun AgentsSettingsPage(
             abs("~/dev/antigem/CONTEXT.md") to "Prompt comun (CONTEXT.md)"
         )
         workspacePaths.forEach { (path, label) ->
+            val isContextFile = label.contains("CONTEXT.md")
             Surface(
-                onClick = { browsePath = path },
+                onClick = {
+                    if (isContextFile) {
+                        openContextFile = path
+                    } else {
+                        browsePath = path
+                    }
+                },
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
@@ -207,7 +216,7 @@ fun AgentsSettingsPage(
                         Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         Text(path, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     }
-                    Text("Open", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                    Text(if (isContextFile) "Edit" else "Open", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -279,6 +288,31 @@ fun AgentsSettingsPage(
             },
             onDismiss = { browsePath = null }
         )
+    }
+    openContextFile?.let { filePath ->
+        val scope = rememberCoroutineScope()
+        val context = LocalContext.current
+        LaunchedEffect(filePath) {
+            var res = IdeApiClient.readFileDetailed(filePath)
+            if (res == null) {
+                val seed = "# CONTEXT.md — context comun pentru toți agenții\n\n" +
+                    "# Reguli comune\n- Schimbările se fac pe branch nou.\n" +
+                    "- Nu rula comenzi distructive fără acord.\n\n# Structură\n" +
+                    "- workspace/ — lucru comun\n- tmp/ — fișiere temporare comune\n"
+                val ok = IdeApiClient.writeFileRaw(filePath, seed)
+                if (ok) res = IdeApiClient.readFileDetailed(filePath)
+            }
+            if (res == null) {
+                android.widget.Toast.makeText(
+                    context,
+                    "Cannot open CONTEXT.md. IDE Bridge is offline.",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            } else {
+                TermuxDaemonManager.openOrSelectTab(filePath, "CONTEXT.md", res.content)
+            }
+            openContextFile = null
+        }
     }
 }
 
