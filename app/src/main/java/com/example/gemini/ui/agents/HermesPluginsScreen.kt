@@ -264,7 +264,12 @@ private fun PluginsTab(modifier: Modifier = Modifier) {
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         )
                     }
-                    items(catalog.entries, key = { it.name }) { plugin ->
+                    // The name alone is not unique: bundled plugins ship an image backend and a
+                    // video backend under the same name (deepinfra, fal, openrouter, xai), and a
+                    // registry page may repeat one too. Keying by name crashed the screen with
+                    // "Key ... was already used" the moment two of them landed in one column.
+                    items(catalog.entries.size, key = { "catalog:$it:${catalog.entries[it].name}" }) { index ->
+                        val plugin = catalog.entries[index]
                         CatalogPluginCard(
                             plugin = plugin,
                             installedState = installedByName[plugin.name],
@@ -371,7 +376,10 @@ private fun InstalledPluginsView(
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
         }
-        items(installed, key = { it.name }) { plugin ->
+        // Two installed plugins can share a name (image vs video backend), so the row position is
+        // part of the key; keying by name alone crashed the list.
+        items(installed.size, key = { "installed:$it:${installed[it].name}" }) { index ->
+            val plugin = installed[index]
             InstalledPluginCard(
                 plugin = plugin,
                 hasUpdate = plugin.name in updates,
@@ -610,7 +618,8 @@ private fun SkillsTab(modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(results, key = { it.identifier.ifBlank { it.name } }) { skill ->
+                    items(results.size, key = { "result:$it:${results[it].identifier.ifBlank { results[it].name }}" }) { index ->
+                        val skill = results[index]
                         val alreadyInstalled = skill.name in installedNames
                         MarketplaceCard {
                             Row(verticalAlignment = Alignment.CenterVertically) {
