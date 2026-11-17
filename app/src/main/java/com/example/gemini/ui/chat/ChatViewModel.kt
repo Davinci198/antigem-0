@@ -141,15 +141,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // first launch: the server waited for this choice and now starts with it
             com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(getApplication())
         } else if (before != agents) {
-            // stop the server completely, then restart the app: it starts the server again with the new agents
+            // restart the bridge directly with the new agent flags (no full-app restart needed)
             viewModelScope.launch {
                 _isApplyingAgents.value = true
-                runCatching { com.example.gemini.data.local.LocalServerManager.stopServerCompletely() }
-                val app = getApplication<Application>()
-                app.packageManager.getLaunchIntentForPackage(app.packageName)?.component?.let { component ->
-                    app.startActivity(android.content.Intent.makeRestartActivityTask(component))
+                runCatching {
+                    val app = getApplication<Application>()
+                    com.example.gemini.data.local.LocalServerManager.restartServerAndWait(app)
                 }
-                Runtime.getRuntime().exit(0)
+                _isApplyingAgents.value = false
             }
         }
     }
