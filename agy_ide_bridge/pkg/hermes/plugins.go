@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Marketplace bridges: the app shows the same catalogs the `hermes` CLI already knows, so no
@@ -24,10 +25,15 @@ const (
 	pluginCatalogTTL = 10 * time.Minute
 	// How many catalog entries a query returns. The screen shows a scrollable list, not the whole thing.
 	pluginCatalogLimit = 200
-	// Read-only CLI calls (list, search, check-updates) are quick.
-	hermesReadTimeout = 30 * time.Second
+	// Read-only CLI calls (list, search, check-updates) are quick on paper but pay Python's start-up
+	// and git's checks inside proot: measured 6–16 s even on the host, so a tight timeout would turn
+	// a slow phone into a marketplace that looks broken.
+	hermesReadTimeout = 90 * time.Second
 	// Installing a plugin clones a repository: this is a slow, user-initiated step.
 	hermesInstallTimeout = 4 * time.Minute
+	// Catalog descriptions run to a thousand characters each; the card shows four lines, and two
+	// hundred of them per answer would be a megabyte over the app's socket.
+	pluginDescriptionLimit = 500
 	// A marketplace name arrives from the app and is used as an argv element, never through a shell.
 	pluginNameRe = `^[A-Za-z0-9][A-Za-z0-9._/@-]{0,119}$`
 )
@@ -146,6 +152,9 @@ func (m *Manager) pluginCatalog() ([]pluginEntry, []pluginCategory, error) {
 		return nil, nil, err
 	}
 	entries := doc.Results
+	for i := range entries {
+		entries[i].Description = clip(entries[i].Description, pluginDescriptionLimit)
+	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 
 	// The chips come from the whole catalog, not from the filtered page: a category must stay
@@ -416,4 +425,16 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 // stripANSI removes terminal colouring from CLI output before it reaches the app.
 func stripANSI(s string) string {
 	return ansiPattern.ReplaceAllString(s, "")
+}
+
+// clip shortens s to at most limit bytes without splitting a rune, appending an ellipsis when cut.
+func clip(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(s[:cut]) + "…"
 }

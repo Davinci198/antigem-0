@@ -3,7 +3,9 @@ package hermes
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // A skill directory's SKILL.md frontmatter is the only source of the name and description shown in
@@ -68,6 +70,21 @@ func TestStripANSI(t *testing.T) {
 	in := "\x1b[1m✓ Plugin\x1b[0m installed"
 	if got, want := stripANSI(in), "✓ Plugin installed"; got != want {
 		t.Errorf("stripANSI = %q, want %q", got, want)
+	}
+}
+
+// The catalog trims long descriptions to what a card can show; the cut must not split a rune.
+func TestClip(t *testing.T) {
+	if got := clip("short", 10); got != "short" {
+		t.Errorf("clip kept %q, want it unchanged", got)
+	}
+	// 8 bytes of "ă" headroom: the ellipsis must land on a rune boundary.
+	got := clip("ăăăăă", 5)
+	if !utf8.ValidString(got) {
+		t.Errorf("clip produced invalid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("clip = %q, want an ellipsis", got)
 	}
 }
 

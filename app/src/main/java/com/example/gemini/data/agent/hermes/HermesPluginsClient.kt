@@ -73,6 +73,16 @@ object HermesPluginsClient {
     private const val TAG = "HermesPluginsClient"
 
     /**
+     * Client for the reads. The bridge runs the `hermes` CLI for each one, and inside proot that pays
+     * Python's start-up and git's checks: measured 6–16 s on the host, longer on the phone.
+     */
+    private val readClient: OkHttpClient by lazy {
+        AgyBridgeService.instance.client.newBuilder()
+            .readTimeout(2, TimeUnit.MINUTES)
+            .build()
+    }
+
+    /**
      * Client for the mutating calls. Installing a plugin clones a repository through the bridge, which
      * allows itself four minutes before giving up; the HTTP read must outlive that.
      */
@@ -88,7 +98,7 @@ object HermesPluginsClient {
     private fun url(path: String) =
         AuthPreferences.currentBridgeHttpUrl.trimEnd('/') + "/api/hermes" + path
 
-    private fun get(path: String, client: OkHttpClient = AgyBridgeService.instance.client): String {
+    private fun get(path: String, client: OkHttpClient = readClient): String {
         val request = Request.Builder().url(url(path)).get().build()
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
@@ -100,7 +110,7 @@ object HermesPluginsClient {
     private fun post(
         path: String,
         json: String,
-        client: OkHttpClient = AgyBridgeService.instance.client,
+        client: OkHttpClient = readClient,
     ): String {
         val request = Request.Builder()
             .url(url(path))
