@@ -63,3 +63,6 @@ flow_mcp/
 finally.zip
 # planning-with-files skill scratch
 .planning/
+
+# workspace & tmp comun
+tmp/
