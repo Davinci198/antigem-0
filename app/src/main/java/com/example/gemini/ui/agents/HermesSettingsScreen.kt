@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,7 +86,6 @@ private fun HermesNavRow(
 fun HermesSettingsPage(
     binaryPath: String,
     mcpCount: Int? = null,
-    pluginCount: Int? = null,
     onSaveBinaryPath: (String) -> Unit,
     onOpenProviders: () -> Unit,
     onOpenMcp: () -> Unit,
@@ -96,6 +96,12 @@ fun HermesSettingsPage(
 ) {
     var path by remember(binaryPath) { mutableStateOf(binaryPath) }
     var saved by remember { mutableStateOf(false) }
+    // The count comes from the Hermes marketplace itself; the Gemini/AGY plugin list is a different store.
+    var pluginCount by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(Unit) {
+        com.example.gemini.data.agent.hermes.HermesPluginsClient.installedPlugins()
+            .onSuccess { pluginCount = it.size }
+    }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {

@@ -98,6 +98,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     CLAUDE("Claude Code", "Account, models, permissions, MCP, plugins & memory"),
     OPENCODE("OpenCode", "Server, providers, custom OpenAI-compatible endpoints & approvals"),
     HERMES("Hermes Agent", "Binary path, account, model & custom providers"),
+    HERMES_PLUGINS("Hermes Marketplace", "Plugins and skills for the Hermes Agent"),
     AGENTS("Agents", "Run Antigravity, Claude Code, Hermes or OpenCode"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
@@ -106,7 +107,12 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     ABOUT("About & Info", "App version, package details, and bridge export");
 
     /** Where Back goes from this section. */
-    val parent: SettingsSection get() = if (this == ADB_CONNECT || this == ANDROID_AUTOMATION) UTILITIES else MAIN
+    val parent: SettingsSection
+        get() = when (this) {
+            ADB_CONNECT, ANDROID_AUTOMATION -> UTILITIES
+            HERMES_PLUGINS -> HERMES
+            else -> MAIN
+        }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -575,7 +581,6 @@ fun SettingsDialog(
                         com.example.gemini.ui.agents.HermesSettingsPage(
                             binaryPath = ap.getHermesBinaryPathSync(),
                             mcpCount = mcpServers.size,
-                            pluginCount = installedPlugins.size,
                             onSaveBinaryPath = { path -> scope.launch { ap.saveHermesBinaryPath(path) } },
                             onOpenProviders = {
                                 if (claude != null) {
@@ -590,10 +595,13 @@ fun SettingsDialog(
                                     currentSection = SettingsSection.CLAUDE
                                 }
                             },
-                            onOpenPlugins = { currentSection = SettingsSection.SKILLS_PLUGINS },
+                            onOpenPlugins = { currentSection = SettingsSection.HERMES_PLUGINS },
                             onBack = { currentSection = SettingsSection.MAIN }
                         )
                     }
+                    SettingsSection.HERMES_PLUGINS -> com.example.gemini.ui.agents.HermesPluginsScreen(
+                        onBack = { currentSection = SettingsSection.HERMES }
+                    )
                     SettingsSection.UTILITIES -> UtilitiesSubScreen(
                         cardBg = cardBg,
                         cardBorder = cardBorder,
