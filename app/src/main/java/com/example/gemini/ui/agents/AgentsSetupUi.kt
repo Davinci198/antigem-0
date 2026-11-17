@@ -309,7 +309,27 @@ fun AgentsSettingsPage(
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             } else {
-                TermuxDaemonManager.openOrSelectTab(filePath, "CONTEXT.md", res.content)
+                // Write to a local file and open it with an external text editor via FileProvider.
+                try {
+                    val local = java.io.File(context.filesDir, "CONTEXT.md")
+                    local.writeText(res.content)
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        context,
+                        context.packageName + ".fileprovider",
+                        local
+                    )
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "text/plain")
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    }
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Cannot open CONTEXT.md: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
             }
             openContextFile = null
         }
