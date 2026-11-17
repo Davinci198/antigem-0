@@ -89,7 +89,7 @@ func (m *Manager) handlePlugins(w http.ResponseWriter, r *http.Request, sub stri
 	case sub == "catalog" && r.Method == http.MethodGet:
 		m.handlePluginCatalog(w, r)
 	case sub == "installed" && r.Method == http.MethodGet:
-		m.runHermesJSON(w, hermesReadTimeout, "plugins", "list", "--json")
+		m.handlePluginInstalled(w)
 	case sub == "updates" && r.Method == http.MethodGet:
 		m.runHermesJSON(w, hermesReadTimeout, "plugins", "check-updates", "--json")
 	case sub == "install" && r.Method == http.MethodPost:
@@ -177,13 +177,194 @@ func (m *Manager) pluginCatalog() ([]pluginEntry, []pluginCategory, error) {
 	return entries, categories, nil
 }
 
-// handlePluginAction runs one mutating plugin command for the name in the body.
+// installedPlugin is one row of `hermes plugins list --json`. The CLI omits the key it resolves
+// enable/disable by, and names are not unique (the bundled image and video backends are both
+// "deepinfra"), so the bridge adds the key: it is what lets the app act on exactly one of them.
+type installedPlugin struct {
+	Name        string          `json:"name"`
+	Status      string          `json:"status,omitempty"`
+	Version     string          `json:"version,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Source      string          `json:"source,omitempty"`
+	Removed     json.RawMessage `json:"removed,omitempty"`
+	Key         string          `json:"key,omitempty"`
+}
+
+// pluginKey is one plugin the CLI's discovery sees: the manifest name shown in the list, and the
+// key the mutating verbs resolve (the directory path for nested plugins, the name at top level).
+type pluginKey struct {
+	Name string
+	Key  string
+}
+
+// Categories whose plugins load through dedicated paths; the CLI leaves them out of `plugins list`.
+var bundledPluginSkipDirs = map[string]bool{
+	"memory": true, "context_engine": true, "computer_use": true, "model-providers": true,
+	"config_backends": true,
+}
+
+// handlePluginInstalled lists installed plugins and adds the canonical key to each row.
+func (m *Manager) handlePluginInstalled(w http.ResponseWriter) {
+	out, err := m.runHermes(hermesReadTimeout, "plugins", "list", "--json")
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, obj{"error": err.Error(), "output": out})
+		return
+	}
+	var rows []installedPlugin
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		writeJSON(w, http.StatusBadGateway, obj{"error": "cannot read the plugin list: " + err.Error(), "output": out})
+		return
+	}
+	attachPluginKeys(rows, m.discoverPluginKeys())
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// discoverPluginKeys mirrors the CLI's discovery order (bundled tree first, then user plugins),
+// because `plugins list --json` prints the rows in that order and drops the key. Pairing by
+// position keeps two same-named plugins apart, which is exactly what the app needs.
+func (m *Manager) discoverPluginKeys() []pluginKey {
+	bundled := strings.TrimSpace(os.Getenv("HERMES_BUNDLED_PLUGINS"))
+	if bundled == "" {
+		bundled = filepath.Join(m.hermesHome(), "hermes-agent", "plugins")
+	}
+	var out []pluginKey
+	seen := map[string]int{}
+	scanPluginLevel(bundled, "bundled", "", 0, bundledPluginSkipDirs, seen, &out)
+	scanPluginLevel(filepath.Join(m.hermesHome(), "plugins"), "user", "", 0, nil, seen, &out)
+	return out
+}
+
+func (m *Manager) hermesHome() string {
+	if v := strings.TrimSpace(os.Getenv("HERMES_HOME")); v != "" {
+		return v
+	}
+	return filepath.Join(m.homeDir, ".hermes")
+}
+
+// scanPluginLevel follows the CLI's scan: a directory with a manifest is a plugin (top-level ones
+// are keyed by manifest name, nested ones by their path), and a directory without one is a category
+// holding plugins, scanned exactly one level deeper.
+func scanPluginLevel(base, source, prefix string, depth int, skip map[string]bool, seen map[string]int, out *[]pluginKey) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if depth == 0 && skip[entry.Name()] {
+			continue
+		}
+		dir := filepath.Join(base, entry.Name())
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			continue
+		}
+		name, ok := readPluginManifestName(dir)
+		if !ok {
+			if depth == 0 {
+				next := entry.Name()
+				if prefix != "" {
+					next = prefix + "/" + entry.Name()
+				}
+				scanPluginLevel(dir, source, next, 1, nil, seen, out)
+			}
+			continue
+		}
+		key := name
+		if prefix != "" {
+			key = prefix + "/" + entry.Name()
+		}
+		if index, duplicate := seen[key]; duplicate {
+			// The CLI keeps the first bundled plugin for a key and lets a user plugin replace it.
+			if source == "bundled" {
+				continue
+			}
+			(*out)[index] = pluginKey{Name: name, Key: key}
+			continue
+		}
+		seen[key] = len(*out)
+		*out = append(*out, pluginKey{Name: name, Key: key})
+	}
+}
+
+// readPluginManifestName returns the name the CLI would list for dir, and whether dir is a plugin at
+// all: plugin.yaml (or .yml) wins, then a portable plugin.json. An unreadable manifest degrades to
+// the directory name, like the CLI does.
+func readPluginManifestName(dir string) (string, bool) {
+	for _, file := range []string{"plugin.yaml", "plugin.yml"} {
+		path := filepath.Join(dir, file)
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if data, err := os.ReadFile(path); err == nil {
+			if name := yamlTopLevelValue(string(data), "name"); name != "" {
+				return name, true
+			}
+		}
+		return filepath.Base(dir), true
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "plugin.json")); err == nil {
+		if data, err := os.ReadFile(filepath.Join(dir, "plugin.json")); err == nil {
+			var doc struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(data, &doc) == nil && strings.TrimSpace(doc.Name) != "" {
+				return strings.TrimSpace(doc.Name), true
+			}
+		}
+		return filepath.Base(dir), true
+	}
+	return "", false
+}
+
+// yamlTopLevelValue reads one scalar field from a plugin.yaml without a YAML dependency: the fields
+// we need are plain top-level scalars in every real manifest, so the first unindented `key:` line is
+// enough.
+func yamlTopLevelValue(text, field string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" || line[0] == ' ' || line[0] == '\t' || line[0] == '#' {
+			continue
+		}
+		key, value, found := strings.Cut(line, ":")
+		if !found || strings.TrimSpace(key) != field {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" || value == "|" || value == ">" {
+			return ""
+		}
+		if cut := strings.Index(value, " #"); cut >= 0 {
+			value = strings.TrimSpace(value[:cut])
+		}
+		return strings.Trim(value, `"'`)
+	}
+	return ""
+}
+
+// attachPluginKeys pairs each CLI row with the next discovered key of the same name, in order.
+func attachPluginKeys(rows []installedPlugin, keys []pluginKey) {
+	queues := make(map[string][]string, len(keys))
+	for _, entry := range keys {
+		queues[entry.Name] = append(queues[entry.Name], entry.Key)
+	}
+	for i := range rows {
+		queue := queues[rows[i].Name]
+		if len(queue) == 0 {
+			continue
+		}
+		rows[i].Key = queue[0]
+		queues[rows[i].Name] = queue[1:]
+	}
+}
+
+// handlePluginAction runs one mutating plugin command for the target in the body.
+
 func (m *Manager) handlePluginAction(w http.ResponseWriter, r *http.Request, timeout time.Duration, args ...string) {
-	name, ok := marketplaceName(w, r)
+	target, ok := marketplaceTarget(w, r)
 	if !ok {
 		return
 	}
-	out, err := m.runHermes(timeout, append(args, name)...)
+	out, err := m.runHermes(timeout, append(args, target)...)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, obj{"success": false, "error": err.Error(), "output": out})
 		return
@@ -195,6 +376,7 @@ func (m *Manager) handlePluginAction(w http.ResponseWriter, r *http.Request, tim
 func (m *Manager) handlePluginToggle(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name    string `json:"name"`
+		Key     string `json:"key"`
 		Enabled *bool  `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -205,7 +387,11 @@ func (m *Manager) handlePluginToggle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, obj{"error": "enabled is required"})
 		return
 	}
-	if !pluginNamePattern.MatchString(strings.TrimSpace(body.Name)) {
+	target := strings.TrimSpace(body.Key)
+	if target == "" {
+		target = strings.TrimSpace(body.Name)
+	}
+	if !validPluginTarget(target) {
 		writeJSON(w, http.StatusBadRequest, obj{"error": "invalid plugin name"})
 		return
 	}
@@ -213,7 +399,7 @@ func (m *Manager) handlePluginToggle(w http.ResponseWriter, r *http.Request) {
 	if *body.Enabled {
 		verb = "enable"
 	}
-	out, err := m.runHermes(hermesReadTimeout, "plugins", verb, body.Name)
+	out, err := m.runHermes(hermesReadTimeout, "plugins", verb, target)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, obj{"success": false, "error": err.Error(), "output": out})
 		return
@@ -384,21 +570,40 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// marketplaceName decodes a {name} body and rejects anything that is not a plain catalog name.
-func marketplaceName(w http.ResponseWriter, r *http.Request) (string, bool) {
+// marketplaceTarget decodes {name,key} and prefers key: a key names exactly one plugin
+// (image_gen/deepinfra), while a bare name can belong to two. Name stays for installs and for
+// callers that predate keys.
+func marketplaceTarget(w http.ResponseWriter, r *http.Request) (string, bool) {
 	var body struct {
 		Name string `json:"name"`
+		Key  string `json:"key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, obj{"error": err.Error()})
 		return "", false
 	}
-	name := strings.TrimSpace(body.Name)
-	if !pluginNamePattern.MatchString(name) {
+	target := strings.TrimSpace(body.Key)
+	if target == "" {
+		target = strings.TrimSpace(body.Name)
+	}
+	if !validPluginTarget(target) {
 		writeJSON(w, http.StatusBadRequest, obj{"error": "invalid name"})
 		return "", false
 	}
-	return name, true
+	return target, true
+}
+
+// validPluginTarget accepts a manifest name or a nested CLI key, never a path traversal.
+func validPluginTarget(target string) bool {
+	if !pluginNamePattern.MatchString(target) {
+		return false
+	}
+	for _, part := range strings.Split(target, "/") {
+		if part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // runHermes runs the CLI with the manager's HOME and returns its combined output.

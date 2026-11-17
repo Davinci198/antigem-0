@@ -36,14 +36,21 @@ data class HermesPluginCatalog(
 /** One filter chip: a catalog category and how many entries it holds. */
 data class HermesPluginCategory(val name: String, val count: Int)
 
-/** An installed plugin, from `hermes plugins list --json`. */
+/** An installed plugin, from `hermes plugins list --json` plus the bridge's key.
+ *
+ * The key (`image_gen/deepinfra`) names one plugin; the name alone may be shared by the bundled
+ * image and video backends, and enable/disable/remove resolve the key, not the name. */
 data class HermesInstalledPlugin(
     val name: String,
     val enabled: Boolean,
     val version: String,
     val description: String,
     val bundled: Boolean,
-)
+    val key: String = "",
+) {
+    /** The identity to send to the bridge and to key the list with. */
+    val target: String get() = key.ifBlank { name }
+}
 
 /** A skill found in one of the registries Hermes searches (official, skills.sh, GitHub, ClawHub…). */
 data class HermesSkillResult(
@@ -194,34 +201,41 @@ object HermesPluginsClient {
 
     suspend fun installPlugin(name: String): Result<String> = pluginAction("/plugins/install", name)
 
-    suspend fun removePlugin(name: String): Result<String> = pluginAction("/plugins/remove", name)
+    suspend fun removePlugin(plugin: HermesInstalledPlugin): Result<String> =
+        pluginAction("/plugins/remove", plugin.target)
 
-    suspend fun updatePlugin(name: String): Result<String> = pluginAction("/plugins/update", name)
+    suspend fun updatePlugin(plugin: HermesInstalledPlugin): Result<String> =
+        pluginAction("/plugins/update", plugin.target)
 
-    suspend fun setPluginEnabled(name: String, enabled: Boolean): Result<String> =
+    suspend fun setPluginEnabled(plugin: HermesInstalledPlugin, enabled: Boolean): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val payload = JSONObject().put("name", name).put("enabled", enabled).toString()
+                val payload = JSONObject()
+                    .put("name", plugin.name)
+                    .put("key", plugin.target)
+                    .put("enabled", enabled)
+                    .toString()
                 val json = JSONObject(post("/plugins/toggle", payload))
                 if (json.optBoolean("success", true)) {
                     json.optString("output")
                 } else {
                     throw IllegalStateException(json.optString("output").ifBlank { "Could not change the plugin state." })
                 }
-            }.onFailure { Log.w(TAG, "toggle $name failed: ${it.message}") }
+            }.onFailure { Log.w(TAG, "toggle ${plugin.target} failed: ${it.message}") }
         }
 
-    private suspend fun pluginAction(path: String, name: String): Result<String> =
+    private suspend fun pluginAction(path: String, target: String): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val payload = JSONObject().put("name", name).toString()
+                // A key is what the CLI resolves; send the name too so a bridge without keys still works.
+                val payload = JSONObject().put("name", target.substringAfterLast('/')).put("key", target).toString()
                 val json = JSONObject(post(path, payload, slowClient))
                 if (json.optBoolean("success", true)) {
                     json.optString("output")
                 } else {
                     throw IllegalStateException(json.optString("output").ifBlank { "The CLI refused the request." })
                 }
-            }.onFailure { Log.w(TAG, "$path $name failed: ${it.message}") }
+            }.onFailure { Log.w(TAG, "$path $target failed: ${it.message}") }
         }
 
     // ── skills ───────────────────────────────────────────────────────────────
@@ -312,5 +326,6 @@ object HermesPluginsClient {
         version = optString("version"),
         description = optString("description"),
         bundled = optString("source").equals("bundled", ignoreCase = true),
+        key = optString("key"),
     )
 }

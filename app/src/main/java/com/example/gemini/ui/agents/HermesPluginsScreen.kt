@@ -201,9 +201,9 @@ private fun PluginsTab(modifier: Modifier = Modifier) {
                 installed = installed,
                 updates = updates,
                 busy = busy,
-                onToggle = { plugin, enabled -> run(plugin.name) { HermesPluginsClient.setPluginEnabled(plugin.name, enabled) } },
-                onRemove = { plugin -> run(plugin.name) { HermesPluginsClient.removePlugin(plugin.name) } },
-                onUpdate = { plugin -> run(plugin.name) { HermesPluginsClient.updatePlugin(plugin.name) } },
+                onToggle = { plugin, enabled -> run(plugin.target) { HermesPluginsClient.setPluginEnabled(plugin, enabled) } },
+                onRemove = { plugin -> run(plugin.target) { HermesPluginsClient.removePlugin(plugin) } },
+                onUpdate = { plugin -> run(plugin.target) { HermesPluginsClient.updatePlugin(plugin) } },
             )
         } else {
             OutlinedTextField(
@@ -270,13 +270,16 @@ private fun PluginsTab(modifier: Modifier = Modifier) {
                     // "Key ... was already used" the moment two of them landed in one column.
                     items(catalog.entries.size, key = { "catalog:$it:${catalog.entries[it].name}" }) { index ->
                         val plugin = catalog.entries[index]
+                        val installedRow = installedByName[plugin.name]
                         CatalogPluginCard(
                             plugin = plugin,
-                            installedState = installedByName[plugin.name],
-                            busy = busy == plugin.name,
+                            installedState = installedRow,
+                            busy = busy == (installedRow?.target ?: plugin.name),
                             onInstall = { run(plugin.name) { HermesPluginsClient.installPlugin(plugin.name) } },
-                            onEnable = { run(plugin.name) { HermesPluginsClient.setPluginEnabled(plugin.name, true) } },
-                            onDisable = { run(plugin.name) { HermesPluginsClient.setPluginEnabled(plugin.name, false) } },
+                            // The installed row carries the CLI key: enable/disable must target it, not the
+                            // shared display name (two bundled backends can be both "deepinfra").
+                            onEnable = { installedRow?.let { run(it.target) { HermesPluginsClient.setPluginEnabled(it, true) } } },
+                            onDisable = { installedRow?.let { run(it.target) { HermesPluginsClient.setPluginEnabled(it, false) } } },
                         )
                     }
                 }
@@ -377,13 +380,14 @@ private fun InstalledPluginsView(
             )
         }
         // Two installed plugins can share a name (image vs video backend), so the row position is
-        // part of the key; keying by name alone crashed the list.
-        items(installed.size, key = { "installed:$it:${installed[it].name}" }) { index ->
+        // part of the key; keying by name alone crashed the list. The target (the CLI key when the
+        // bridge provides one) is what the actions act on, so busy tracks it too.
+        items(installed.size, key = { "installed:$it:${installed[it].target}" }) { index ->
             val plugin = installed[index]
             InstalledPluginCard(
                 plugin = plugin,
-                hasUpdate = plugin.name in updates,
-                busy = busy == plugin.name,
+                hasUpdate = !plugin.bundled && plugin.name in updates,
+                busy = busy == plugin.target,
                 onToggle = { onToggle(plugin, it) },
                 onRemove = { onRemove(plugin) },
                 onUpdate = { onUpdate(plugin) },
@@ -462,9 +466,13 @@ private fun InstalledPluginCard(
             )
         }
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (hasUpdate) ActionText("Update", primary = true, enabled = !busy, onClick = onUpdate)
-            ActionText("Remove", primary = false, enabled = !busy, onClick = { confirmRemove = true })
+        // Bundled plugins live in the read-only tree: the CLI can only enable/disable them, so the
+        // row shows just the switch.
+        if (!plugin.bundled) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (hasUpdate) ActionText("Update", primary = true, enabled = !busy, onClick = onUpdate)
+                ActionText("Remove", primary = false, enabled = !busy, onClick = { confirmRemove = true })
+            }
         }
     }
 }

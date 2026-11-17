@@ -153,6 +153,84 @@ func TestPluginToggleRequiresEnabled(t *testing.T) {
 	}
 }
 
+// writePluginFile puts one manifest into the tree the CLI scans.
+func writePluginFile(t *testing.T, home, rel, name, content string) {
+	t.Helper()
+	dir := filepath.Join(home, filepath.FromSlash(rel))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", rel, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s/%s: %v", rel, name, err)
+	}
+}
+
+// The CLI's list has no key, and the bundled image and video backends are both called "deepinfra".
+// The bridge adds the key from the tree, in the CLI's own order, so the app can toggle one of them.
+func TestInstalledPluginsCarryTheirCliKey(t *testing.T) {
+	out := `[
+ {"name":"deepinfra","status":"enabled","version":"1.0.0","description":"image","source":"bundled","removed":null},
+ {"name":"foo","status":"enabled","version":"1.0.0","description":"tool","source":"bundled","removed":null},
+ {"name":"deepinfra","status":"enabled","version":"1.0.0","description":"video","source":"bundled","removed":null},
+ {"name":"alpha","status":"enabled","version":"1.0.0","description":"user","source":"catalog:official@abc","removed":null}
+]`
+	m, _ := newStubManager(t, out)
+	base := ".hermes/hermes-agent/plugins"
+	writePluginFile(t, m.homeDir, base+"/image_gen/deepinfra", "plugin.yaml", "name: deepinfra\nversion: 1.0.0\n")
+	writePluginFile(t, m.homeDir, base+"/video_gen/deepinfra", "plugin.yaml", "name: deepinfra\nversion: 1.0.0\n")
+	writePluginFile(t, m.homeDir, base+"/tools/foo", "plugin.yaml", "name: foo\nversion: 1.0.0\n")
+	// Categories with their own loader never show in `plugins list`.
+	writePluginFile(t, m.homeDir, base+"/model-providers/deepinfra", "plugin.yaml", "name: deepinfra\n")
+	// A user plugin is keyed by its manifest name at the top level.
+	writePluginFile(t, m.homeDir, ".hermes/plugins/alpha", "plugin.json", `{"name":"alpha"}`)
+
+	rec := doGET(t, m, "/api/hermes/plugins/installed")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var rows []installedPlugin
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := []string{"image_gen/deepinfra", "tools/foo", "video_gen/deepinfra", "alpha"}
+	if len(rows) != len(want) {
+		t.Fatalf("rows = %d, want %d", len(rows), len(want))
+	}
+	for i, key := range want {
+		if rows[i].Key != key {
+			t.Errorf("row %d (%s) key = %q, want %q", i, rows[i].Name, rows[i].Key, key)
+		}
+	}
+}
+
+// The app sends the key it got from the list: enable/disable must receive the key, not the shared name.
+func TestPluginToggleTargetsTheKey(t *testing.T) {
+	m, log := newStubManager(t, `{"success":true}`)
+	rec := doPOST(t, m, "/api/hermes/plugins/toggle", `{"name":"deepinfra","key":"video_gen/deepinfra","enabled":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("stub log: %v", err)
+	}
+	if got := strings.TrimSpace(string(calls)); got != "plugins disable video_gen/deepinfra" {
+		t.Errorf("CLI call = %q", got)
+	}
+}
+
+// A key arrives from the app too: it must stay inside a plugins directory, so no `..` segments.
+func TestPluginKeyCannotEscapeThePluginsDir(t *testing.T) {
+	m, log := newStubManager(t, `{"success":true}`)
+	rec := doPOST(t, m, "/api/hermes/plugins/toggle", `{"key":"image_gen/../../root","enabled":false}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Error("the CLI ran for a traversal key")
+	}
+}
+
 // The catalog is fetched once and then served from memory: the screen queries it per keystroke.
 func TestPluginCatalogIsCached(t *testing.T) {
 	m, log := newStubManager(t, stubCatalog)
