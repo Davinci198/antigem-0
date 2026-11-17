@@ -65,4 +65,4 @@ finally.zip
 .planning/
 
 # workspace & tmp comun
-tmp/
+/tmp/

@@ -1288,44 +1288,6 @@ func (h *Handler) FsMkdirHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// FsWriteHandler writes file contents to a path (expands "~/" to home).
-func (h *Handler) FsWriteHandler(w http.ResponseWriter, r *http.Request) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = h.Cfg.ProjectsBaseDir
-	}
-
-	var req models.WriteReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	targetPath := strings.TrimSpace(req.Path)
-	if targetPath == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Path is required"})
-		return
-	}
-	if strings.HasPrefix(targetPath, "~/") {
-		targetPath = filepath.Join(homeDir, strings.TrimPrefix(targetPath, "~/"))
-	}
-	targetPath = filepath.Clean(targetPath)
-
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := os.WriteFile(targetPath, []byte(req.Content), 0644); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"path":    targetPath,
-	})
-}
-
 // FileTreeHandler recursively lists all files and folders without arbitrary depth limits.
 func (h *Handler) FileTreeHandler(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")

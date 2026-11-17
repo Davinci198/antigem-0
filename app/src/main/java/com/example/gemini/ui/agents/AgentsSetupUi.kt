@@ -61,6 +61,9 @@ import com.example.gemini.ui.components.accent
 
 private data class AgentInfo(val kind: AgentKind, val title: String, val description: String)
 
+/** A row in Settings → Agents that opens a shared workspace path (a directory, or the common prompt file). */
+private data class WorkspaceEntry(val label: String, val path: String, val isFile: Boolean = false)
+
 private val AGENT_INFO = listOf(
     AgentInfo(AgentKind.AGY, "Antigravity", "Google's coding agent through the agy hub: Gemini and Claude models on your Google plan."),
     AgentInfo(AgentKind.CLAUDE, "Claude Code", "Anthropic's Claude Code CLI on this device: your Claude subscription or Anthropic Console account."),
@@ -186,24 +189,20 @@ fun AgentsSettingsPage(
         Spacer(Modifier.height(18.dp))
 
         SettingsGroupHeader("Workspace & prompt comun", MaterialTheme.colorScheme.primary, "Directories and shared prompt for all agents")
-        val userHome = runCatching { System.getProperty("user.home") }.getOrNull()
-            ?.takeIf { it.isNotBlank() } ?: "/root"
-        fun abs(path: String): String =
-            if (path.startsWith("~/")) userHome + path.removePrefix("~") else path
+        // Paths stay in "~" form: the bridge expands them inside its own home, which the app cannot know.
         val workspacePaths = listOf(
-            abs("~/dev/antigem/workspace") to "Workspace (repo)",
-            abs("~/dev/antigem/tmp") to "Tmp (repo)",
-            abs("~/dev/tmp") to "Tmp (global)",
-            abs("~/dev/antigem/CONTEXT.md") to "Prompt comun (CONTEXT.md)"
+            WorkspaceEntry("Workspace (repo)", "~/dev/antigem/workspace"),
+            WorkspaceEntry("Tmp (repo)", "~/dev/antigem/tmp"),
+            WorkspaceEntry("Tmp (global)", "~/dev/tmp"),
+            WorkspaceEntry("Prompt comun (CONTEXT.md)", "~/dev/antigem/CONTEXT.md", isFile = true)
         )
-        workspacePaths.forEach { (path, label) ->
-            val isContextFile = label.contains("CONTEXT.md")
+        workspacePaths.forEach { entry ->
             Surface(
                 onClick = {
-                    if (isContextFile) {
-                        openContextFile = path
+                    if (entry.isFile) {
+                        openContextFile = entry.path
                     } else {
-                        browsePath = path
+                        browsePath = entry.path
                     }
                 },
                 shape = RoundedCornerShape(12.dp),
@@ -213,10 +212,10 @@ fun AgentsSettingsPage(
             ) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text(path, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        Text(entry.label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text(entry.path, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     }
-                    Text(if (isContextFile) "Edit" else "Open", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                    Text(if (entry.isFile) "Edit" else "Open", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -264,16 +263,7 @@ fun AgentsSettingsPage(
             initialPath = path,
             onOpenFileInEditor = { filePath, name ->
                 scope.launch {
-                    var res = IdeApiClient.readFileDetailed(filePath)
-                    if (res == null && filePath.endsWith("CONTEXT.md")) {
-                        // Seed the shared CONTEXT.md if it does not exist yet.
-                        val seed = "# CONTEXT.md — context comun pentru toți agenții\n\n" +
-                            "# Reguli comune\n- Schimbările se fac pe branch nou.\n" +
-                            "- Nu rula comenzi distructive fără acord.\n\n# Structură\n" +
-                            "- workspace/ — lucru comun\n- tmp/ — fișiere temporare comune\n"
-                        val ok = IdeApiClient.writeFileRaw(filePath, seed)
-                        if (ok) res = IdeApiClient.readFileDetailed(filePath)
-                    }
+                    val res = IdeApiClient.readFileDetailed(filePath)
                     if (res == null) {
                         android.widget.Toast.makeText(
                             context,
@@ -290,45 +280,59 @@ fun AgentsSettingsPage(
         )
     }
     openContextFile?.let { filePath ->
-        val scope = rememberCoroutineScope()
         val context = LocalContext.current
         LaunchedEffect(filePath) {
-            var res = IdeApiClient.readFileDetailed(filePath)
-            if (res == null) {
-                val seed = "# CONTEXT.md — context comun pentru toți agenții\n\n" +
-                    "# Reguli comune\n- Schimbările se fac pe branch nou.\n" +
-                    "- Nu rula comenzi distructive fără acord.\n\n# Structură\n" +
-                    "- workspace/ — lucru comun\n- tmp/ — fișiere temporare comune\n"
-                val ok = IdeApiClient.writeFileRaw(filePath, seed)
-                if (ok) res = IdeApiClient.readFileDetailed(filePath)
+            val localCopy = java.io.File(context.filesDir, "CONTEXT.md")
+            // Holds the content we last downloaded, so an edit made in the external editor is recognised as such.
+            val lastSynced = java.io.File(context.filesDir, "CONTEXT.md.synced")
+            var syncedNote: String? = null
+            var failure: String? = null
+
+            // The editor saves into our local copy: if that copy differs from what we last downloaded, the user
+            // edited it, and it goes back to the shared workspace before we overwrite anything.
+            val edited = runCatching { localCopy.takeIf { it.exists() }?.readText() }.getOrNull()
+            val synced = runCatching { lastSynced.takeIf { it.exists() }?.readText() }.getOrNull()
+            if (edited != null && synced != null && edited != synced && edited.isNotBlank()) {
+                if (IdeApiClient.saveFile(filePath, edited, force = true)) {
+                    syncedNote = "Saved your CONTEXT.md edits to the workspace."
+                } else {
+                    // Keep the edit instead of silently replacing it with the workspace version.
+                    failure = "Could not save your CONTEXT.md edits: IDE Bridge is offline. Your edit is kept locally."
+                }
             }
-            if (res == null) {
-                android.widget.Toast.makeText(
-                    context,
-                    "Cannot open CONTEXT.md. IDE Bridge is offline.",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
+
+            if (failure != null) {
+                android.widget.Toast.makeText(context, failure, android.widget.Toast.LENGTH_LONG).show()
             } else {
-                // Write to a local file and open it with an external text editor via FileProvider.
-                try {
-                    val local = java.io.File(context.filesDir, "CONTEXT.md")
-                    local.writeText(res.content)
-                    val uri = androidx.core.content.FileProvider.getUriForFile(
-                        context,
-                        context.packageName + ".fileprovider",
-                        local
-                    )
-                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                        setDataAndType(uri, "text/plain")
-                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                    }
-                    context.startActivity(intent)
-                } catch (e: Exception) {
+                val res = IdeApiClient.readFileDetailed(filePath)
+                if (res == null) {
                     android.widget.Toast.makeText(
                         context,
-                        "Cannot open CONTEXT.md: ${e.message}",
+                        "Cannot open CONTEXT.md: IDE Bridge is offline.",
                         android.widget.Toast.LENGTH_LONG
                     ).show()
+                } else {
+                    try {
+                        localCopy.writeText(res.content)
+                        lastSynced.writeText(res.content)
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            context,
+                            context.packageName + ".fileprovider",
+                            localCopy
+                        )
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "text/plain")
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        }
+                        context.startActivity(intent)
+                        syncedNote?.let { android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show() }
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Cannot open CONTEXT.md: ${e.message}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
             openContextFile = null

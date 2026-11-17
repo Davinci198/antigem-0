@@ -412,7 +412,6 @@ func main() {
 	mux.HandleFunc("/api/projects/create", h.CreateProjectHandler)
 	mux.HandleFunc("/api/fs/browse", h.FsBrowseHandler)
 	mux.HandleFunc("/api/fs/mkdir", h.FsMkdirHandler)
-	mux.HandleFunc("/api/fs/write", h.FsWriteHandler)
 	mux.HandleFunc("/api/tree", h.FileTreeHandler)
 	mux.HandleFunc("/api/file/read", h.FileReadHandler)
 	mux.HandleFunc("/api/file/save", h.FileSaveHandler)

@@ -397,22 +397,6 @@ object IdeApiClient {
         if (it.category == "too-large") null else it.content
     }
 
-    /** Writes raw file contents via the bridge's /api/fs/write endpoint. */
-    suspend fun writeFileRaw(path: String, content: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val payload = JSONObject().put("path", path).put("content", content).toString()
-            val request = Request.Builder()
-                .url("$baseUrl/api/fs/write")
-                .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-                .build()
-            client.newCall(request).execute().use { response ->
-                response.isSuccessful
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     suspend fun saveFileDetailed(
         path: String,
         content: String,

@@ -104,7 +104,7 @@ care lucrează în acest repo (Claude Code, OpenCode, Hermes, agy).
 // EnsureWorkspaceDirs creates the shared workspace/tmp directories for agents
 // inside this media's home (e.g. /root/dev/... under proot). It also seeds a
 // default CONTEXT.md if missing. Safe to call repeatedly.
-func EnsureWorkspaceDirs(home string) []string {
+func EnsureWorkspaceDirs(home string) {
 	dirs := []string{
 		filepath.Join(home, "dev"),
 		filepath.Join(home, "dev", "tmp"),
@@ -112,19 +112,13 @@ func EnsureWorkspaceDirs(home string) []string {
 		filepath.Join(home, "dev", "antigem", "workspace"),
 		filepath.Join(home, "dev", "antigem", "tmp"),
 	}
-	created := []string{}
 	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0o755); err == nil {
-			created = append(created, d)
-		}
+		_ = os.MkdirAll(d, 0o755)
 	}
 	ctxPath := filepath.Join(home, "dev", "antigem", "CONTEXT.md")
 	if _, err := os.Stat(ctxPath); os.IsNotExist(err) {
-		if err := os.WriteFile(ctxPath, []byte(DefaultContextContent), 0o644); err == nil {
-			created = append(created, ctxPath)
-		}
+		_ = os.WriteFile(ctxPath, []byte(DefaultContextContent), 0o644)
 	}
-	return created
 }
 
 // ExpandHome expands tilde (~) in file paths to the user's home directory.

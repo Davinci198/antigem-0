@@ -154,9 +154,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _isApplyingAgents.value = true
                 runCatching {
                     val app = getApplication<Application>()
-                    withTimeoutOrNull(AGENTS_RESTART_TIMEOUT_MS) {
+                    val finished = withTimeoutOrNull(AGENTS_RESTART_TIMEOUT_MS) {
                         com.example.gemini.data.local.LocalServerManager.restartServerAndWait(app)
-                    }
+                    } != null
+                    // A timeout can cancel the restart between stopping and starting: make sure it comes up anyway.
+                    if (!finished) com.example.gemini.data.local.LocalServerManager.startServer(app)
                 }
                 _isApplyingAgents.value = false
             }
