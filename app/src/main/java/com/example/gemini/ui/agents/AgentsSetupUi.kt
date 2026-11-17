@@ -184,11 +184,15 @@ fun AgentsSettingsPage(
         Spacer(Modifier.height(18.dp))
 
         SettingsGroupHeader("Workspace & prompt comun", MaterialTheme.colorScheme.primary, "Directories and shared prompt for all agents")
+        val userHome = runCatching { System.getProperty("user.home") }.getOrNull()
+            ?.takeIf { it.isNotBlank() } ?: "/root"
+        fun abs(path: String): String =
+            if (path.startsWith("~/")) userHome + path.removePrefix("~") else path
         val workspacePaths = listOf(
-            "~/dev/antigem/workspace" to "Workspace (repo)",
-            "~/dev/antigem/tmp" to "Tmp (repo)",
-            "~/dev/tmp" to "Tmp (global)",
-            "~/dev/antigem/CONTEXT.md" to "Prompt comun (CONTEXT.md)"
+            abs("~/dev/antigem/workspace") to "Workspace (repo)",
+            abs("~/dev/antigem/tmp") to "Tmp (repo)",
+            abs("~/dev/tmp") to "Tmp (global)",
+            abs("~/dev/antigem/CONTEXT.md") to "Prompt comun (CONTEXT.md)"
         )
         workspacePaths.forEach { (path, label) ->
             Surface(
