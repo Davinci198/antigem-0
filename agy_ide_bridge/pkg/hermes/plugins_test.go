@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,33 @@ func TestReadSkillWithoutFrontmatter(t *testing.T) {
 func TestReadSkillMissingFile(t *testing.T) {
 	if _, ok := readSkill(filepath.Join(t.TempDir(), "SKILL.md"), "x"); ok {
 		t.Fatal("readSkill reported ok for a missing file")
+	}
+}
+
+// A real catalog entry carries fields we do not keep, and some of them are not strings: capabilities
+// is an object, platforms a list, onboarding a bool. They must be ignored, not abort the decode — the
+// endpoint answered 502 on device until Capabilities stopped being typed as []string here.
+func TestPluginEntryIgnoresUnknownAndNonStringFields(t *testing.T) {
+	raw := `{"results":[{
+		"name":"touchdesigner","title":"TouchDesigner","description":"Drive a live session",
+		"category":"desktop","maintainer":"NousResearch","version":"1.0.0","tier":"community",
+		"repo":"https://github.com/NousResearch/td","requires_hermes":"",
+		"capabilities":{"provides_tools":[],"provides_hooks":[],"requires_env":["TD_HOST"]},
+		"platforms":["macos","windows"],"onboarding":true,"readme":"# long readme",
+		"screenshots":["a.png"],"known_issues":[],"needs_newer_hermes":false,
+		"docs_url":"https://example.com","image":"https://example.com/i.png","sha":"abc","subdir":""
+	}]}`
+	var doc struct {
+		Results []pluginEntry `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if len(doc.Results) != 1 {
+		t.Fatalf("entries = %d, want 1", len(doc.Results))
+	}
+	if got := doc.Results[0]; got.Name != "touchdesigner" || got.Category != "desktop" || got.Tier != "community" {
+		t.Errorf("entry = %+v", got)
 	}
 }
 

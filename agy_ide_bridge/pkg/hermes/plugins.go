@@ -42,18 +42,19 @@ const (
 var pluginNamePattern = regexp.MustCompile(pluginNameRe)
 
 // pluginEntry is one catalog row, trimmed to what the screen shows (the CLI also returns readmes,
-// screenshots and other fields that would multiply the payload).
+// screenshots, capabilities and other fields that would multiply the payload). Only string fields
+// belong here: `capabilities` is a nested object in the real catalog, and one wrong type makes the
+// whole decode fail — the endpoint answered 502 until this field was dropped.
 type pluginEntry struct {
-	Name           string   `json:"name"`
-	Title          string   `json:"title,omitempty"`
-	Description    string   `json:"description,omitempty"`
-	Category       string   `json:"category,omitempty"`
-	Maintainer     string   `json:"maintainer,omitempty"`
-	Version        string   `json:"version,omitempty"`
-	Tier           string   `json:"tier,omitempty"`
-	Repo           string   `json:"repo,omitempty"`
-	Capabilities   []string `json:"capabilities,omitempty"`
-	RequiresHermes string   `json:"requires_hermes,omitempty"`
+	Name           string `json:"name"`
+	Title          string `json:"title,omitempty"`
+	Description    string `json:"description,omitempty"`
+	Category       string `json:"category,omitempty"`
+	Maintainer     string `json:"maintainer,omitempty"`
+	Version        string `json:"version,omitempty"`
+	Tier           string `json:"tier,omitempty"`
+	Repo           string `json:"repo,omitempty"`
+	RequiresHermes string `json:"requires_hermes,omitempty"`
 }
 
 // skillEntry is an installed skill, read from the skills tree on disk.
