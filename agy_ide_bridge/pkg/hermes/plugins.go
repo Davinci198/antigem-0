@@ -3,6 +3,7 @@ package hermes
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -298,38 +299,48 @@ func (m *Manager) handleSkillAction(w http.ResponseWriter, r *http.Request, verb
 	writeJSON(w, http.StatusOK, obj{"success": true, "output": out})
 }
 
-// installedSkills walks ~/.hermes/skills/<category>/<name>/SKILL.md and reads each frontmatter.
+// installedSkills walks ~/.hermes/skills and reads every SKILL.md it finds, whatever the nesting:
+// categories group skills, but a bundle may also keep its own skills/ folder underneath.
 func (m *Manager) installedSkills() []skillEntry {
 	root := filepath.Join(m.homeDir, ".hermes", "skills")
 	out := []skillEntry{}
-	categories, err := os.ReadDir(root)
-	if err != nil {
+	if !isDir(root) {
 		return out
 	}
-	for _, category := range categories {
-		if strings.HasPrefix(category.Name(), ".") || !isDir(filepath.Join(root, category.Name())) {
-			continue
-		}
-		categoryDir := filepath.Join(root, category.Name())
-		entries, err := os.ReadDir(categoryDir)
+	rootDepth := strings.Count(root, string(os.PathSeparator))
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return nil
 		}
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".") {
-				continue
+		// Locks, caches and manifests live in dot entries and are not skills.
+		if path != root && strings.HasPrefix(entry.Name(), ".") {
+			if entry.IsDir() {
+				return fs.SkipDir
 			}
-			dir := filepath.Join(categoryDir, entry.Name())
-			if !isDir(dir) {
-				continue
+			return nil
+		}
+		if entry.IsDir() {
+			// Enough for category/group/bundle/skills/name, shallow enough to never crawl a whole tree.
+			if strings.Count(path, string(os.PathSeparator))-rootDepth > 5 {
+				return fs.SkipDir
 			}
-			// A skill directory sitting directly under the category is the common case; a category that only
-			// groups further categories still resolves because the walk is one level deep on each iteration.
-			if skill, ok := readSkill(filepath.Join(dir, "SKILL.md"), category.Name()); ok {
-				out = append(out, skill)
+			return nil
+		}
+		if entry.Name() != "SKILL.md" {
+			return nil
+		}
+		// The category is the first directory under skills/, when there is one.
+		category := "local"
+		if rel, relErr := filepath.Rel(root, path); relErr == nil {
+			if parts := strings.Split(rel, string(os.PathSeparator)); len(parts) >= 3 {
+				category = parts[0]
 			}
 		}
-	}
+		if skill, ok := readSkill(path, category); ok {
+			out = append(out, skill)
+		}
+		return nil
+	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }

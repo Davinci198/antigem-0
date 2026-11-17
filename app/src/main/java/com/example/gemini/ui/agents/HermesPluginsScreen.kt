@@ -145,8 +145,9 @@ private fun PluginsTab(modifier: Modifier = Modifier) {
         busy = name
         scope.launch {
             block()
-                .onSuccess {
-                    toast(context, "Done: $name")
+                .onSuccess { output ->
+                    // The CLI's own last line is the best confirmation ("✓ Plugin installed", "already …").
+                    toast(context, output.ifBlank { "Done: $name" })
                     reload++
                 }
                 .onFailure { toast(context, it.message ?: "Could not finish $name.") }
@@ -488,8 +489,8 @@ private fun SkillsTab(modifier: Modifier = Modifier) {
         busy = target
         scope.launch {
             block()
-                .onSuccess {
-                    toast(context, "Done: $target")
+                .onSuccess { output ->
+                    toast(context, output.ifBlank { "Done: $target" })
                     reload++
                 }
                 .onFailure { toast(context, it.message ?: "Could not finish $target.") }

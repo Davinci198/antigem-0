@@ -180,9 +180,20 @@ func TestInstalledSkillsWalk(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	// A bundle may keep its skills one level deeper; both must be listed.
+	nested := filepath.Join(m.homeDir, ".hermes", "skills", "audio", "bundle", "skills", "voice")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "SKILL.md"), []byte("---\nname: voice\n---\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
 	// Dot directories (locks, caches) are not skills and must not appear.
 	if err := os.MkdirAll(filepath.Join(m.homeDir, ".hermes", "skills", ".locks"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(m.homeDir, ".hermes", "skills", ".locks", "SKILL.md"), []byte("---\nname: lock\n---\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
 	rec := doGET(t, m, "/api/hermes/skills/installed")
@@ -196,11 +207,18 @@ func TestInstalledSkillsWalk(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if payload.Count != 1 || len(payload.Skills) != 1 {
-		t.Fatalf("skills = %+v, want exactly one", payload.Skills)
+	if payload.Count != 2 || len(payload.Skills) != 2 {
+		t.Fatalf("skills = %+v, want the flat and the nested one", payload.Skills)
 	}
-	if payload.Skills[0].Name != "notes" || payload.Skills[0].Description != "Take notes" {
-		t.Errorf("skill = %+v", payload.Skills[0])
+	byName := map[string]skillEntry{}
+	for _, s := range payload.Skills {
+		byName[s.Name] = s
+	}
+	if byName["notes"].Description != "Take notes" || byName["notes"].Category != "productivity" {
+		t.Errorf("notes = %+v", byName["notes"])
+	}
+	if _, ok := byName["voice"]; !ok {
+		t.Errorf("nested skill missing: %+v", payload.Skills)
 	}
 }
 
