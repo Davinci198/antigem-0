@@ -83,6 +83,26 @@ func LoadConfig() *Config {
 	}
 }
 
+// EnsureWorkspaceDirs creates the shared workspace/tmp directories for agents
+// inside this media's home (e.g. /root/dev/... under proot). It is safe to
+// call repeatedly; existing directories are left as-is.
+func EnsureWorkspaceDirs(home string) []string {
+	dirs := []string{
+		filepath.Join(home, "dev"),
+		filepath.Join(home, "dev", "tmp"),
+		filepath.Join(home, "dev", "antigem"),
+		filepath.Join(home, "dev", "antigem", "workspace"),
+		filepath.Join(home, "dev", "antigem", "tmp"),
+	}
+	created := []string{}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err == nil {
+			created = append(created, d)
+		}
+	}
+	return created
+}
+
 // ExpandHome expands tilde (~) in file paths to the user's home directory.
 func ExpandHome(p string) string {
 	p = strings.TrimSpace(p)
