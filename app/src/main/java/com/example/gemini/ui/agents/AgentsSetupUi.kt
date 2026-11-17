@@ -46,14 +46,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import android.widget.Toast
+import kotlinx.coroutines.launch
+import com.example.gemini.data.daemon.IdeApiClient
+import com.example.gemini.data.daemon.TermuxDaemonManager
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.claude.SettingsGroupHeader
+import com.example.gemini.ui.components.FileManagerDialog
 import com.example.gemini.ui.components.accent
 
 private data class AgentInfo(val kind: AgentKind, val title: String, val description: String)
@@ -169,8 +170,7 @@ fun AgentsSettingsPage(
 ) {
     var selected by remember(enabled) { mutableStateOf(enabled) }
     var confirm by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboardManager.current
-    val context = LocalContext.current
+    var browsePath by remember { mutableStateOf<String?>(null) }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text(
             "Agents you turn off do not run at all: the local server starts without them and their settings and chats are hidden (chats stay on disk).",
@@ -191,10 +191,7 @@ fun AgentsSettingsPage(
         )
         workspacePaths.forEach { (path, label) ->
             Surface(
-                onClick = {
-                    clipboard.setText(AnnotatedString(path))
-                    Toast.makeText(context, "Copied: $path", Toast.LENGTH_SHORT).show()
-                },
+                onClick = { browsePath = path },
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
@@ -205,7 +202,7 @@ fun AgentsSettingsPage(
                         Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         Text(path, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     }
-                    Text("Copy", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                    Text("Open", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -244,6 +241,29 @@ fun AgentsSettingsPage(
                 }) { Text("Restart app") }
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } }
+        )
+    }
+    browsePath?.let { path ->
+        val scope = rememberCoroutineScope()
+        val context = LocalContext.current
+        FileManagerDialog(
+            initialPath = path,
+            onOpenFileInEditor = { filePath, name ->
+                scope.launch {
+                    val res = IdeApiClient.readFileDetailed(filePath)
+                    if (res == null) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Cannot open '$name'. IDE Bridge is offline or file is unreachable.",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        TermuxDaemonManager.openOrSelectTab(filePath, name, res.content)
+                        browsePath = null
+                    }
+                }
+            },
+            onDismiss = { browsePath = null }
         )
     }
 }
