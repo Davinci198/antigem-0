@@ -162,7 +162,7 @@ fun AgentChoiceDialog(onConfirm: (Set<AgentKind>) -> Unit) {
     }
 }
 
-/** Settings → Agents: change the selection; applying stops the local server and restarts the app with the new agents. */
+/** Settings → Agents: change the selection; applying restarts the local server with the new agents. */
 @Composable
 fun AgentsSettingsPage(
     enabled: Set<AgentKind>,
@@ -231,20 +231,20 @@ fun AgentsSettingsPage(
             if (isApplying) {
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
                 Spacer(Modifier.width(10.dp))
-                Text("Restarting…")
+                Text("Starting agents…")
             } else {
-                Text(if (selected == enabled) "No changes" else "Apply and restart app", fontWeight = FontWeight.SemiBold)
+                Text(if (selected == enabled) "No changes" else "Apply agents", fontWeight = FontWeight.SemiBold)
             }
         }
     }
     if (confirm) {
         AlertDialog(
             onDismissRequest = { confirm = false },
-            title = { Text("Restart to apply?", fontWeight = FontWeight.Bold) },
+            title = { Text("Apply agent changes?", fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "The local server stops and the app restarts with the new agents, so nothing of a turned-off agent keeps running. " +
-                        "Replies in progress stop, and a chat of a turned-off agent is closed.",
+                    "The local server restarts with the new agents, so a turned-off agent stops running at once. " +
+                        "Replies in progress stop, and a chat of a turned-off agent is closed. This can take up to a minute.",
                     fontSize = 13.5.sp
                 )
             },
@@ -252,7 +252,7 @@ fun AgentsSettingsPage(
                 Button(onClick = {
                     confirm = false
                     onApply(selected)
-                }) { Text("Restart app") }
+                }) { Text("Apply") }
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } }
         )
@@ -346,7 +346,12 @@ fun AgentsApplyingDialog() {
                 Spacer(Modifier.width(14.dp))
                 Column {
                     Text("Applying agents", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    Text("Stopping the local server, then restarting the app…", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Text(
+                        "Starting the agents you enabled. A cold start can take up to a minute — Hermes and OpenCode " +
+                            "have to boot, so the screen may look stuck. The selection is already saved.",
+                        fontSize = 12.5.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
                 }
             }
         }
