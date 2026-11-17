@@ -255,7 +255,16 @@ fun AgentsSettingsPage(
             initialPath = path,
             onOpenFileInEditor = { filePath, name ->
                 scope.launch {
-                    val res = IdeApiClient.readFileDetailed(filePath)
+                    var res = IdeApiClient.readFileDetailed(filePath)
+                    if (res == null && filePath.endsWith("CONTEXT.md")) {
+                        // Seed the shared CONTEXT.md if it does not exist yet.
+                        val seed = "# CONTEXT.md — context comun pentru toți agenții\n\n" +
+                            "# Reguli comune\n- Schimbările se fac pe branch nou.\n" +
+                            "- Nu rula comenzi distructive fără acord.\n\n# Structură\n" +
+                            "- workspace/ — lucru comun\n- tmp/ — fișiere temporare comune\n"
+                        val ok = IdeApiClient.writeFileRaw(filePath, seed)
+                        if (ok) res = IdeApiClient.readFileDetailed(filePath)
+                    }
                     if (res == null) {
                         android.widget.Toast.makeText(
                             context,
