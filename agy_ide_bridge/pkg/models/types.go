@@ -176,12 +176,6 @@ type MkdirReq struct {
 	Path string `json:"path"`
 }
 
-// WriteReq represents a request to write a file's contents.
-type WriteReq struct {
-	Path string `json:"path"`
-	Content string `json:"content"`
-}
-
 // FileCopyReq represents a file or folder copy request.
 type FileCopyReq struct {
 	SourcePath string `json:"sourcePath"`
