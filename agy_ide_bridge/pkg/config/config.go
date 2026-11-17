@@ -83,9 +83,27 @@ func LoadConfig() *Config {
 	}
 }
 
+// DefaultContextContent is the seed content written to CONTEXT.md when it does
+// not already exist in a freshly provisioned workspace.
+const DefaultContextContent = `# CONTEXT.md — context comun pentru toți agenții
+
+Acest fișier este sursa comună de context și prompt pentru toți agenții
+care lucrează în acest repo (Claude Code, OpenCode, Hermes, agy).
+
+## Reguli comune
+- Schimbările se fac pe branch nou, niciodată direct pe master.
+- Nu rula comenzi distructive fără acord.
+- Explică înainte de a edita.
+
+## Structură
+- workspace/ — lucru comun
+- tmp/ — fișiere temporare comune (gitignored)
+- ~/dev/tmp — tmp global
+`
+
 // EnsureWorkspaceDirs creates the shared workspace/tmp directories for agents
-// inside this media's home (e.g. /root/dev/... under proot). It is safe to
-// call repeatedly; existing directories are left as-is.
+// inside this media's home (e.g. /root/dev/... under proot). It also seeds a
+// default CONTEXT.md if missing. Safe to call repeatedly.
 func EnsureWorkspaceDirs(home string) []string {
 	dirs := []string{
 		filepath.Join(home, "dev"),
@@ -98,6 +116,12 @@ func EnsureWorkspaceDirs(home string) []string {
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o755); err == nil {
 			created = append(created, d)
+		}
+	}
+	ctxPath := filepath.Join(home, "dev", "antigem", "CONTEXT.md")
+	if _, err := os.Stat(ctxPath); os.IsNotExist(err) {
+		if err := os.WriteFile(ctxPath, []byte(DefaultContextContent), 0o644); err == nil {
+			created = append(created, ctxPath)
 		}
 	}
 	return created
