@@ -28,13 +28,19 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.gemini.data.daemon.FsItemNode
 import com.example.gemini.data.daemon.IdeApiClient
 import com.example.gemini.data.daemon.ProjectItem
+import com.example.gemini.data.file.FsRoot
+import com.example.gemini.data.file.FsRoots
 import com.example.gemini.theme.ClaudeTerracotta
 import kotlinx.coroutines.launch
 import java.io.File
@@ -91,6 +97,23 @@ fun FileManagerDialog(
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // Shared storage is behind the runtime all-files grant, so the roots strip and the
+    // error state both need its current value; ON_RESUME picks up a grant made in Settings.
+    var deviceAccess by remember { mutableStateOf(FsRoots.hasDeviceAccess()) }
+    val roots = remember(deviceAccess) { FsRoots.all(context) }
+    var showTermuxNote by remember { mutableStateOf(false) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) deviceAccess = FsRoots.hasDeviceAccess()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     var saveFileNameInput by remember(saveModeFileName) { mutableStateOf(saveModeFileName ?: "file.txt") }
     var currentPath by remember {
         val start = initialPath?.takeIf { it.isNotBlank() } ?: FileManagerStateHolder.currentPath
@@ -137,8 +160,18 @@ fun FileManagerDialog(
                 items = res.items
                 FileManagerStateHolder.currentPath = res.currentPath
             } else {
-                // If specific path failed, try to fallback to home "~" if not already at "~"
-                if (target != "~" && target != "") {
+                // Shared-storage failures must not be swallowed by the home fallback: the
+                // user picked a device root, so the useful answer is the all-files grant
+                // prompt, not a silent jump back to ~ with a generic message.
+                if (FsRoots.isDevicePath(target)) {
+                    currentPath = target
+                    errorMessage = if (deviceAccess) {
+                        "Cannot read \"$target\". The folder may have been removed or be unreadable."
+                    } else {
+                        "All-files access is required to browse device storage."
+                    }
+                } else if (target != "~" && target != "") {
+                    // If specific path failed, try to fallback to home "~" if not already at "~"
                     val homeRes = IdeApiClient.browseDirectory("~")
                     if (homeRes != null) {
                         currentPath = homeRes.currentPath
@@ -391,6 +424,94 @@ fun FileManagerDialog(
                     }
                 }
 
+                // --- 2b. Location Roots Strip (embedded Termux tree + shared storage) ---
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val activeRoot = FsRoots.rootFor(roots, currentPath)
+                    roots.forEach { root ->
+                        val locked = root.kind == FsRoot.Kind.DEVICE && !deviceAccess
+                        FilterChip(
+                            selected = activeRoot?.id == root.id,
+                            onClick = {
+                                if (locked) {
+                                    errorMessage = "Allow all-files access to browse ${root.label}."
+                                    try {
+                                        context.startActivity(FsRoots.accessSettingsIntent(context))
+                                    } catch (e: Exception) {
+                                        errorMessage = "All-files access settings are unavailable on this device."
+                                    }
+                                } else {
+                                    jumpTo(root.path)
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = root.label,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = when {
+                                        locked -> Icons.Default.Lock
+                                        root.kind == FsRoot.Kind.DEVICE -> Icons.Default.SdStorage
+                                        else -> Icons.Default.Home
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(32.dp)
+                        )
+                    }
+
+                    // The standalone Termux app's tree is unreachable without root, so this
+                    // opens an explanation instead of a folder that can only fail.
+                    if (context.packageName != "com.termux") {
+                        AssistChip(
+                            onClick = { showTermuxNote = true },
+                            label = { Text("Termux app ?", fontSize = 12.sp, maxLines = 1) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(32.dp)
+                        )
+                    }
+                }
+
+                if (showTermuxNote) {
+                    AlertDialog(
+                        onDismissRequest = { showTermuxNote = false },
+                        title = { Text("Termux files", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Text(
+                                text = FsRoots.termuxAccessNote(),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showTermuxNote = false }) {
+                                Text("Got it")
+                            }
+                        }
+                    )
+                }
+
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
                 // --- 3. Main File List Area ---
@@ -442,6 +563,20 @@ fun FileManagerDialog(
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Text("Retry")
+                                }
+                                if (FsRoots.isDevicePath(currentPath) && !deviceAccess) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            try {
+                                                context.startActivity(FsRoots.accessSettingsIntent(context))
+                                            } catch (e: Exception) {
+                                                errorMessage = "All-files access settings are unavailable on this device."
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Allow access")
+                                    }
                                 }
                             }
                         }
