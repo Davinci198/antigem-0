@@ -111,6 +111,10 @@ object FsRoots {
         if (p.isEmpty()) return false
         if (p == "~") return true
         val trimmed = p.trimEnd('/')
+        // The bridge lists `filepath.Clean(dir)`, so "/sdcard/../data" would pass a plain
+        // prefix check and then be opened as /data. Refuse any parent segment instead of
+        // relying on the cleaned result.
+        if (trimmed.split('/').any { it == ".." }) return false
         val bases = listOf(homePath(context), DEVICE_STORAGE)
         return bases.any { base -> trimmed == base || trimmed.startsWith("$base/") }
     }

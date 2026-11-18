@@ -161,10 +161,20 @@ fun FileManagerDialog(
             if (!FsRoots.isAllowed(context, requested)) {
                 // Backstop for every other entry point (breadcrumbs, restored state): the
                 // file manager only ever lists the app's Termux home and shared storage.
-                currentPath = "~"
-                parentPath = ""
-                items = emptyList()
-                FileManagerStateHolder.navigateTo("~")
+                // Show the refusal on top of the home listing instead of a blank pane.
+                val homeRes = IdeApiClient.browseDirectory("~")
+                if (homeRes != null) {
+                    currentPath = homeRes.currentPath
+                    parentPath = homeRes.parentPath
+                    homePath = homeRes.homePath
+                    items = homeRes.items
+                    FileManagerStateHolder.currentPath = homeRes.currentPath
+                } else {
+                    currentPath = "~"
+                    parentPath = ""
+                    items = emptyList()
+                    FileManagerStateHolder.navigateTo("~")
+                }
                 errorMessage = FsRoots.outsideRootsMessage()
                 isLoading = false
                 return@launch
