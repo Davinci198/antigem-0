@@ -75,6 +75,15 @@ object FsRoots {
     const val EXTERNAL_TERMUX_HOME = "/data/data/com.termux/files/home"
 
     /**
+     * The embedded Termux prefix as the bridge sees it. proot binds the prefix's bin
+     * directory at /antigem/bin; the host path `filesDir/usr` does not exist inside the
+     * rootfs (`browseDirectory` answered "Directory does not exist" for it), so a chip
+     * carrying the host form could only fail. On the `termux` flavor there is no proot
+     * in front of the bridge and the real prefix path is used instead.
+     */
+    const val BRIDGE_PREFIX_BIN = "/antigem/bin"
+
+    /**
      * Shared storage as the bridge sees it. `/storage/emulated/0` is the host view and
      * resolves to an empty stub inside the proot rootfs, so it must not be used for
      * browsing — see the class comment.
@@ -132,8 +141,12 @@ object FsRoots {
         roots += FsRoot(ID_TERMUX_HOME, "Termux", "~", FsRoot.Kind.TERMUX)
 
         val prefix = LocalEnvironmentManager.getPrefixDir(context)
-        if (prefix.isDirectory) {
-            roots += FsRoot(ID_TERMUX_USR, "usr", prefix.absolutePath, FsRoot.Kind.TERMUX)
+        if (context.packageName == "com.termux") {
+            if (prefix.isDirectory) {
+                roots += FsRoot(ID_TERMUX_USR, "usr", prefix.absolutePath, FsRoot.Kind.TERMUX)
+            }
+        } else {
+            roots += FsRoot(ID_TERMUX_USR, "Prefix", BRIDGE_PREFIX_BIN, FsRoot.Kind.TERMUX)
         }
 
         // Probe, never assume: this is only true on the com.termux flavor or with root.
