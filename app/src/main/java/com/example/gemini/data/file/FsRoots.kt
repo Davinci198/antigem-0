@@ -23,9 +23,18 @@ import java.io.File
  * ## The two families
  * - [Kind.TERMUX] — the embedded Termux-like tree this app ships (`filesDir/home`,
  *   `filesDir/usr`). `~` is resolved by the bridge through `os.UserHomeDir()`.
- * - [Kind.DEVICE] — shared storage (`/storage/emulated/0` and its common subfolders).
- *   Readable only while MANAGE_EXTERNAL_STORAGE is effectively granted; the manifest
- *   declares it, but Android 11+ requires the settings screen to be opened.
+ * - [Kind.DEVICE] — shared storage. Readable only while MANAGE_EXTERNAL_STORAGE is
+ *   effectively granted; the manifest declares it, but Android 11+ requires the
+ *   settings screen to be opened.
+ *
+ * ## Why the device root is `/sdcard` and not `/storage/emulated/0`
+ * Every listing is resolved by the IDE bridge, and the bridge runs *inside the app's
+ * proot rootfs* (`--rootfs=…/files/ubuntu`), which binds shared storage at `/sdcard`.
+ * Inside that namespace `/storage/emulated/0` is just an empty stub directory — a
+ * listing there returns one unrelated folder instead of the real tree. Measured on
+ * device: `/sdcard` → 253 entries, `/storage/emulated/0` → 1. `/sdcard` also exists
+ * on a normal Android host, so it is the only path valid in both namespaces;
+ * [normalize] rewrites the host form for anything that still carries it.
  *
  * ## What this deliberately does NOT offer
  * The *standalone Termux app's* private data (`/data/data/com.termux/files/home`)
@@ -65,18 +74,35 @@ object FsRoots {
     /** Path of the standalone Termux app's home; only readable when this app owns it. */
     const val EXTERNAL_TERMUX_HOME = "/data/data/com.termux/files/home"
 
+    /**
+     * Shared storage as the bridge sees it. `/storage/emulated/0` is the host view and
+     * resolves to an empty stub inside the proot rootfs, so it must not be used for
+     * browsing — see the class comment.
+     */
+    const val DEVICE_STORAGE = "/sdcard"
+
     private val DEVICE_SUBFOLDERS = listOf(
         ID_DOWNLOADS to "Download",
         ID_DOCUMENTS to "Documents",
         ID_DCIM to "DCIM"
     )
 
-    /** Primary shared storage, with the legacy alias as a fallback for odd ROMs. */
-    fun deviceStoragePath(): String = try {
-        Environment.getExternalStorageDirectory()?.absolutePath?.takeIf { it.isNotBlank() }
-            ?: "/storage/emulated/0"
-    } catch (e: Exception) {
-        "/storage/emulated/0"
+    /** Shared storage path in bridge terms. */
+    fun deviceStoragePath(): String = DEVICE_STORAGE
+
+    /**
+     * Rewrites the host form (`/storage/emulated/0/…`, `/storage/self/primary/…`) into the
+     * `/sdcard` form the bridge resolves, so a stale path from an older build or a pasted
+     * path still lands on the real tree instead of the empty stub.
+     */
+    fun normalize(path: String): String {
+        val p = path.trim()
+        val prefixes = listOf("/storage/emulated/0", "/storage/self/primary")
+        for (prefix in prefixes) {
+            if (p == prefix) return DEVICE_STORAGE
+            if (p.startsWith("$prefix/")) return DEVICE_STORAGE + p.removePrefix(prefix)
+        }
+        return p
     }
 
     /**
@@ -93,8 +119,7 @@ object FsRoots {
     fun isDevicePath(path: String): Boolean {
         val p = path.trim()
         if (p.isEmpty()) return false
-        val storage = deviceStoragePath()
-        return p == storage || p.startsWith("$storage/") || p.startsWith("/sdcard")
+        return p == DEVICE_STORAGE || p.startsWith("$DEVICE_STORAGE/")
     }
 
     /**
@@ -127,7 +152,6 @@ object FsRoots {
                 }
             }
         }
-
         return roots
     }
 

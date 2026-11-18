@@ -152,7 +152,10 @@ fun FileManagerDialog(
             isLoading = true
             errorMessage = null
             selectedItem = null
-            val res = IdeApiClient.browseDirectory(target)
+            // Device paths are resolved by the bridge inside its proot namespace, where
+            // shared storage lives at /sdcard; rewrite the host form before asking.
+            val requested = FsRoots.normalize(target)
+            val res = IdeApiClient.browseDirectory(requested)
             if (res != null) {
                 currentPath = res.currentPath
                 parentPath = res.parentPath
@@ -163,10 +166,10 @@ fun FileManagerDialog(
                 // Shared-storage failures must not be swallowed by the home fallback: the
                 // user picked a device root, so the useful answer is the all-files grant
                 // prompt, not a silent jump back to ~ with a generic message.
-                if (FsRoots.isDevicePath(target)) {
-                    currentPath = target
+                if (FsRoots.isDevicePath(requested)) {
+                    currentPath = requested
                     errorMessage = if (deviceAccess) {
-                        "Cannot read \"$target\". The folder may have been removed or be unreadable."
+                        "Cannot read \"$requested\". The folder may have been removed or be unreadable."
                     } else {
                         "All-files access is required to browse device storage."
                     }
