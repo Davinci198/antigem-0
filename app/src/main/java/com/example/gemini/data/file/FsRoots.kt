@@ -6,43 +6,34 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
-import com.example.gemini.data.local.LocalEnvironmentManager
 import java.io.File
 
 /**
- * Browsable starting points for the folder manager.
+ * Browsable roots for the folder manager, deliberately limited to two trees:
  *
- * ## Why this exists
- * Every listing in the file browser goes through the IDE bridge (`/api/fs/browse`),
- * and that handler does `os.ReadDir(filepath.Clean(dir))` on whatever path it is
- * given — it has no allow-list and no home jail. The app could therefore always read
- * shared storage; what was missing was (a) a place to start from that is not `~`, and
- * (b) a runtime check for the all-files grant, so a failed listing explains itself
- * instead of silently falling back to home.
+ * - the app's own Termux home ([Kind.TERMUX]),
+ * - shared storage and its common folders ([Kind.DEVICE]).
  *
- * ## The two families
- * - [Kind.TERMUX] — the embedded Termux-like tree this app ships (`filesDir/home`,
- *   `filesDir/usr`). `~` is resolved by the bridge through `os.UserHomeDir()`.
- * - [Kind.DEVICE] — shared storage. Readable only while MANAGE_EXTERNAL_STORAGE is
- *   effectively granted; the manifest declares it, but Android 11+ requires the
- *   settings screen to be opened.
+ * ## Why only these two
+ * Everything else on the device belongs to a different uid or to Android itself:
+ * `/`, `/data`, `/data/user/0`, the standalone Termux app's private tree, other apps'
+ * sandboxes. The file manager must never offer a way in — those paths are not user
+ * files, and a listing of them is a security surface, not a feature. [isAllowed] is the
+ * single gate every navigation goes through, so a breadcrumb, a persisted path from an
+ * older build, or a pasted path cannot escape the two trees either.
  *
  * ## Why the device root is `/sdcard` and not `/storage/emulated/0`
- * Every listing is resolved by the IDE bridge, and the bridge runs *inside the app's
- * proot rootfs* (`--rootfs=…/files/ubuntu`), which binds shared storage at `/sdcard`.
- * Inside that namespace `/storage/emulated/0` is just an empty stub directory — a
- * listing there returns one unrelated folder instead of the real tree. Measured on
- * device: `/sdcard` → 253 entries, `/storage/emulated/0` → 1. `/sdcard` also exists
- * on a normal Android host, so it is the only path valid in both namespaces;
- * [normalize] rewrites the host form for anything that still carries it.
+ * Every listing is resolved by the IDE bridge, which runs *inside the app's proot rootfs*
+ * (`--rootfs=…/files/ubuntu`) with shared storage bound at `/sdcard`. Inside that
+ * namespace `/storage/emulated/0` is an empty stub: measured on device, `/sdcard`
+ * returned 253 entries and `/storage/emulated/0` returned 1 unrelated folder. `/sdcard`
+ * also exists on a normal Android host, so it is the only path valid in both
+ * namespaces; [normalize] rewrites the host form for anything that still carries it.
  *
- * ## What this deliberately does NOT offer
- * The *standalone Termux app's* private data (`/data/data/com.termux/files/home`)
- * belongs to another uid. An app without root cannot read it, no matter which intent
- * it sends, so no dead root is shown. [termuxAccessNote] explains the two real ways to
- * get those files visible instead. If the build is the `termux` flavor
- * (`applicationId = com.termux`) or the device is rooted and access exists, the probe
- * in [all] simply finds the directory readable and adds it — nothing is hardcoded.
+ * ## Why the home root is `/root` in bridge terms
+ * The bridge answers `~` with the concrete path it resolves through `os.UserHomeDir()`,
+ * which is `/root` inside the rootfs. Allowing the concrete form keeps the gate honest
+ * after the first listing, when the UI no longer holds `~`.
  */
 data class FsRoot(
     val id: String,
@@ -57,38 +48,24 @@ data class FsRoot(
         val p = path.trim()
         if (p.isEmpty()) return false
         val base = this.path.trim()
-        return p == base || p.startsWith(if (base.endsWith("/")) base else "$base/")
+        if (p == base) return true
+        return p.startsWith(if (base.endsWith("/")) base else "$base/")
     }
 }
 
 object FsRoots {
 
     const val ID_TERMUX_HOME = "termux-home"
-    const val ID_TERMUX_USR = "termux-usr"
-    const val ID_TERMUX_APP = "termux-app"
     const val ID_DEVICE = "device"
     const val ID_DOWNLOADS = "downloads"
     const val ID_DOCUMENTS = "documents"
     const val ID_DCIM = "dcim"
 
-    /** Path of the standalone Termux app's home; only readable when this app owns it. */
-    const val EXTERNAL_TERMUX_HOME = "/data/data/com.termux/files/home"
-
-    /**
-     * The embedded Termux prefix as the bridge sees it. proot binds the prefix's bin
-     * directory at /antigem/bin; the host path `filesDir/usr` does not exist inside the
-     * rootfs (`browseDirectory` answered "Directory does not exist" for it), so a chip
-     * carrying the host form could only fail. On the `termux` flavor there is no proot
-     * in front of the bridge and the real prefix path is used instead.
-     */
-    const val BRIDGE_PREFIX_BIN = "/antigem/bin"
-
-    /**
-     * Shared storage as the bridge sees it. `/storage/emulated/0` is the host view and
-     * resolves to an empty stub inside the proot rootfs, so it must not be used for
-     * browsing — see the class comment.
-     */
+    /** Shared storage as the bridge sees it (see the class comment). */
     const val DEVICE_STORAGE = "/sdcard"
+
+    /** Concrete home path the bridge resolves `~` to inside the proot rootfs. */
+    const val BRIDGE_HOME = "/root"
 
     private val DEVICE_SUBFOLDERS = listOf(
         ID_DOWNLOADS to "Download",
@@ -100,9 +77,19 @@ object FsRoots {
     fun deviceStoragePath(): String = DEVICE_STORAGE
 
     /**
+     * Home of the embedded Termux tree. The `termux` flavor runs its bridge without proot,
+     * so `~` resolves to the real prefix home there and [BRIDGE_HOME] would be wrong.
+     */
+    fun homePath(context: Context): String =
+        if (context.packageName == "com.termux") {
+            File(context.filesDir, "home").absolutePath
+        } else {
+            BRIDGE_HOME
+        }
+
+    /**
      * Rewrites the host form (`/storage/emulated/0/…`, `/storage/self/primary/…`) into the
-     * `/sdcard` form the bridge resolves, so a stale path from an older build or a pasted
-     * path still lands on the real tree instead of the empty stub.
+     * `/sdcard` form the bridge resolves.
      */
     fun normalize(path: String): String {
         val p = path.trim()
@@ -115,8 +102,22 @@ object FsRoots {
     }
 
     /**
-     * Whether shared storage is actually readable right now.
-     * Below Android 11 the manifest permissions are enough.
+     * The navigation gate. A path is addressable only when it lies inside the Termux home
+     * or shared storage; everything else (system directories, other apps' sandboxes, the
+     * rootfs itself) is refused before any listing request is sent.
+     */
+    fun isAllowed(context: Context, path: String): Boolean {
+        val p = normalize(path).trim()
+        if (p.isEmpty()) return false
+        if (p == "~") return true
+        val trimmed = p.trimEnd('/')
+        val bases = listOf(homePath(context), DEVICE_STORAGE)
+        return bases.any { base -> trimmed == base || trimmed.startsWith("$base/") }
+    }
+
+    /**
+     * Whether shared storage is readable right now. Below Android 11 the manifest
+     * permissions are enough; above them the user has to grant all-files access.
      */
     fun hasDeviceAccess(): Boolean = try {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
@@ -126,34 +127,15 @@ object FsRoots {
 
     /** True for shared-storage paths, which are the only ones gated by all-files access. */
     fun isDevicePath(path: String): Boolean {
-        val p = path.trim()
+        val p = normalize(path).trim()
         if (p.isEmpty()) return false
         return p == DEVICE_STORAGE || p.startsWith("$DEVICE_STORAGE/")
     }
 
-    /**
-     * Ordered roots for the location strip: the embedded Termux tree first (it is the
-     * app's own sandbox and always present), then shared storage and its common folders.
-     */
+    /** Ordered roots for the location strip: the app's home first, then shared storage. */
     fun all(context: Context): List<FsRoot> {
         val roots = mutableListOf<FsRoot>()
-
         roots += FsRoot(ID_TERMUX_HOME, "Termux", "~", FsRoot.Kind.TERMUX)
-
-        val prefix = LocalEnvironmentManager.getPrefixDir(context)
-        if (context.packageName == "com.termux") {
-            if (prefix.isDirectory) {
-                roots += FsRoot(ID_TERMUX_USR, "usr", prefix.absolutePath, FsRoot.Kind.TERMUX)
-            }
-        } else {
-            roots += FsRoot(ID_TERMUX_USR, "Prefix", BRIDGE_PREFIX_BIN, FsRoot.Kind.TERMUX)
-        }
-
-        // Probe, never assume: this is only true on the com.termux flavor or with root.
-        val externalTermux = File(EXTERNAL_TERMUX_HOME)
-        if (context.packageName != "com.termux" && externalTermux.isDirectory && externalTermux.canRead()) {
-            roots += FsRoot(ID_TERMUX_APP, "Termux app", EXTERNAL_TERMUX_HOME, FsRoot.Kind.TERMUX)
-        }
 
         val storage = File(deviceStoragePath())
         if (storage.isDirectory || hasDeviceAccess()) {
@@ -169,8 +151,18 @@ object FsRoots {
     }
 
     /** The root that contains [path], if any — used to highlight the active chip. */
-    fun rootFor(roots: List<FsRoot>, path: String): FsRoot? =
-        roots.filter { it.contains(path) }.maxByOrNull { it.path.length }
+    fun rootFor(context: Context, roots: List<FsRoot>, path: String): FsRoot? {
+        val normalized = normalize(path)
+        val home = homePath(context)
+        // The home root is stored as "~" but the bridge answers with its concrete path, so
+        // rewrite the concrete form back before matching chips.
+        val effective = when {
+            normalized == home -> "~"
+            normalized.startsWith("$home/") -> "~" + normalized.removePrefix(home)
+            else -> normalized
+        }
+        return roots.filter { it.contains(effective) }.maxByOrNull { it.path.length }
+    }
 
     /** Intent that opens this app's all-files access screen. */
     fun accessSettingsIntent(context: Context): Intent = Intent(
@@ -178,19 +170,25 @@ object FsRoots {
         Uri.parse("package:${context.packageName}")
     ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
+    /** Message shown when a navigation target falls outside the two allowed trees. */
+    fun outsideRootsMessage(): String =
+        "That folder is outside the file manager. Only this app's Termux home and shared " +
+            "storage (Device) are browsable; system and other apps' folders stay closed."
+
     /**
-     * Shown when the user asks for the standalone Termux app's files on a build that
-     * cannot read them. Both options are real, root-free paths to the same content.
+     * Shown when the user asks for the standalone Termux app's files. They belong to a
+     * different uid and are intentionally not reachable from here.
      */
     fun termuxAccessNote(): String =
-        "The Termux app's private folder (/data/data/com.termux) belongs to another " +
-            "app, so it cannot be opened from here without root.\n\n" +
-            "Two ways to see those files:\n" +
+        "The Termux app's private folder (/data/data/com.termux) belongs to another app, " +
+            "so it cannot be opened from here without root — and this file manager is kept " +
+            "away from system and other apps' folders on purpose.\n\n" +
+            "Two ways to work with those files:\n" +
             "1. In Termux run `termux-setup-storage` once, then copy what you need into " +
             "shared storage: `cp -r ~/project /sdcard/Download/`. It appears under Device " +
             "→ Download.\n" +
-            "2. Keep working inside this app's own Termux tree (the \"Termux\" root above) — " +
-            "it is a full environment with its own home and usr prefix.\n\n" +
+            "2. Keep working inside this app's own Termux home (the \"Termux\" root above) " +
+            "— it is a full environment with its own home and tools.\n\n" +
             "Files under shared storage are visible from both sides: Termux reaches them " +
             "at ~/storage/shared."
 }

@@ -116,7 +116,10 @@ fun FileManagerDialog(
 
     var saveFileNameInput by remember(saveModeFileName) { mutableStateOf(saveModeFileName ?: "file.txt") }
     var currentPath by remember {
-        val start = initialPath?.takeIf { it.isNotBlank() } ?: FileManagerStateHolder.currentPath
+        // A persisted path from an older build can point at a system directory; the gate
+        // sends that back to the app's own home instead of opening it.
+        val raw = initialPath?.takeIf { it.isNotBlank() } ?: FileManagerStateHolder.currentPath
+        val start = if (FsRoots.isAllowed(context, raw)) raw else "~"
         if (FileManagerStateHolder.currentPath != start) {
             FileManagerStateHolder.navigateTo(start)
         }
@@ -155,6 +158,17 @@ fun FileManagerDialog(
             // Device paths are resolved by the bridge inside its proot namespace, where
             // shared storage lives at /sdcard; rewrite the host form before asking.
             val requested = FsRoots.normalize(target)
+            if (!FsRoots.isAllowed(context, requested)) {
+                // Backstop for every other entry point (breadcrumbs, restored state): the
+                // file manager only ever lists the app's Termux home and shared storage.
+                currentPath = "~"
+                parentPath = ""
+                items = emptyList()
+                FileManagerStateHolder.navigateTo("~")
+                errorMessage = FsRoots.outsideRootsMessage()
+                isLoading = false
+                return@launch
+            }
             val res = IdeApiClient.browseDirectory(requested)
             if (res != null) {
                 currentPath = res.currentPath
@@ -436,7 +450,7 @@ fun FileManagerDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val activeRoot = FsRoots.rootFor(roots, currentPath)
+                    val activeRoot = FsRoots.rootFor(context, roots, currentPath)
                     roots.forEach { root ->
                         val locked = root.kind == FsRoot.Kind.DEVICE && !deviceAccess
                         FilterChip(
