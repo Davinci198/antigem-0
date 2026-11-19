@@ -108,12 +108,13 @@ object IdeApiClient {
     private const val TAG = "IdeApiClient"
 
     /**
-     * Largest file the code editor accepts. Sora copies the whole tab text into a single
+     * Largest file the code editor accepts (5 MB). Sora copies the whole tab text into a single
      * `String` when the tab is attached to a window, so a file of a few tens of MB throws
-     * `OutOfMemoryError: Failed to allocate a … byte allocation` on the 512 MB heap. Reading is
-     * capped at this size so neither the HTTP body nor the editor ever holds more.
+     * `OutOfMemoryError: Failed to allocate a … byte allocation` on the 512 MB heap (seen with a
+     * 41 MB allocation while the heap was nearly full). At 5 MB the worst case per tab stays
+     * around 20 MB, and reading is capped here so neither the HTTP body nor the editor holds more.
      */
-    const val MAX_EDITOR_BYTES = 2L * 1024 * 1024
+    const val MAX_EDITOR_BYTES = 5L * 1024 * 1024
 
     var baseUrl: String
         get() = AuthPreferences.currentBridgeHttpUrl

@@ -361,7 +361,7 @@ fun IdeScreen(
                                 if (res.category == "too-large") {
                                     Toast.makeText(
                                         context,
-                                        "'${node.name}' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to 2 MB. Use the Terminal instead.",
+                                        "'${node.name}' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to ${LocalEnvironmentManager.formatFileSize(IdeApiClient.MAX_EDITOR_BYTES)}. Use the Terminal instead.",
                                         Toast.LENGTH_LONG
                                     ).show()
                                 } else if (res.category == "binary") {
@@ -1293,7 +1293,7 @@ fun IdeScreen(
                                             if (res == null) {
                                                 "Cannot open '$fileName'. IDE Bridge is offline or file is unreachable."
                                             } else {
-                                                "'$fileName' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to 2 MB. Use the Terminal instead."
+                                                "'$fileName' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to ${LocalEnvironmentManager.formatFileSize(IdeApiClient.MAX_EDITOR_BYTES)}. Use the Terminal instead."
                                             },
                                             Toast.LENGTH_LONG
                                         ).show()
@@ -1589,7 +1589,7 @@ fun IdeScreen(
                                 if (res.category == "too-large") {
                                     Toast.makeText(
                                         context,
-                                        "'$name' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to 2 MB. Use the Terminal instead.",
+                                        "'$name' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to ${LocalEnvironmentManager.formatFileSize(IdeApiClient.MAX_EDITOR_BYTES)}. Use the Terminal instead.",
                                         Toast.LENGTH_LONG
                                     ).show()
                                     showFileManager = false
