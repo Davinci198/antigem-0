@@ -73,8 +73,9 @@ data class FileNode(
 
 data class FileReadResult(
     val content: String,
-    val category: String = "text", // "text", "image", "binary"
-    val mimeType: String = "text/plain"
+    val category: String = "text", // "text", "image", "binary", "too-large"
+    val mimeType: String = "text/plain",
+    val size: Long = 0
 )
 
 data class SearchMatch(
@@ -105,6 +106,15 @@ fun computeSha256(content: String): String {
 
 object IdeApiClient {
     private const val TAG = "IdeApiClient"
+
+    /**
+     * Largest file the code editor accepts. Sora copies the whole tab text into a single
+     * `String` when the tab is attached to a window, so a file of a few tens of MB throws
+     * `OutOfMemoryError: Failed to allocate a … byte allocation` on the 512 MB heap. Reading is
+     * capped at this size so neither the HTTP body nor the editor ever holds more.
+     */
+    const val MAX_EDITOR_BYTES = 2L * 1024 * 1024
+
     var baseUrl: String
         get() = AuthPreferences.currentBridgeHttpUrl
         set(value) { AuthPreferences.currentBridgeHttpUrl = value }
@@ -338,15 +348,42 @@ object IdeApiClient {
         try {
             val url = "$baseUrl/api/file/read?path=${java.net.URLEncoder.encode(path, "UTF-8")}"
             val request = Request.Builder().url(url).get().build()
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val bodyStr = response.body?.string() ?: ""
-                    val category = response.header("X-File-Category") ?: run {
-                        if (bodyStr.contains('\u0000')) "binary" else "text"
+            client.newCall(request).execute().use response@{ response ->
+                if (!response.isSuccessful) return@response null
+                val body = response.body ?: return@response null
+                val mime = response.header("X-File-Mime") ?: response.header("Content-Type") ?: "text/plain"
+                // Go streams bodies it does not buffer without Content-Length, so the header is
+                // only a hint; the byte cap below is what actually keeps the heap safe.
+                if (body.contentLength() > MAX_EDITOR_BYTES) {
+                    return@response FileReadResult("", "too-large", mime, body.contentLength())
+                }
+                val buffer = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(64 * 1024)
+                body.byteStream().use { input ->
+                    while (true) {
+                        val read = input.read(chunk)
+                        if (read < 0) break
+                        buffer.write(chunk, 0, read)
+                        if (buffer.size() > MAX_EDITOR_BYTES) {
+                            return@response FileReadResult("", "too-large", mime, buffer.size().toLong())
+                        }
                     }
-                    val mime = response.header("X-File-Mime") ?: response.header("Content-Type") ?: "text/plain"
-                    FileReadResult(content = bodyStr, category = category, mimeType = mime)
-                } else null
+                }
+                val charset = try {
+                    body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
+                } catch (e: Exception) {
+                    Charsets.UTF_8
+                }
+                val bodyStr = buffer.toString(charset.name())
+                val category = response.header("X-File-Category") ?: run {
+                    if (bodyStr.contains('\u0000')) "binary" else "text"
+                }
+                FileReadResult(
+                    content = bodyStr,
+                    category = category,
+                    mimeType = mime,
+                    size = buffer.size().toLong()
+                )
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error reading file: $path", e)
@@ -354,7 +391,10 @@ object IdeApiClient {
         }
     }
 
-    suspend fun readFile(path: String): String? = readFileDetailed(path)?.content
+    /** Content of a file, or null when it cannot be read or is too large for the editor. */
+    suspend fun readFile(path: String): String? = readFileDetailed(path)?.let {
+        if (it.category == "too-large") null else it.content
+    }
 
     suspend fun saveFileDetailed(
         path: String,
