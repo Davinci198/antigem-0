@@ -54,6 +54,7 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 import com.example.gemini.data.daemon.IdeApiClient
 import com.example.gemini.data.daemon.TermuxDaemonManager
+import com.example.gemini.data.file.FsRoots
 import com.example.gemini.domain.model.AgentKind
 import com.example.gemini.ui.claude.SettingsGroupHeader
 import com.example.gemini.ui.components.FileManagerDialog
@@ -177,6 +178,7 @@ fun AgentsSettingsPage(
     var confirm by remember { mutableStateOf(false) }
     var browsePath by remember { mutableStateOf<String?>(null) }
     var openContextFile by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text(
             "Agents you turn off do not run at all: the local server starts without them and their settings and chats are hidden (chats stay on disk).",
@@ -202,7 +204,8 @@ fun AgentsSettingsPage(
                     if (entry.isFile) {
                         openContextFile = entry.path
                     } else {
-                        browsePath = entry.path
+                        // The file manager gate only takes concrete paths, so expand `~` here.
+                        browsePath = FsRoots.expandHome(context, entry.path)
                     }
                 },
                 shape = RoundedCornerShape(12.dp),
@@ -258,7 +261,6 @@ fun AgentsSettingsPage(
     }
     browsePath?.let { path ->
         val scope = rememberCoroutineScope()
-        val context = LocalContext.current
         FileManagerDialog(
             initialPath = path,
             onOpenFileInEditor = { filePath, name ->
@@ -280,7 +282,6 @@ fun AgentsSettingsPage(
         )
     }
     openContextFile?.let { filePath ->
-        val context = LocalContext.current
         LaunchedEffect(filePath) {
             val localCopy = java.io.File(context.filesDir, "CONTEXT.md")
             // Holds the content we last downloaded, so an edit made in the external editor is recognised as such.

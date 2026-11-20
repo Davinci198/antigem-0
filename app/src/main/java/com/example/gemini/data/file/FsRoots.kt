@@ -88,6 +88,20 @@ object FsRoots {
         }
 
     /**
+     * Expands a `~` path to the concrete home the bridge resolves it to. [isAllowed] only
+     * accepts concrete paths, so a caller holding a `~/…` shortcut must expand it first;
+     * otherwise the file manager falls back to `~` and opens the wrong directory.
+     */
+    fun expandHome(context: Context, path: String): String {
+        val p = path.trim()
+        return when {
+            p == "~" -> homePath(context)
+            p.startsWith("~/") -> homePath(context).trimEnd('/') + p.removePrefix("~")
+            else -> p
+        }
+    }
+
+    /**
      * Rewrites the host form (`/storage/emulated/0/…`, `/storage/self/primary/…`) into the
      * `/sdcard` form the bridge resolves.
      */
