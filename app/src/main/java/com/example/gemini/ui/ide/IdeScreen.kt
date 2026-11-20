@@ -45,6 +45,7 @@ import com.example.gemini.data.daemon.DaemonStatus
 import com.example.gemini.data.daemon.FileNode
 import com.example.gemini.data.daemon.GitApiClient
 import com.example.gemini.data.daemon.IdeApiClient
+import com.example.gemini.data.local.LocalEnvironmentManager
 import com.example.gemini.data.daemon.OpenTab
 import com.example.gemini.data.daemon.ProjectItem
 import com.example.gemini.data.daemon.TermuxDaemonManager
@@ -357,7 +358,13 @@ fun IdeScreen(
                                     Toast.LENGTH_LONG
                                 ).show()
                             } else {
-                                if (res.category == "binary") {
+                                if (res.category == "too-large") {
+                                    Toast.makeText(
+                                        context,
+                                        "'${node.name}' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to ${LocalEnvironmentManager.formatFileSize(IdeApiClient.MAX_EDITOR_BYTES)}. Use the Terminal instead.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } else if (res.category == "binary") {
                                     binaryWarningDialog = BinaryWarningTab(
                                         path = node.path,
                                         name = node.name,
@@ -1278,13 +1285,26 @@ fun IdeScreen(
                                     } else {
                                         rawFilePath
                                     }
-                                    val content = IdeApiClient.readFile(fullFilePath) ?: ""
-                                    TermuxDaemonManager.openOrSelectTab(
-                                        path = fullFilePath,
-                                        name = File(fullFilePath).name,
-                                        content = content,
-                                        isReadOnly = false
-                                    )
+                                    val res = IdeApiClient.readFileDetailed(fullFilePath)
+                                    if (res == null || res.category == "too-large") {
+                                        val fileName = File(fullFilePath).name
+                                        Toast.makeText(
+                                            context,
+                                            if (res == null) {
+                                                "Cannot open '$fileName'. IDE Bridge is offline or file is unreachable."
+                                            } else {
+                                                "'$fileName' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to ${LocalEnvironmentManager.formatFileSize(IdeApiClient.MAX_EDITOR_BYTES)}. Use the Terminal instead."
+                                            },
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    } else {
+                                        TermuxDaemonManager.openOrSelectTab(
+                                            path = fullFilePath,
+                                            name = File(fullFilePath).name,
+                                            content = res.content,
+                                            isReadOnly = false
+                                        )
+                                    }
                                 }
                             },
                             onOpenHistoricalFile = {
@@ -1566,7 +1586,14 @@ fun IdeScreen(
                                     Toast.LENGTH_LONG
                                 ).show()
                             } else {
-                                if (res.category == "binary") {
+                                if (res.category == "too-large") {
+                                    Toast.makeText(
+                                        context,
+                                        "'$name' is ${LocalEnvironmentManager.formatFileSize(res.size)} — the editor opens files up to ${LocalEnvironmentManager.formatFileSize(IdeApiClient.MAX_EDITOR_BYTES)}. Use the Terminal instead.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    showFileManager = false
+                                } else if (res.category == "binary") {
                                     binaryWarningDialog = BinaryWarningTab(
                                         path = path,
                                         name = name,

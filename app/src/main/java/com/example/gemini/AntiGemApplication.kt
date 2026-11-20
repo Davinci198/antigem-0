@@ -17,6 +17,10 @@ import java.security.MessageDigest
 class AntiGemApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        // a crash opens the crash screen (with the report) instead of the app just vanishing
+        com.example.gemini.crash.CrashHandler.install(this)
+        // the crash screen's own process needs none of the startup below
+        if (com.example.gemini.crash.CrashHandler.isCrashProcess(this)) return
         UpdateCheckWorker.schedule(this)
         PluginUpdateCheckWorker.schedule(this)
         // Google sign-in now belongs to the agy CLI; wipe the token older builds kept here.

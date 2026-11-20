@@ -930,12 +930,8 @@ fun ChatScreen(
                         }
                     } else {
                         scope.launch {
-                            val content = try {
-                                val f = File(cleanPath)
-                                if (f.exists()) f.readText() else (IdeApiClient.readFile(cleanPath) ?: "")
-                            } catch (e: Exception) {
-                                IdeApiClient.readFile(cleanPath) ?: ""
-                            }
+                            val content = TermuxDaemonManager.readEditorText(File(cleanPath))
+                                ?: (IdeApiClient.readFile(cleanPath) ?: "")
                             val fileName = File(cleanPath).name.ifBlank { "file" }
                             TermuxDaemonManager.openOrSelectTab(cleanPath, fileName, content)
                             onNavigateToIde()
@@ -1592,9 +1588,14 @@ fun ChatScreen(
                             )
                         }
 
+                        // web views of this chat's blocks stay alive while the chat is open; all destroyed when it is left
+                        val chatWebViewCache = remember(currentConv?.id) { com.example.gemini.ui.components.ChatWebViewCache(context) }
+                        DisposableEffect(chatWebViewCache) { onDispose { chatWebViewCache.close() } }
+
                         CompositionLocalProvider(
                             androidx.compose.ui.platform.LocalDensity provides customDensity,
-                            com.example.gemini.ui.components.LocalQuestionPanelActive provides true
+                            com.example.gemini.ui.components.LocalQuestionPanelActive provides true,
+                            com.example.gemini.ui.components.LocalChatWebViewCache provides chatWebViewCache
                         ) {
                                 LazyColumn(
                                     state = listState,
@@ -1606,6 +1607,7 @@ fun ChatScreen(
                                         key = { it.key },
                                         contentType = { it.contentType }
                                     ) { feedItem ->
+                                        com.example.gemini.ui.components.WithWebViewSlot(feedItem.key) {
                                         when (feedItem) {
                                         is ChatFeedItem.Summary -> {
                                             Box(
@@ -1749,6 +1751,7 @@ fun ChatScreen(
                                                 onShowArtifacts = { showArtifactsDrawer = true },
                                                 artifactsCount = artifacts.size
                                             )
+                                        }
                                         }
                                         }
                                     }
@@ -2829,7 +2832,7 @@ fun ChatScreen(
             onOpenInIde = { path ->
                 activeMarkdownDoc = null
                 scope.launch {
-                    val content = try { File(path).readText() } catch (e: Exception) { docContent }
+                    val content = TermuxDaemonManager.readEditorText(File(path)) ?: docContent
                     TermuxDaemonManager.openOrSelectTab(path, File(path).name, content)
                     onNavigateToIde()
                 }
@@ -2846,7 +2849,7 @@ fun ChatScreen(
             onOpenInIde = { path ->
                 viewModel.dismissIncomingMarkdownPreview()
                 scope.launch {
-                    val content = try { File(path).readText() } catch (e: Exception) { docContent }
+                    val content = TermuxDaemonManager.readEditorText(File(path)) ?: docContent
                     TermuxDaemonManager.openOrSelectTab(path, File(path).name, content)
                     onNavigateToIde()
                 }
@@ -2876,7 +2879,8 @@ fun ChatScreen(
             onOpenInIde = { filePath ->
                 activeFileDetailsPath = null
                 scope.launch {
-                    val content = try { File(filePath).readText() } catch (e: Exception) { IdeApiClient.readFile(filePath) ?: "" }
+                    val content = TermuxDaemonManager.readEditorText(File(filePath))
+                        ?: (IdeApiClient.readFile(filePath) ?: "")
                     TermuxDaemonManager.openOrSelectTab(filePath, File(filePath).name, content)
                     onNavigateToIde()
                 }
@@ -2884,7 +2888,8 @@ fun ChatScreen(
             onOpenMarkdownViewer = { filePath ->
                 activeFileDetailsPath = null
                 scope.launch {
-                    val content = try { File(filePath).readText() } catch (e: Exception) { IdeApiClient.readFile(filePath) ?: "" }
+                    val content = TermuxDaemonManager.readEditorText(File(filePath))
+                        ?: (IdeApiClient.readFile(filePath) ?: "")
                     activeMarkdownDoc = filePath to content
                 }
             }

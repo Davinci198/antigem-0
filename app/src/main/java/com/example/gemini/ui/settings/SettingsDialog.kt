@@ -4879,6 +4879,7 @@ private fun BackupsSubScreen(
     var showServerRunningAlert by remember { mutableStateOf<String?>(null) }
 
     var showBackupChatsPasswordDialog by remember { mutableStateOf(false) }
+    var includeSecretsInRootfsBackup by remember { mutableStateOf(false) }
     var backupChatsPassword by remember { mutableStateOf("") }
     var showBackupPasswordText by remember { mutableStateOf(false) }
 
@@ -5035,11 +5036,60 @@ private fun BackupsSubScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "Creates a full, portable backup of all installed packages, libraries, binaries, shell configurations, and user home dotfiles. Excludes active sockets, volatile caches, and auth tokens.",
+                    text = "Creates a full, portable backup of all installed packages, libraries, binaries, shell configurations, and user home dotfiles. Excludes active sockets, volatile caches, and auth tokens. The archive is checked before it is saved: every .zip in the backups folder is complete and restorable.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
                     lineHeight = 17.sp
                 )
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Include SSH keys and sign-ins",
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Adds ~/.ssh, agent and GitHub logins, shell history and saved AGY accounts. Whoever has the archive can sign in as you.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            lineHeight = 15.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Switch(
+                        checked = includeSecretsInRootfsBackup,
+                        onCheckedChange = { includeSecretsInRootfsBackup = it }
+                    )
+                }
+                if (includeSecretsInRootfsBackup) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFEF4444).copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.Security, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
+                            Text(
+                                text = "⚠️ This backup will contain your SSH keys and login tokens. Never share it with anyone.",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                lineHeight = 15.sp
+                            )
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(10.dp))
                 Surface(
@@ -5073,7 +5123,7 @@ private fun BackupsSubScreen(
                                 activeScriptExecution = ScriptExecutionInfo(
                                     title = "Rootfs System Packager",
                                     scriptName = "backup_bootstrap",
-                                    args = emptyList()
+                                    args = if (includeSecretsInRootfsBackup) listOf("--include-secrets") else emptyList()
                                 )
                             }
                         }

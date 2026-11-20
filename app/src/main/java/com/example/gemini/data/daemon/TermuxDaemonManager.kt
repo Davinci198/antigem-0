@@ -246,7 +246,28 @@ object TermuxDaemonManager {
         }
     }
 
-    fun openOrSelectTab(path: String, name: String, content: String, hash: String = "", isReadOnly: Boolean = false, isExternal: Boolean = false) {
+    /**
+     * Reads a file for the code editor, refusing anything above [IdeApiClient.MAX_EDITOR_BYTES].
+     * Returns null when the file is missing, unreadable or too large, so callers fall back to the
+     * bridge (which applies the same cap) instead of allocating the whole file on the heap.
+     */
+    fun readEditorText(file: java.io.File): String? = try {
+        if (file.isFile && file.length() <= IdeApiClient.MAX_EDITOR_BYTES) file.readText() else null
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
+     * Opens (or focuses) a tab. Returns false when the text is above
+     * [IdeApiClient.MAX_EDITOR_BYTES]: Sora materialises the whole tab as one `String` when it
+     * attaches, which is what threw `OutOfMemoryError` on a large log, so such a file must not
+     * become a tab at all.
+     */
+    fun openOrSelectTab(path: String, name: String, content: String, hash: String = "", isReadOnly: Boolean = false, isExternal: Boolean = false): Boolean {
+        if (content.length.toLong() > IdeApiClient.MAX_EDITOR_BYTES) {
+            Log.w(TAG, "Refusing '$path': ${content.length} chars is too large for the editor")
+            return false
+        }
         val existing = _openTabs.value.find { it.path == path }
         val finalHash = hash.ifBlank { computeSha256(content) }
         val resolvedIsExternal = isExternal || path.startsWith("content://") || path.startsWith("android.resource://") || path.startsWith("file://")
@@ -262,6 +283,7 @@ object TermuxDaemonManager {
             )
         }
         _activeTabPath.value = path
+        return true
     }
 
 
