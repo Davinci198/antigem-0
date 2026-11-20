@@ -134,6 +134,7 @@ func formatHumanCrash(p interface{}, rawStack []byte) (reason string, location s
 
 func main() {
 	cfg := config.LoadConfig()
+	config.EnsureWorkspaceDirs(cfg.HomeDir)
 
 	var unpatchOnly bool
 	var customAgyBin string

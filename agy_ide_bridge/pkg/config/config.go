@@ -83,6 +83,44 @@ func LoadConfig() *Config {
 	}
 }
 
+// DefaultContextContent is the seed content written to CONTEXT.md when it does
+// not already exist in a freshly provisioned workspace.
+const DefaultContextContent = `# CONTEXT.md — context comun pentru toți agenții
+
+Acest fișier este sursa comună de context și prompt pentru toți agenții
+care lucrează în acest repo (Claude Code, OpenCode, Hermes, agy).
+
+## Reguli comune
+- Schimbările se fac pe branch nou, niciodată direct pe master.
+- Nu rula comenzi distructive fără acord.
+- Explică înainte de a edita.
+
+## Structură
+- workspace/ — lucru comun
+- tmp/ — fișiere temporare comune (gitignored)
+- ~/dev/tmp — tmp global
+`
+
+// EnsureWorkspaceDirs creates the shared workspace/tmp directories for agents
+// inside this media's home (e.g. /root/dev/... under proot). It also seeds a
+// default CONTEXT.md if missing. Safe to call repeatedly.
+func EnsureWorkspaceDirs(home string) {
+	dirs := []string{
+		filepath.Join(home, "dev"),
+		filepath.Join(home, "dev", "tmp"),
+		filepath.Join(home, "dev", "antigem"),
+		filepath.Join(home, "dev", "antigem", "workspace"),
+		filepath.Join(home, "dev", "antigem", "tmp"),
+	}
+	for _, d := range dirs {
+		_ = os.MkdirAll(d, 0o755)
+	}
+	ctxPath := filepath.Join(home, "dev", "antigem", "CONTEXT.md")
+	if _, err := os.Stat(ctxPath); os.IsNotExist(err) {
+		_ = os.WriteFile(ctxPath, []byte(DefaultContextContent), 0o644)
+	}
+}
+
 // ExpandHome expands tilde (~) in file paths to the user's home directory.
 func ExpandHome(p string) string {
 	p = strings.TrimSpace(p)

@@ -43,6 +43,13 @@ data class PendingToolApproval(
 
 /** "Continue in another agent": how much of the old chat travels in the hand-off prompt. */
 private const val HANDOFF_MAX_MESSAGES = 30
+
+/**
+ * How long the "Applying agents" overlay waits for the bridge restart. A cold start of several agents (proot,
+ * opencode server, Hermes gateway) takes tens of seconds on a phone; past this bound the overlay closes so the
+ * screen can never stay locked on "Restarting…" forever (the server keeps starting in the background).
+ */
+private const val AGENTS_RESTART_TIMEOUT_MS = 90_000L
 private const val HANDOFF_MAX_CHARS = 12_000
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -141,15 +148,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // first launch: the server waited for this choice and now starts with it
             com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(getApplication())
         } else if (before != agents) {
-            // stop the server completely, then restart the app: it starts the server again with the new agents
+            // restart the bridge directly with the new agent flags (no full-app restart needed). A cold start of
+            // several agents takes a while on a phone, so the wait is bounded: the overlay must never hang forever.
             viewModelScope.launch {
                 _isApplyingAgents.value = true
-                runCatching { com.example.gemini.data.local.LocalServerManager.stopServerCompletely() }
-                val app = getApplication<Application>()
-                app.packageManager.getLaunchIntentForPackage(app.packageName)?.component?.let { component ->
-                    app.startActivity(android.content.Intent.makeRestartActivityTask(component))
+                runCatching {
+                    val app = getApplication<Application>()
+                    val finished = withTimeoutOrNull(AGENTS_RESTART_TIMEOUT_MS) {
+                        com.example.gemini.data.local.LocalServerManager.restartServerAndWait(app)
+                    } != null
+                    // A timeout can cancel the restart between stopping and starting: make sure it comes up anyway.
+                    if (!finished) com.example.gemini.data.local.LocalServerManager.startServer(app)
                 }
-                Runtime.getRuntime().exit(0)
+                _isApplyingAgents.value = false
             }
         }
     }

@@ -34,9 +34,11 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,12 +48,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.launch
+import com.example.gemini.data.daemon.IdeApiClient
+import com.example.gemini.data.daemon.TermuxDaemonManager
+import com.example.gemini.data.file.FsRoots
 import com.example.gemini.domain.model.AgentKind
+import com.example.gemini.ui.claude.SettingsGroupHeader
+import com.example.gemini.ui.components.FileManagerDialog
 import com.example.gemini.ui.components.accent
 
 private data class AgentInfo(val kind: AgentKind, val title: String, val description: String)
+
+/** A row in Settings → Agents that opens a shared workspace path (a directory, or the common prompt file). */
+private data class WorkspaceEntry(val label: String, val path: String, val isFile: Boolean = false)
 
 private val AGENT_INFO = listOf(
     AgentInfo(AgentKind.AGY, "Antigravity", "Google's coding agent through the agy hub: Gemini and Claude models on your Google plan."),
@@ -154,7 +166,7 @@ fun AgentChoiceDialog(onConfirm: (Set<AgentKind>) -> Unit) {
     }
 }
 
-/** Settings → Agents: change the selection; applying stops the local server and restarts the app with the new agents. */
+/** Settings → Agents: change the selection; applying restarts the local server with the new agents. */
 @Composable
 fun AgentsSettingsPage(
     enabled: Set<AgentKind>,
@@ -164,6 +176,9 @@ fun AgentsSettingsPage(
 ) {
     var selected by remember(enabled) { mutableStateOf(enabled) }
     var confirm by remember { mutableStateOf(false) }
+    var browsePath by remember { mutableStateOf<String?>(null) }
+    var openContextFile by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text(
             "Agents you turn off do not run at all: the local server starts without them and their settings and chats are hidden (chats stay on disk).",
@@ -173,6 +188,40 @@ fun AgentsSettingsPage(
         )
         Spacer(Modifier.height(14.dp))
         AgentSelector(selected, { selected = it })
+        Spacer(Modifier.height(18.dp))
+
+        SettingsGroupHeader("Workspace & prompt comun", MaterialTheme.colorScheme.primary, "Directories and shared prompt for all agents")
+        // Paths stay in "~" form: the bridge expands them inside its own home, which the app cannot know.
+        val workspacePaths = listOf(
+            WorkspaceEntry("Workspace (repo)", "~/dev/antigem/workspace"),
+            WorkspaceEntry("Tmp (repo)", "~/dev/antigem/tmp"),
+            WorkspaceEntry("Tmp (global)", "~/dev/tmp"),
+            WorkspaceEntry("Prompt comun (CONTEXT.md)", "~/dev/antigem/CONTEXT.md", isFile = true)
+        )
+        workspacePaths.forEach { entry ->
+            Surface(
+                onClick = {
+                    if (entry.isFile) {
+                        openContextFile = entry.path
+                    } else {
+                        // The file manager gate only takes concrete paths, so expand `~` here.
+                        browsePath = FsRoots.expandHome(context, entry.path)
+                    }
+                },
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(entry.label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text(entry.path, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                    Text(if (entry.isFile) "Edit" else "Open", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
         Spacer(Modifier.height(18.dp))
         Button(
             onClick = { confirm = true },
@@ -184,20 +233,20 @@ fun AgentsSettingsPage(
             if (isApplying) {
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
                 Spacer(Modifier.width(10.dp))
-                Text("Restarting…")
+                Text("Starting agents…")
             } else {
-                Text(if (selected == enabled) "No changes" else "Apply and restart app", fontWeight = FontWeight.SemiBold)
+                Text(if (selected == enabled) "No changes" else "Apply agents", fontWeight = FontWeight.SemiBold)
             }
         }
     }
     if (confirm) {
         AlertDialog(
             onDismissRequest = { confirm = false },
-            title = { Text("Restart to apply?", fontWeight = FontWeight.Bold) },
+            title = { Text("Apply agent changes?", fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "The local server stops and the app restarts with the new agents, so nothing of a turned-off agent keeps running. " +
-                        "Replies in progress stop, and a chat of a turned-off agent is closed.",
+                    "The local server restarts with the new agents, so a turned-off agent stops running at once. " +
+                        "Replies in progress stop, and a chat of a turned-off agent is closed. This can take up to a minute.",
                     fontSize = 13.5.sp
                 )
             },
@@ -205,10 +254,90 @@ fun AgentsSettingsPage(
                 Button(onClick = {
                     confirm = false
                     onApply(selected)
-                }) { Text("Restart app") }
+                }) { Text("Apply") }
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } }
         )
+    }
+    browsePath?.let { path ->
+        val scope = rememberCoroutineScope()
+        FileManagerDialog(
+            initialPath = path,
+            onOpenFileInEditor = { filePath, name ->
+                scope.launch {
+                    val res = IdeApiClient.readFileDetailed(filePath)
+                    if (res == null) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Cannot open '$name'. IDE Bridge is offline or file is unreachable.",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        TermuxDaemonManager.openOrSelectTab(filePath, name, res.content)
+                        browsePath = null
+                    }
+                }
+            },
+            onDismiss = { browsePath = null }
+        )
+    }
+    openContextFile?.let { filePath ->
+        LaunchedEffect(filePath) {
+            val localCopy = java.io.File(context.filesDir, "CONTEXT.md")
+            // Holds the content we last downloaded, so an edit made in the external editor is recognised as such.
+            val lastSynced = java.io.File(context.filesDir, "CONTEXT.md.synced")
+            var syncedNote: String? = null
+            var failure: String? = null
+
+            // The editor saves into our local copy: if that copy differs from what we last downloaded, the user
+            // edited it, and it goes back to the shared workspace before we overwrite anything.
+            val edited = runCatching { localCopy.takeIf { it.exists() }?.readText() }.getOrNull()
+            val synced = runCatching { lastSynced.takeIf { it.exists() }?.readText() }.getOrNull()
+            if (edited != null && synced != null && edited != synced && edited.isNotBlank()) {
+                if (IdeApiClient.saveFile(filePath, edited, force = true)) {
+                    syncedNote = "Saved your CONTEXT.md edits to the workspace."
+                } else {
+                    // Keep the edit instead of silently replacing it with the workspace version.
+                    failure = "Could not save your CONTEXT.md edits: IDE Bridge is offline. Your edit is kept locally."
+                }
+            }
+
+            if (failure != null) {
+                android.widget.Toast.makeText(context, failure, android.widget.Toast.LENGTH_LONG).show()
+            } else {
+                val res = IdeApiClient.readFileDetailed(filePath)
+                if (res == null) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Cannot open CONTEXT.md: IDE Bridge is offline.",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    try {
+                        localCopy.writeText(res.content)
+                        lastSynced.writeText(res.content)
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            context,
+                            context.packageName + ".fileprovider",
+                            localCopy
+                        )
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "text/plain")
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        }
+                        context.startActivity(intent)
+                        syncedNote?.let { android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show() }
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Cannot open CONTEXT.md: ${e.message}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+            openContextFile = null
+        }
     }
 }
 
@@ -222,7 +351,12 @@ fun AgentsApplyingDialog() {
                 Spacer(Modifier.width(14.dp))
                 Column {
                     Text("Applying agents", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    Text("Stopping the local server, then restarting the app…", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Text(
+                        "Starting the agents you enabled. A cold start can take up to a minute — Hermes and OpenCode " +
+                            "have to boot, so the screen may look stuck. The selection is already saved.",
+                        fontSize = 12.5.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
                 }
             }
         }

@@ -1,3 +1,6 @@
+> **Context comun pentru toți agenții: citește `CONTEXT.md`** (același director)
+> ca sursă partajată de prompt/reguli înainte de orice lucrare.
+
 
 -- This whole below prompt only applies to gemini flash models(for any non gemini model you do not have to follow this rule and follow what user said)
 ## 3. Communication & User Interaction Rules
