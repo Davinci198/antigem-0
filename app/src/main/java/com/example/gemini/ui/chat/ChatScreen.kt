@@ -1588,9 +1588,14 @@ fun ChatScreen(
                             )
                         }
 
+                        // web views of this chat's blocks stay alive while the chat is open; all destroyed when it is left
+                        val chatWebViewCache = remember(currentConv?.id) { com.example.gemini.ui.components.ChatWebViewCache(context) }
+                        DisposableEffect(chatWebViewCache) { onDispose { chatWebViewCache.close() } }
+
                         CompositionLocalProvider(
                             androidx.compose.ui.platform.LocalDensity provides customDensity,
-                            com.example.gemini.ui.components.LocalQuestionPanelActive provides true
+                            com.example.gemini.ui.components.LocalQuestionPanelActive provides true,
+                            com.example.gemini.ui.components.LocalChatWebViewCache provides chatWebViewCache
                         ) {
                                 LazyColumn(
                                     state = listState,
@@ -1602,6 +1607,7 @@ fun ChatScreen(
                                         key = { it.key },
                                         contentType = { it.contentType }
                                     ) { feedItem ->
+                                        com.example.gemini.ui.components.WithWebViewSlot(feedItem.key) {
                                         when (feedItem) {
                                         is ChatFeedItem.Summary -> {
                                             Box(
@@ -1745,6 +1751,7 @@ fun ChatScreen(
                                                 onShowArtifacts = { showArtifactsDrawer = true },
                                                 artifactsCount = artifacts.size
                                             )
+                                        }
                                         }
                                         }
                                     }
