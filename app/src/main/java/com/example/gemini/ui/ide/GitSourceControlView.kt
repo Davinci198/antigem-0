@@ -72,6 +72,18 @@ fun GitSourceControlView(
     var showPushDialog by remember { mutableStateOf(false) }
     var showCommitDialog by remember { mutableStateOf(false) }
 
+    // P9: GitHub publish (device flow)
+    var showPublishDialog by remember { mutableStateOf(false) }
+    var showClientIdDialog by remember { mutableStateOf(false) }
+    var publishClientIdInput by remember { mutableStateOf("") }
+    var publishRepoName by remember { mutableStateOf("") }
+    var publishDescription by remember { mutableStateOf("") }
+    var publishPrivate by remember { mutableStateOf(true) }
+    var publishBusy by remember { mutableStateOf(false) }
+    var publishPhase by remember { mutableIntStateOf(0) } // 0 = form, 1 = authorize, 2 = done
+    var publishMessage by remember { mutableStateOf("") }
+    val publishDeviceCode = remember { mutableStateOf<com.example.gemini.data.remote.GitHubDeviceFlow.DeviceCode?>(null) }
+
 
 
     // Git Config Dialog State
@@ -279,6 +291,26 @@ fun GitSourceControlView(
                                 )
                             }
                         }
+                    }
+
+                    // Publish to GitHub (P9)
+                    IconButton(
+                        onClick = {
+                            publishRepoName = ""
+                            publishDescription = ""
+                            publishPrivate = true
+                            publishPhase = 0
+                            publishMessage = ""
+                            showPublishDialog = true
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Link,
+                            contentDescription = "Publish to GitHub",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
 
                     // Stash Menu
@@ -1419,6 +1451,206 @@ fun GitSourceControlView(
                 TextButton(onClick = { showCommitDialog = false }) {
                     Text("Cancel")
                 }
+            }
+        )
+    }
+
+    // 10. Publish to GitHub (P9, device flow)
+    if (showPublishDialog) {
+        val authPrefs = remember { com.example.gemini.data.preferences.AuthPreferences(context) }
+        AlertDialog(
+            onDismissRequest = {
+                if (!publishBusy) showPublishDialog = false
+            },
+            icon = { Icon(Icons.Default.Link, contentDescription = null, tint = ClaudeTerracotta) },
+            title = { Text("Publish to GitHub", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    if (authPrefs.getGithubClientIdSync().isBlank()) {
+                        Text(
+                            "GitHub publish needs an OAuth App client id. Add yours (Settings → GitHub OAuth client id) before publishing.",
+                            fontSize = 12.5.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { showClientIdDialog = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Configure client id", fontSize = 13.sp)
+                        }
+                    } else {
+                        when (publishPhase) {
+                            0 -> {
+                                OutlinedTextField(
+                                    value = publishRepoName,
+                                    onValueChange = { publishRepoName = it },
+                                    label = { Text("Repository name") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = publishDescription,
+                                    onValueChange = { publishDescription = it },
+                                    label = { Text("Description (optional)") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = publishPrivate,
+                                        onCheckedChange = { publishPrivate = it },
+                                        colors = CheckboxDefaults.colors(checkedColor = ClaudeTerracotta)
+                                    )
+                                    Text("Private repository", fontSize = 13.sp)
+                                }
+                                if (publishMessage.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(publishMessage, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            1 -> {
+                                Text(
+                                    publishMessage,
+                                    fontSize = 12.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            else -> {
+                                Text(publishMessage, fontSize = 12.5.sp)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (authPrefs.getGithubClientIdSync().isBlank()) {
+                    Button(onClick = { showPublishDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)) {
+                        Text("Close")
+                    }
+                } else if (publishPhase == 0) {
+                    Button(
+                        enabled = !publishBusy && publishRepoName.isNotBlank(),
+                        onClick = {
+                            val projPath = activeProject?.path ?: return@Button
+                            publishBusy = true
+                            scope.launch {
+                                val codeRes = com.example.gemini.data.remote.GitHubDeviceFlow.requestDeviceCode(authPrefs.getGithubClientIdSync())
+                                codeRes.fold(
+                                    onSuccess = { code ->
+                                        publishDeviceCode.value = code
+                                        publishPhase = 1
+                                        publishMessage = "Open ${code.verificationUri} in a browser and enter code ${code.userCode}, then press Continue."
+                                    },
+                                    onFailure = { err ->
+                                        publishMessage = err.message ?: "Device flow failed"
+                                    }
+                                )
+                                publishBusy = false
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                    ) {
+                        Text("Start", fontWeight = FontWeight.SemiBold)
+                    }
+                } else if (publishPhase == 1) {
+                    Button(
+                        enabled = !publishBusy,
+                        onClick = {
+                            publishBusy = true
+                            scope.launch {
+                                val clientId = authPrefs.getGithubClientIdSync()
+                                val code = publishDeviceCode.value
+                                if (code == null) {
+                                    publishMessage = "Device flow expired — start again."
+                                    publishPhase = 0
+                                    publishBusy = false
+                                    return@launch
+                                }
+                                val tokenRes = com.example.gemini.data.remote.GitHubDeviceFlow.pollAccessToken(clientId, code)
+                                tokenRes.fold(
+                                    onSuccess = { token ->
+                                        val repoRes = com.example.gemini.data.remote.GitHubDeviceFlow.createRepository(
+                                            token.accessToken, publishRepoName.trim(), publishDescription.trim(), publishPrivate
+                                        )
+                                        repoRes.fold(
+                                            onSuccess = { (owner, repoName) ->
+                                                val remoteUrl = com.example.gemini.data.remote.GitHubDeviceFlow.authenticatedRemoteUrl(token.accessToken, owner, repoName)
+                                                val projPath = activeProject?.path ?: ""
+                                                val cfg = GitApiClient.setConfig(projPath, remoteUrl = remoteUrl)
+                                                if (cfg.success) {
+                                                    val push = GitApiClient.pushDetailed(projPath)
+                                                    if (push.success) {
+                                                        publishPhase = 2
+                                                        publishMessage = "Published to github.com/$owner/$repoName"
+                                                        refreshGitData()
+                                                    } else {
+                                                        publishPhase = 2
+                                                        publishMessage = "Repo created (github.com/$owner/$repoName) but push failed: ${push.error}"
+                                                    }
+                                                } else {
+                                                    publishPhase = 2
+                                                    publishMessage = "Repo created but remote config failed: ${cfg.error}"
+                                                }
+                                            },
+                                            onFailure = { err -> publishMessage = err.message ?: "Repo creation failed" }
+                                        )
+                                    },
+                                    onFailure = { err -> publishMessage = err.message ?: "Authorization failed" }
+                                )
+                                publishBusy = false
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                    ) {
+                        Text(if (publishBusy) "Working…" else "I've authorized — Continue", fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    Button(onClick = { showPublishDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)) {
+                        Text("Done")
+                    }
+                }
+            },
+            dismissButton = {
+                if (!publishBusy && publishPhase != 1) {
+                    TextButton(onClick = { showPublishDialog = false }) { Text("Cancel") }
+                }
+            }
+        )
+    }
+
+    if (showClientIdDialog) {
+        AlertDialog(
+            onDismissRequest = { showClientIdDialog = false },
+            title = { Text("GitHub OAuth client id") },
+            text = {
+                Column {
+                    Text(
+                        "Create an OAuth App at github.com/settings/developers and paste its Client ID here (no secret needed for device flow).",
+                        fontSize = 12.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = publishClientIdInput,
+                        onValueChange = { publishClientIdInput = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val authPrefs = com.example.gemini.data.preferences.AuthPreferences(context)
+                        authPrefs.setGithubClientId(publishClientIdInput.trim())
+                        showClientIdDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClientIdDialog = false }) { Text("Cancel") }
             }
         )
     }

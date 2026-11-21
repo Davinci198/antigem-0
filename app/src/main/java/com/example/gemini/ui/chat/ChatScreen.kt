@@ -69,6 +69,8 @@ import com.example.gemini.domain.model.AiModel
 import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.MessageRole
 import com.example.gemini.domain.model.ToolType
+import com.example.gemini.data.security.ExternalLinks
+import com.example.gemini.data.security.LinkOrigin
 import com.example.gemini.theme.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -334,6 +336,21 @@ fun ChatScreen(
     }
 
     val pendingApprovals by viewModel.pendingApprovals.collectAsState()
+
+    SideEffect {
+        com.example.gemini.ui.components.ScreenshotSink.sink = { bytes ->
+            viewModel.addAttachment(
+                com.example.gemini.domain.model.ChatAttachment(
+                    name = "preview-${System.currentTimeMillis()}.png",
+                    path = "preview.png",
+                    isImage = true,
+                    size = bytes.size.toLong(),
+                    mimeType = "image/png",
+                    base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP),
+                )
+            )
+        }
+    }
 
     var currentToast by remember { mutableStateOf<ChatToast?>(null) }
 
@@ -1130,14 +1147,7 @@ fun ChatScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            try {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                android.util.Log.e("ChatScreen", "Failed to open browser: ${e.message}")
-                            }
+                            ExternalLinks.open(context, targetUrl, LinkOrigin.ServerContent)
                             viewModel.clearPendingLoginUrl()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
@@ -1172,14 +1182,7 @@ fun ChatScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            try {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(issue.verificationUrl)).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                android.util.Log.e("ChatScreen", "Failed to open browser: ${e.message}")
-                            }
+                            ExternalLinks.open(context, issue.verificationUrl, LinkOrigin.ServerContent)
                             viewModel.clearAgyLoginIssue()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)

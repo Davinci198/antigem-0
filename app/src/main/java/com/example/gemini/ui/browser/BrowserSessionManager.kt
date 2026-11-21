@@ -29,6 +29,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.example.gemini.data.security.ExternalLinks
+import com.example.gemini.data.security.LinkOrigin
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -1134,14 +1136,7 @@ class BrowserSessionManager private constructor() {
                         }
                         return false
                     }
-                    return try {
-                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
-                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        context.startActivity(intent)
-                        true
-                    } catch (_: Exception) {
-                        false
-                    }
+                    return ExternalLinks.open(context, uri.toString(), LinkOrigin.ServerContent)
                 }
             }
 

@@ -7140,6 +7140,23 @@ private fun DataProtectionSubScreen(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Open Space Manager Preview", fontSize = 13.sp)
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            context.startActivity(Intent(context, com.example.gemini.ui.settings.SchedulesActivity::class.java))
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Could not open Scheduled prompts: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Scheduled prompts", fontSize = 13.sp)
+                }
             }
         }
     }

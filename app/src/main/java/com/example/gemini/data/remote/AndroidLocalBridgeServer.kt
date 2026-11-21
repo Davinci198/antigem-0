@@ -4,6 +4,9 @@ import android.content.Context
 import android.util.Log
 import android.view.KeyEvent
 import com.example.gemini.data.local.LocalTerminalBridge
+import com.example.gemini.data.security.ExternalLinks
+import com.example.gemini.data.security.LinkDecision
+import com.example.gemini.data.security.LinkOrigin
 import com.example.gemini.ui.browser.BrowserSessionManager
 import kotlinx.coroutines.*
 import org.json.JSONArray
@@ -814,6 +817,14 @@ class AndroidLocalBridgeServer private constructor() {
                         }
                         else -> null
                     }
+                    // P4 egress: an agent may only point the browser at http(s); anything else is refused.
+                    if (ExternalLinks.policy.check(url, LinkOrigin.AgentCard) is LinkDecision.Refuse) {
+                        content.put(JSONObject().apply {
+                            put("type", "text")
+                            put("text", "Refused to open non-http(s) URL: $url")
+                        })
+                        return@when
+                    }
                     val tab = bManager.openUrl(url, newTab = newTab, desktopMode = desktopMode)
                     bManager.waitForPageLoad(tab.id, 5000)
                     val modeStr = if (tab.isDesktopMode) "desktop" else "mobile"
@@ -1107,6 +1118,11 @@ class AndroidLocalBridgeServer private constructor() {
             "open" -> {
                 val url = bodyJson.optString("url", "")
                 val newTab = bodyJson.optBoolean("new_tab", false)
+                // P4 egress: only http(s) may be opened through the browser API.
+                if (ExternalLinks.policy.check(url, LinkOrigin.AgentCard) is LinkDecision.Refuse) {
+                    sendResponse(out, 400, "application/json", """{"error":"Refused non-http(s) url"}""")
+                    return
+                }
                 val tab = withContext(Dispatchers.Main) {
                     val previous = bManager.getActiveTab()?.id
                     val target = bodyJson.optString("tab_id").ifBlank { null }
@@ -1120,7 +1136,14 @@ class AndroidLocalBridgeServer private constructor() {
             "update" -> {
                 val response = withContext(Dispatchers.Main) {
                     val tab = bManager.tabs.firstOrNull { it.id == bodyJson.optString("tab_id") } ?: throw IllegalArgumentException("Tab not found")
-                    if (bodyJson.has("url")) bManager.openUrl(bodyJson.getString("url"), tabId = tab.id)
+                    if (bodyJson.has("url")) {
+                        val newUrl = bodyJson.getString("url")
+                        // P4 egress: only http(s) may be opened through the browser API.
+                        if (ExternalLinks.policy.check(newUrl, LinkOrigin.AgentCard) is LinkDecision.Refuse) {
+                            throw IllegalArgumentException("Refused non-http(s) url")
+                        }
+                        bManager.openUrl(newUrl, tabId = tab.id)
+                    }
                     if (bodyJson.optBoolean("active")) bManager.switchTab(tab.id)
                     tab.toSummaryJson()
                 }

@@ -1,6 +1,6 @@
 package com.example.gemini.data.remote.core
 
-import android.util.Log
+import com.example.gemini.data.security.AppLog
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -29,7 +29,7 @@ class AgyCsrfManager {
     fun setCachedToken(hubUrl: String = "", newToken: String) {
         if (newToken.isNotBlank()) {
             token = newToken
-            Log.d(TAG, "⚡ [AgyCsrfManager] CSRF token updated (${newToken.length} chars)")
+            AppLog.d("⚡ [AgyCsrfManager] CSRF token updated (${newToken.length} chars)")
         }
     }
 
@@ -38,7 +38,7 @@ class AgyCsrfManager {
     }
 
     fun notifyCsrfExpired(hubUrl: String = "", endpoint: String = "") {
-        Log.w(TAG, "⚠️ [AgyCsrfManager] CSRF token expired on $endpoint")
+        AppLog.w("⚠️ [AgyCsrfManager] CSRF token expired on $endpoint")
         clearToken()
         _csrfEvents.tryEmit("CSRF token expired on $endpoint")
     }

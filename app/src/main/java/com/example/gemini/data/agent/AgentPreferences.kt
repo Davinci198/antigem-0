@@ -1,7 +1,10 @@
 package com.example.gemini.data.agent
 
 import android.content.Context
+import com.example.gemini.data.preferences.WidgetPrefs
 import com.example.gemini.domain.model.AgentKind
+import com.example.gemini.ui.widgets.ConversationWidgetProvider
+import com.example.gemini.ui.widgets.StatusWidgetProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +32,9 @@ class AgentPreferences(context: Context) {
         }.apply()
         _enabled.value = agents
         _hasChosen.value = true
+        WidgetPrefs.updateFromAgents(context, agents)
+        ConversationWidgetProvider.refreshAll(context, ConversationWidgetProvider::class.java)
+        StatusWidgetProvider.refreshAll(context, StatusWidgetProvider::class.java)
     }
 
     companion object {
