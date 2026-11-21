@@ -823,15 +823,15 @@ class AndroidLocalBridgeServer private constructor() {
                             put("type", "text")
                             put("text", "Refused to open non-http(s) URL: $url")
                         })
-                        return@when
+                    } else {
+                        val tab = bManager.openUrl(url, newTab = newTab, desktopMode = desktopMode)
+                        bManager.waitForPageLoad(tab.id, 5000)
+                        val modeStr = if (tab.isDesktopMode) "desktop" else "mobile"
+                        content.put(JSONObject().apply {
+                            put("type", "text")
+                            put("text", "Opened $url in tab ${tab.id} ('${tab.title}') [viewMode: $modeStr]")
+                        })
                     }
-                    val tab = bManager.openUrl(url, newTab = newTab, desktopMode = desktopMode)
-                    bManager.waitForPageLoad(tab.id, 5000)
-                    val modeStr = if (tab.isDesktopMode) "desktop" else "mobile"
-                    content.put(JSONObject().apply {
-                        put("type", "text")
-                        put("text", "Opened $url in tab ${tab.id} ('${tab.title}') [viewMode: $modeStr]")
-                    })
                 }
                 "browser_set_view_mode" -> {
                     val tabId = args.optString("tab_id", "").ifBlank { null }

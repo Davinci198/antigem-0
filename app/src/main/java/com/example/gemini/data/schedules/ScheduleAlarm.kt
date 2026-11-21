@@ -54,5 +54,5 @@ object ScheduleAlarm {
         )
     }
 
-    const val DEFAULT_MIN_REPEAT_MS = TimeUnit.MINUTES.toMillis(5)
+    const val DEFAULT_MIN_REPEAT_MS = 5L * 60L * 1000L
 }

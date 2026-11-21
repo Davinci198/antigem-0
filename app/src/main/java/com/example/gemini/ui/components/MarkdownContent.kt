@@ -2500,8 +2500,7 @@ private val INLINE_MARKDOWN_PATTERN: Pattern = Pattern.compile(
     Pattern.DOTALL or Pattern.CASE_INSENSITIVE
 )
 
-object MarkdownTextCache {
-    /**
+/**
  * Click-time bridge between the cached, non-composable markdown link builders and the Android
  * link policy. Set by [MarkdownContent] with a context-backed opener; null before first render
  * (links then do nothing, which is safe).
@@ -2510,7 +2509,8 @@ object MarkdownLinkInterceptor {
     var opener: ((String) -> Unit)? = null
 }
 
-private val cache = android.util.LruCache<Int, FormattedInlineResult>(600)
+object MarkdownTextCache {
+    private val cache = android.util.LruCache<Int, FormattedInlineResult>(600)
 
     fun prewarm(text: String, isDark: Boolean = true) {
         getOrCompute(text, isStrikethrough = false, isDark = isDark, density = null, fileLinkHandler = null)

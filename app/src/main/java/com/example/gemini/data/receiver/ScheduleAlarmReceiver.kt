@@ -74,6 +74,7 @@ class ScheduleAlarmReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        const val CHANNEL_ID = "antigem_scheduled_prompts"
         const val ACTION_PROMPT_FIRE = "com.example.gemini.SCHEDULED_PROMPT"
         const val ACTION_RUN_PROMPT = "com.example.gemini.RUN_SCHEDULED_PROMPT"
         const val EXTRA_PROMPT_TEXT = "prompt_text"

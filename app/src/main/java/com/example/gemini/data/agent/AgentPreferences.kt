@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * Which agents the app runs. Antigravity is on and Claude Code off until the user picks on first launch; at least
  * one always stays on. The bridge is started with the matching flags (see [bridgeFlags]).
  */
-class AgentPreferences(context: Context) {
+class AgentPreferences(private val context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private val _enabled = MutableStateFlow(read(prefs))

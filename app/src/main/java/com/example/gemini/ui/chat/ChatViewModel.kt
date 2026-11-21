@@ -1257,7 +1257,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             openCodeBackend.pendingPermissions.map { it.size },
         )
         viewModelScope.launch {
-            merge(pendingApprovalCounts)
+            combine(pendingApprovalCounts) { totals -> totals.sum() }
                 .onStart { emit(0) }
                 .collect { total -> com.example.gemini.data.notifications.ApprovalNotification.update(getApplication(), total) }
         }
