@@ -340,27 +340,7 @@
             android:label="Scheduled prompts"
             android:theme="@style/Theme.Gemini" />
 
-        <!-- Home-screen widgets (P5): conversation + status -->
-        <receiver
-            android:name="com.example.gemini.ui.widgets.ConversationWidgetProvider"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/widget_conversation_info" />
-        </receiver>
-        <receiver
-            android:name="com.example.gemini.ui.widgets.StatusWidgetProvider"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/widget_status_info" />
-        </receiver>
+        <!-- Home-screen widgets removed (P5 retired per user request). -->
     </application>
 
 </manifest>

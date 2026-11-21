@@ -106,7 +106,6 @@ class MainActivity : ComponentActivity() {
         com.example.gemini.data.local.LocalTerminalBridge.instance.init(this)
         com.example.gemini.data.notes.NotesRepository.init(this)
         com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.start(this)
-        com.example.gemini.data.preferences.WidgetPrefs.appOpened(this)
         handleIncomingFileIntent(intent)
         maybeRequestAllFilesAccess()
 
