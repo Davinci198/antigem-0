@@ -3,6 +3,7 @@ package com.example.gemini.data.agent
 import android.content.Context
 import com.example.gemini.data.preferences.WidgetPrefs
 import com.example.gemini.domain.model.AgentKind
+import com.example.gemini.ui.widgets.AntiGemWidgetProvider
 import com.example.gemini.ui.widgets.ConversationWidgetProvider
 import com.example.gemini.ui.widgets.StatusWidgetProvider
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,8 +34,8 @@ class AgentPreferences(private val context: Context) {
         _enabled.value = agents
         _hasChosen.value = true
         WidgetPrefs.updateFromAgents(context, agents)
-        ConversationWidgetProvider.refreshAll(context, ConversationWidgetProvider::class.java)
-        StatusWidgetProvider.refreshAll(context, StatusWidgetProvider::class.java)
+        AntiGemWidgetProvider.refreshAll(context, ConversationWidgetProvider::class.java)
+        AntiGemWidgetProvider.refreshAll(context, StatusWidgetProvider::class.java)
     }
 
     companion object {
