@@ -15,6 +15,7 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 /**
@@ -54,6 +55,10 @@ object AgentProvisioner {
     private const val CLAUDE_RELEASE_BASE = "https://downloads.claude.ai/claude-code-releases"
     private const val OPENCODE_PACKAGE_NAME = "@opencode/cli-linux-arm64"
     private const val HERMES_INSTALL_URL = "https://hermes-agent.nousresearch.com/install.sh"
+    // Pinned SHA-256 of the Hermes installer script at the URL above. The script is downloaded
+    // inside the guest and executed, so a tampered or MITM'd copy must fail the install instead
+    // of running. Update this when upstream changes the script (bump the URL alongside).
+    private const val HERMES_INSTALL_SHA256 = "c73dad4dcf7c9ecadb98578e28cc763d23d7be3fa1b513545319038795493214"
 
     private const val APT_TIMEOUT_SECONDS = 15 * 60L
     private const val BINARY_INSTALL_TIMEOUT_SECONDS = 10 * 60L
@@ -278,6 +283,20 @@ object AgentProvisioner {
     }
 
     // ----------------------------------------------------------- opencode
+
+    /**
+     * Converts an npm `dist.integrity` value (`sha512-<base64>`) into lowercase hex so the guest
+     * can verify it with `sha512sum -c -`. Returns null when the scheme is missing or unsupported.
+     */
+    internal fun parseNpmIntegrity(integrity: String): String? {
+        val prefix = "sha512-"
+        if (!integrity.startsWith(prefix)) return null
+        return runCatching {
+            Base64.getDecoder().decode(integrity.removePrefix(prefix))
+                .joinToString("") { "%02x".format(it) }
+        }.getOrNull()
+    }
+
     private suspend fun installOpencode(
         context: Context,
         downloads: File,
@@ -301,9 +320,18 @@ object AgentProvisioner {
             return AgentInstallResult(agent, false, "", "registry lookup failed: ${error.message}")
         }
         val version = packageJson.optString("version")
-        val tarball = packageJson.optJSONObject("dist")?.optString("tarball").orEmpty()
+        val dist = packageJson.optJSONObject("dist")
+        val tarball = dist?.optString("tarball").orEmpty()
+        val integrity = dist?.optString("integrity").orEmpty()
         if (version.isBlank() || tarball.isBlank()) {
             return AgentInstallResult(agent, false, "", "registry entry is incomplete")
+        }
+        // npm publishes the tarball integrity as "sha512-<base64>"; verify it in the guest before
+        // unpacking (same pattern as agy/claude checksum checks), so a tampered or MITM'd
+        // download never reaches the container.
+        val integrityHex = parseNpmIntegrity(integrity)
+        if (integrityHex == null) {
+            return AgentInstallResult(agent, false, "", "registry integrity missing or unsupported (need sha512)")
         }
 
         log("[opencode] downloading OpenCode $version...")
@@ -318,6 +346,7 @@ object AgentProvisioner {
             timeoutSeconds = BINARY_INSTALL_TIMEOUT_SECONDS,
             script = """
                 set -e
+                echo "$integrityHex  $GUEST_DOWNLOAD_DIR/$archiveName" | sha512sum -c -
                 rm -rf $GUEST_TMP_DIR/opencode
                 mkdir -p $GUEST_TMP_DIR/opencode /root/.opencode/bin
                 tar -xzf $GUEST_DOWNLOAD_DIR/$archiveName -C $GUEST_TMP_DIR/opencode
@@ -385,6 +414,9 @@ object AgentProvisioner {
             fi
             mkdir -p $GUEST_DOWNLOAD_DIR
             curl -fsSL $HERMES_INSTALL_URL -o $GUEST_DOWNLOAD_DIR/hermes-install.sh
+            # Pinned installer hash: a tampered script must never run in the guest.
+            echo "$HERMES_INSTALL_SHA256  $GUEST_DOWNLOAD_DIR/hermes-install.sh" | sha256sum -c - \
+              || { echo "hermes installer checksum mismatch"; exit 6; }
             # pm runs its uv children with an explicit --no-config, which disables
             # /etc/uv/uv.toml, and it filters UV_* out of their environment. With
             # --link2symlink in play, uv's default hardlink mode then dies with
