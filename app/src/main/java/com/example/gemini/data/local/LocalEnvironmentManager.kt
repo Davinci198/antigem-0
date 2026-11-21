@@ -30,6 +30,8 @@ import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 import java.io.*
+import java.security.DigestInputStream
+import java.security.MessageDigest
 import java.text.DecimalFormat
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
@@ -70,6 +72,17 @@ object LocalEnvironmentManager {
     const val UBUNTU_ROOTFS_TAG = "v4.30.1"
     const val UBUNTU_ROOTFS_ASSET = "ubuntu-questing-aarch64-pd-v4.30.1.tar.xz"
     const val UBUNTU_ROOTFS_SIZE_BYTES = 35 * 1024 * 1024L
+
+    /**
+     * Pinned SHA-256 of the two release assets above.
+     *
+     * Verification runs only when the constant is filled in; an empty value logs a warning and
+     * skips (dynamic sources like [BootstrapSource.BaseMinimum], [BootstrapSource.DirectUrl] and
+     * [BootstrapSource.LocalZipUri] cannot be pinned). Values are computed once from the published
+     * assets and updated together with a rootfs bump.
+     */
+    const val HARDCODED_ROOTFS_SHA256 = "e61894962da0f7b622445d32a2476e79223105f1089662be22a060a2f325f57f"
+    const val UBUNTU_ROOTFS_SHA256 = "5ab35b90cd9a9f180656261ba400a135c4c01c2da4b74522118342f985c2d328"
 
     private const val NOTIFICATION_CHANNEL_ID = "antigem_bootstrap_install"
     private const val NOTIFICATION_ID = 4096
@@ -980,7 +993,11 @@ object LocalEnvironmentManager {
                             }
 
                             finalDownloadedSize = tempZipFile.length()
-                            if (finalDownloadedSize >= MIN_BOOTSTRAP_SIZE_BYTES && validateArchiveIntegrity(tempZipFile)) {
+                            val pinnedSha256 = if (isTermux) HARDCODED_ROOTFS_SHA256 else UBUNTU_ROOTFS_SHA256
+                            if (finalDownloadedSize >= MIN_BOOTSTRAP_SIZE_BYTES &&
+                                validateArchiveIntegrity(tempZipFile) &&
+                                verifyRootfsSha256(tempZipFile, pinnedSha256, targetAsset)
+                            ) {
                                 downloadSucceeded = true
                             } else {
                                 tempZipFile.delete()
@@ -1811,6 +1828,34 @@ object LocalEnvironmentManager {
             Log.w(TAG, "Archive integrity error: ${e.message}", e)
             false
         }
+    }
+
+    /** Streaming SHA-256 of a file; null on failure. */
+    private fun sha256Hex(file: File): String? = try {
+        val digest = MessageDigest.getInstance("SHA-256")
+        DigestInputStream(BufferedInputStream(FileInputStream(file)), digest).use { it.readBytes() }
+        digest.digest().joinToString("") { "%02x".format(it) }
+    } catch (e: Exception) {
+        Log.w(TAG, "sha256 hashing failed: ${e.message}")
+        null
+    }
+
+    /**
+     * Verifies [file] against a pinned SHA-256. An empty [expected] disables the check with a
+     * warning (unpinned source); a mismatch fails the install.
+     */
+    private fun verifyRootfsSha256(file: File, expected: String, label: String): Boolean {
+        if (expected.isBlank()) {
+            Log.w(TAG, "$label: no pinned SHA-256 set; skipping cryptographic verification")
+            return true
+        }
+        val actual = sha256Hex(file) ?: return false
+        if (!actual.equals(expected.lowercase(), ignoreCase = true)) {
+            Log.w(TAG, "$label SHA-256 mismatch: expected $expected, got $actual")
+            return false
+        }
+        Log.d(TAG, "$label SHA-256 OK ($actual)")
+        return true
     }
 
     private val ubuntuHostPrefixRegex = Regex("^(?:.*/)?files/ubuntu/")
