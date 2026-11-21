@@ -700,6 +700,14 @@ class AuthPreferences(private val context: Context) {
         return token
     }
 
+    /** GitHub OAuth App client id used by the publish-to-GitHub device flow (P9). Empty = not configured. */
+    fun getGithubClientIdSync(): String =
+        syncPrefs.getString("github_client_id", "") ?: ""
+
+    fun setGithubClientId(clientId: String) {
+        syncPrefs.edit().putString("github_client_id", clientId.trim()).apply()
+    }
+
     suspend fun saveSecurityToken(token: String) {
         val clean = token.trim()
         val validToken = if (clean.length == TOKEN_LENGTH) clean else generateRandomToken()

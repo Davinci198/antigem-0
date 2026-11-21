@@ -1,7 +1,11 @@
 package com.example.gemini.data.agent
 
 import android.content.Context
+import com.example.gemini.data.preferences.WidgetPrefs
 import com.example.gemini.domain.model.AgentKind
+import com.example.gemini.ui.widgets.AntiGemWidgetProvider
+import com.example.gemini.ui.widgets.ConversationWidgetProvider
+import com.example.gemini.ui.widgets.StatusWidgetProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -10,7 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * Which agents the app runs. Antigravity is on and Claude Code off until the user picks on first launch; at least
  * one always stays on. The bridge is started with the matching flags (see [bridgeFlags]).
  */
-class AgentPreferences(context: Context) {
+class AgentPreferences(private val context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private val _enabled = MutableStateFlow(read(prefs))
@@ -29,6 +33,9 @@ class AgentPreferences(context: Context) {
         }.apply()
         _enabled.value = agents
         _hasChosen.value = true
+        WidgetPrefs.updateFromAgents(context, agents)
+        AntiGemWidgetProvider.refreshAll(context, ConversationWidgetProvider::class.java)
+        AntiGemWidgetProvider.refreshAll(context, StatusWidgetProvider::class.java)
     }
 
     companion object {

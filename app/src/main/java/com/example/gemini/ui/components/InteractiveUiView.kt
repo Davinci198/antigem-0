@@ -35,6 +35,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.gemini.data.security.ExternalLinks
+import com.example.gemini.data.security.LinkDecision
+import com.example.gemini.data.security.LinkOrigin
 import com.example.gemini.theme.ClaudeTerracotta
 import kotlinx.coroutines.delay
 
@@ -57,6 +60,41 @@ class InteractiveUiJsBridge(
 }
 
 @SuppressLint("SetJavaScriptEnabled")
+/**
+ * P8: where the screenshot button hands captured PNG bytes. Set by ChatScreen so the image lands
+ * as an attachment in the input; null falls back to saving into Downloads.
+ */
+object ScreenshotSink {
+    var sink: ((ByteArray) -> Unit)? = null
+}
+
+private fun performCapture(view: android.view.View): ByteArray? = try {
+    val w = view.width.coerceAtLeast(1)
+    val h = view.height.coerceAtLeast(1)
+    val bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    view.draw(canvas)
+    val out = java.io.ByteArrayOutputStream()
+    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+    bitmap.recycle()
+    out.toByteArray()
+} catch (_: Exception) {
+    null
+}
+
+private fun saveToDownloads(context: Context, bytes: ByteArray) {
+    try {
+        val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        if (!dir.exists()) dir.mkdirs()
+        val file = java.io.File(dir, "AntiGem-${System.currentTimeMillis()}.png")
+        file.writeBytes(bytes)
+        android.media.MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf("image/png"), null)
+        Toast.makeText(context, "Screenshot saved to Downloads", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Could not save screenshot: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
+}
+
 @Composable
 fun InteractiveUiView(
     htmlCode: String,
@@ -64,6 +102,7 @@ fun InteractiveUiView(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val webRef = remember { mutableListOf<WebView?>() }
     val isDark = isAppInDarkTheme()
     var isFullscreen by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(0) } // 0 = App, 1 = Code
@@ -227,6 +266,33 @@ fun InteractiveUiView(
                             modifier = Modifier.size(18.dp)
                         )
                     }
+
+                    // Screenshot Button (P8): capture the preview and send it back into the chat
+                    IconButton(
+                        onClick = {
+                            val view = webRef.firstOrNull()
+                            val bytes = view?.let { performCapture(it) }
+                            if (bytes == null) {
+                                Toast.makeText(context, "Nothing to capture yet", Toast.LENGTH_SHORT).show()
+                                return@IconButton
+                            }
+                            val sink = ScreenshotSink.sink
+                            if (sink != null) {
+                                sink(bytes)
+                                Toast.makeText(context, "Screenshot attached to chat", Toast.LENGTH_SHORT).show()
+                            } else {
+                                saveToDownloads(context, bytes)
+                            }
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.PhotoCamera,
+                            contentDescription = "Capture screenshot",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
 
@@ -244,6 +310,7 @@ fun InteractiveUiView(
                             part = "app",
                             factory = { ctx ->
                                 WebView(ctx).apply {
+                                    webRef.add(this)
                                     setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                                     settings.apply {
@@ -260,6 +327,20 @@ fun InteractiveUiView(
                                         // a dead renderer would otherwise crash the app
                                         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                                             ChatWebViewCache.onRendererGone(view)
+                                            return true
+                                        }
+
+                                        // P4 egress: inside the preview, only http(s)/about/data load in place;
+                                        // anything else is refused (never launched externally from generated HTML).
+                                        override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                            val scheme = request?.url?.scheme?.lowercase() ?: return false
+                                            if (scheme == "http" || scheme == "https" || scheme == "about" || scheme == "data") {
+                                                return false
+                                            }
+                                            val raw = request.url.toString()
+                                            if (ExternalLinks.policy.check(raw, LinkOrigin.ServerContent) !is LinkDecision.Refuse) {
+                                                ExternalLinks.open(ctx, raw, LinkOrigin.ServerContent)
+                                            }
                                             return true
                                         }
                                     }

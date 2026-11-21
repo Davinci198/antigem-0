@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
         com.example.gemini.data.local.LocalTerminalBridge.instance.init(this)
         com.example.gemini.data.notes.NotesRepository.init(this)
         com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.start(this)
+        com.example.gemini.data.preferences.WidgetPrefs.appOpened(this)
         handleIncomingFileIntent(intent)
         maybeRequestAllFilesAccess()
 
@@ -502,6 +503,23 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIncomingFileIntent(intent)
+        routeShadeApproval(intent)
+        routeScheduledPrompt(intent)
+    }
+
+    private fun routeScheduledPrompt(intent: Intent?) {
+        if (intent?.action != com.example.gemini.data.receiver.ScheduleAlarmReceiver.ACTION_RUN_PROMPT) return
+        val text = intent.getStringExtra(com.example.gemini.data.receiver.ScheduleAlarmReceiver.EXTRA_PROMPT_TEXT) ?: return
+        chatViewModel.sendMessage(text)
+    }
+
+    private fun routeShadeApproval(intent: Intent?) {
+        val action = intent?.action ?: return
+        if (action == com.example.gemini.data.notifications.ApprovalNotification.ACTION_ALLOW_ALL ||
+            action == com.example.gemini.data.notifications.ApprovalNotification.ACTION_DENY_ALL
+        ) {
+            chatViewModel.handleShadeApproval(action)
+        }
     }
 
     private fun handleIncomingFileIntent(intent: Intent?) {

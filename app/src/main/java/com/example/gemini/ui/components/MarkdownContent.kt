@@ -96,6 +96,8 @@ import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.example.gemini.data.remote.HubMediaResolver
+import com.example.gemini.data.security.ExternalLinks
+import com.example.gemini.data.security.LinkOrigin
 import com.example.gemini.theme.ClaudeTerracotta
 import com.example.gemini.theme.GeminiBlue
 import com.example.gemini.theme.QuotaGreen
@@ -486,6 +488,10 @@ fun MarkdownContent(
     onSkipChoices: ((com.example.gemini.domain.model.ToolCall, List<com.example.gemini.data.remote.dto.AskQuestionResponseItemDto>) -> Unit)? = null
 ) {
     val t0 = System.nanoTime()
+    val context = LocalContext.current
+    SideEffect {
+        MarkdownLinkInterceptor.opener = { raw -> ExternalLinks.open(context, raw, LinkOrigin.Markdown) }
+    }
     val blocks = remember(content, toolCalls) {
         val bStart = System.nanoTime()
         val parsed = parseMarkdownBlocks(content, toolCalls)
@@ -2494,6 +2500,15 @@ private val INLINE_MARKDOWN_PATTERN: Pattern = Pattern.compile(
     Pattern.DOTALL or Pattern.CASE_INSENSITIVE
 )
 
+/**
+ * Click-time bridge between the cached, non-composable markdown link builders and the Android
+ * link policy. Set by [MarkdownContent] with a context-backed opener; null before first render
+ * (links then do nothing, which is safe).
+ */
+object MarkdownLinkInterceptor {
+    var opener: ((String) -> Unit)? = null
+}
+
 object MarkdownTextCache {
     private val cache = android.util.LruCache<Int, FormattedInlineResult>(600)
 
@@ -2687,7 +2702,14 @@ private fun buildRichAnnotatedString(
                 builder.pop()
                 builder.pop()
             } else {
-                builder.pushLink(LinkAnnotation.Url(url = linkUrl))
+                builder.pushLink(
+                    LinkAnnotation.Clickable(
+                        tag = linkUrl,
+                        linkInteractionListener = {
+                            MarkdownLinkInterceptor.opener?.invoke(linkUrl)
+                        }
+                    )
+                )
                 builder.pushStyle(
                     SpanStyle(
                         color = GeminiBlue,
@@ -2758,7 +2780,14 @@ private fun buildRichAnnotatedString(
                 builder.pop()
                 builder.pop()
             } else {
-                builder.pushLink(LinkAnnotation.Url(url = linkUrl))
+                builder.pushLink(
+                    LinkAnnotation.Clickable(
+                        tag = linkUrl,
+                        linkInteractionListener = {
+                            MarkdownLinkInterceptor.opener?.invoke(linkUrl)
+                        }
+                    )
+                )
                 builder.pushStyle(
                     SpanStyle(
                         color = GeminiBlue,

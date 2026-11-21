@@ -633,6 +633,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun rejectTerminalTool(toolCall: com.example.gemini.domain.model.ToolCall, messageId: String, reason: String? = null) = if (isOpenCodeActive) openCodeBackend.rejectTool(toolCall, reason) else if (isClaudeActive) claudeBackend.rejectTool(toolCall, reason) else agyBackend.rejectTerminalTool(toolCall, messageId, reason)
     fun approveAllPendingTools(list: List<PendingToolApproval>) = if (isOpenCodeActive) list.forEach { openCodeBackend.approveTool(it.toolCall) } else if (isClaudeActive) list.forEach { claudeBackend.approveTool(it.toolCall) } else agyBackend.approveAllPendingTools(list)
     fun rejectAllPendingTools(list: List<PendingToolApproval>, reason: String? = null) = if (isOpenCodeActive) list.forEach { openCodeBackend.rejectTool(it.toolCall, reason) } else if (isClaudeActive) list.forEach { claudeBackend.rejectTool(it.toolCall, reason) } else agyBackend.rejectAllPendingTools(list, reason)
+
+    /** P6: shade action routing — allow/deny every pending approval of the active agent. */
+    fun handleShadeApproval(action: String) {
+        if (action == com.example.gemini.data.notifications.ApprovalNotification.ACTION_ALLOW_ALL) {
+            approveAllPendingTools(pendingApprovals.value)
+            if (isClaudeActive) claudeBackend.pendingPermissions.value.filter { it.toolName != "ExitPlanMode" }
+                .forEach { claudeBackend.approveToolAlways(it.toolUseId, -1) }
+            if (isOpenCodeActive) openCodeBackend.pendingPermissions.value.forEach { openCodeBackend.replyPermission(it.id, "once") }
+        } else if (action == com.example.gemini.data.notifications.ApprovalNotification.ACTION_DENY_ALL) {
+            rejectAllPendingTools(pendingApprovals.value)
+            if (isClaudeActive) claudeBackend.pendingPermissions.value.forEach { claudeBackend.rejectToolById(it.toolUseId, null) }
+            if (isOpenCodeActive) openCodeBackend.pendingPermissions.value.forEach { openCodeBackend.replyPermission(it.id, "reject") }
+        }
+    }
     fun terminateRunningTerminalTool(toolCall: com.example.gemini.domain.model.ToolCall, messageId: String) = if (isOpenCodeActive) openCodeBackend.stopStreaming() else if (isClaudeActive) claudeBackend.stopStreaming() else agyBackend.terminateRunningTerminalTool(toolCall, messageId)
     fun proceedAfterTermination(toolCall: com.example.gemini.domain.model.ToolCall, messageId: String, userInstructions: String?) {
         if (isClaudeActive || isOpenCodeActive) {
@@ -1236,6 +1250,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val isSearchingConversations: StateFlow<Boolean> = _isSearchingConversations.asStateFlow()
 
     init {
+        // P6: keep the shade approval notification in sync with pending tool approvals across agents.
+        val pendingApprovalCounts = listOf(
+            agyBackend.pendingApprovals.map { it.size },
+            claudeBackend.pendingPermissions.map { it.size },
+            openCodeBackend.pendingPermissions.map { it.size },
+        )
+        viewModelScope.launch {
+            combine(pendingApprovalCounts) { totals -> totals.sum() }
+                .onStart { emit(0) }
+                .collect { total -> com.example.gemini.data.notifications.ApprovalNotification.update(getApplication(), total) }
+        }
+
         try {
             val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             cm?.registerDefaultNetworkCallback(networkCallback)
