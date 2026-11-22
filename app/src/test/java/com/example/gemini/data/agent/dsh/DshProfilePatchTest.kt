@@ -39,7 +39,8 @@ class DshProfilePatchTest {
         val merged = DshProfilePatch.ensureProviders(patch, listOf(nvidia))
 
         assertEquals(listOf("groq", "nvidia"), DshConfigParser.llmProviders(merged).map { it.id })
-        // Everything the user had is still there.
+        // Everything the user had is still there, and in the order they had it.
+        assertTrue(merged.indexOf("groq:") < merged.indexOf("nvidia:"))
         assertTrue(merged.contains("provider: nvidia"))
         assertTrue(merged.contains("apiKeyEnv: GROQ_API_KEY"))
     }

@@ -72,7 +72,7 @@ internal object DshProfilePatch {
         return lines.joinToString("\n")
     }
 
-    /** Where a new provider block goes: right below the entry's `providers:` line. */
+    /** Where a new provider block goes: after the last provider the entry already lists. */
     private fun providersInsertIndex(lines: List<String>): Insert? {
         var inEntry = false
         for (index in lines.indices) {
@@ -85,7 +85,17 @@ internal object DshProfilePatch {
                     header.substringAfter(':').trim().trim('"', '\'') == ENTRY_ID
                 continue
             }
-            if (inEntry && line == "providers:") return Insert(index, indent)
+            if (!inEntry || line != "providers:") continue
+            // Walk the block: everything deeper than `providers:` is a provider.
+            var last = index
+            for (next in index + 1 until lines.size) {
+                val nextRaw = lines[next]
+                val nextLine = nextRaw.trim()
+                val nextIndent = nextRaw.length - nextRaw.trimStart().length
+                if (nextLine.isNotEmpty() && nextIndent <= indent) break
+                last = next
+            }
+            return Insert(last, indent)
         }
         return null
     }
