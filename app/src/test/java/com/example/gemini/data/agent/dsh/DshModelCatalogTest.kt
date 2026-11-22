@@ -13,6 +13,8 @@ import org.junit.Test
  */
 class DshModelCatalogTest {
 
+    private val json = Json { ignoreUnknownKeys = true }
+
     @Test
     fun `an id keeps the provider and the model apart`() {
         val id = DshModelKeys.of("nvidia", "nvidia/nemotron-3-ultra-550b-a55b")
@@ -41,7 +43,7 @@ class DshModelCatalogTest {
              "model":"z-ai/glm-5.3-flash"}
         """.trimIndent()
 
-        val info = Json { ignoreUnknownKeys = true }.decodeFromString<DshGatewayInfo>(text)
+        val info = json.decodeFromString<DshGatewayInfo>(text)
 
         assertTrue(info.success)
         assertEquals("http://127.0.0.1:38837/v1", info.base_url)
@@ -50,7 +52,7 @@ class DshModelCatalogTest {
 
     @Test
     fun `a disabled bridge answer is not a gateway`() {
-        val info = Json { ignoreUnknownKeys = true }
+        val info = json
             .decodeFromString<DshGatewayInfo>("""{"success":false,"disabled":true,"error":"Harness is turned off"}""")
 
         assertFalse(info.success)

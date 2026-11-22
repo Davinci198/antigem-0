@@ -91,7 +91,8 @@ private data class ProviderDto(val id: String = "", val name: String = "")
 internal object DshModelKeys {
     fun of(provider: String, model: String): String = "$provider|$model"
 
-    fun provider(id: String, fallback: String): String = id.substringBefore('|').ifBlank { fallback }
+    fun provider(id: String, fallback: String): String =
+        if ('|' in id) id.substringBefore('|').ifBlank { fallback } else fallback
 
     fun model(id: String): String = id.substringAfter('|').ifBlank { id }
 
