@@ -85,6 +85,37 @@ class DshCompatPatchTest {
     }
 
     @Test
+    fun `patches the shapes shipped in 0_2_2_rc_5`() {
+        // Verbatim heads from the published tarballs, so a new release that moves
+        // either publication fails here instead of on the user's first session.
+        val session = """
+            import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from "node:fs/promises";
+            export async function writeStaged(internals, staged, currentPath, tmp, finalPath) {
+              await internals.fs.link(staged, currentPath);
+              await link(tmp, finalPath);
+            }
+        """.trimIndent()
+        val fsLocal = """
+            import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+            const linkFile = internals.linkFile ?? link;
+            export async function write(tempPath, absolutePath) {
+              await linkFile(tempPath, absolutePath);
+            }
+        """.trimIndent()
+
+        val (patchedSession, sessionResult) = DshCompatPatch.patch(sessionSite, session, VERSION)
+        val fsLocalSite = DshCompatPatch.PATCHED_FILES.first { it.relativePath.contains("fs-local") }
+        val (patchedFsLocal, fsLocalResult) = DshCompatPatch.patch(fsLocalSite, fsLocal, VERSION)
+
+        assertEquals(DshCompatPatch.Result.PATCHED, sessionResult)
+        assertTrue(patchedSession.contains("await copyFile(staged, currentPath, 1);"))
+        assertTrue(patchedSession.contains("await copyFile(tmp, finalPath, 1);"))
+        assertEquals(DshCompatPatch.Result.PATCHED, fsLocalResult)
+        assertTrue(patchedFsLocal.contains("await copyFile(tempPath, absolutePath, 1);"))
+        assertTrue(patchedFsLocal.contains("import { chmod, copyFile, link, lstat"))
+    }
+
+    @Test
     fun `every patched site names a release file under the dsh package scope`() {
         assertTrue(DshCompatPatch.PATCHED_FILES.isNotEmpty())
         DshCompatPatch.PATCHED_FILES.forEach { site ->
@@ -94,6 +125,6 @@ class DshCompatPatchTest {
     }
 
     private companion object {
-        const val VERSION = "0.2.0-rc.2"
+        const val VERSION = "0.2.2-rc.5"
     }
 }

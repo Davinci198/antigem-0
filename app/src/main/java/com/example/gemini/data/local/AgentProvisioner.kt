@@ -59,7 +59,7 @@ object AgentProvisioner {
     const val DSH_HOME_PATH = DshGuestPaths.DSH_HOME
 
     /** Pinned release. The proot rewrite in [DshCompatPatch] is version-specific. */
-    const val DSH_VERSION = "0.2.0-rc.2"
+    const val DSH_VERSION = "0.2.2-rc.5"
 
     /** DSH declares `engines.node >= 24.9.0`; Ubuntu's own package is older, so we ship Node 24. */
     private const val NODE_VERSION = "v24.19.0"

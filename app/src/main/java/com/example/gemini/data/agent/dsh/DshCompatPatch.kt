@@ -18,7 +18,7 @@ package com.example.gemini.data.agent.dsh
 object DshCompatPatch {
 
     /** Bump when the rewrite changes, so installs re-patch after an update. */
-    const val DSH_COMPAT_VERSION = "copyfile-excl-v1"
+    const val DSH_COMPAT_VERSION = "copyfile-excl-v2"
 
     /** Files inside `usr/local/lib/dsh/node_modules` that publish with a hard link. */
     val PATCHED_FILES: List<PatchSite> get() = listOf(
@@ -32,6 +32,8 @@ object DshCompatPatch {
             importVariants = FS_LOCAL_IMPORT_VARIANTS,
             callVariants = FS_LOCAL_CALL_VARIANTS,
         ),
+        // 0.2.0 published attachments as its own package; 0.2.2 folded it away, so
+        // the file is simply absent on newer installs and this site skips itself.
         PatchSite(
             relativePath = "@deepseek-ai/dsh-attachments/lib/index.js",
             importVariants = ATTACHMENT_IMPORT_VARIANTS,
@@ -94,6 +96,7 @@ object DshCompatPatch {
 
     private val SESSION_CALL_VARIANTS = listOf(
         "await link(tmp, finalPath);" to "await copyFile(tmp, finalPath, 1);",
+        // 0.2.2 stages the next session file through the fs seam.
         "await internals.fs.link(staged, currentPath);" to "await copyFile(staged, currentPath, 1);",
     )
 
