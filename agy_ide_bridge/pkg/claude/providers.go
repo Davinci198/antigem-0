@@ -184,6 +184,10 @@ func (m *Manager) provider(id string) (Provider, bool) {
 	return Provider{}, false
 }
 
+// SavedProvider exposes one saved provider by id. The DeepSeek Harness gateway
+// serves it on loopback, so DSH never holds the real credentials.
+func (m *Manager) SavedProvider(id string) (Provider, bool) { return m.provider(id) }
+
 // providerSettingsFile writes the --settings file of provider p (endpoint, key, models, limits) and returns its path.
 // Every model alias is pinned to the provider's model, so subagents, plan mode and aliases never ask for a Claude
 // model the provider lacks; the same keys also override any ANTHROPIC_* a user's settings.json would add.

@@ -24,6 +24,7 @@ import (
 	"gemini-server/pkg/agyaccounts"
 	"gemini-server/pkg/claude"
 	"gemini-server/pkg/config"
+	"gemini-server/pkg/dsh"
 	"gemini-server/pkg/handlers"
 	"gemini-server/pkg/hermes"
 	"gemini-server/pkg/hub"
@@ -389,10 +390,67 @@ func main() {
 		mux.Handle("/api/hermes/", hermesMgr)
 	}
 
-	// DeepSeek Harness: the SDK session host (pkg/dsh) is the next step. Until it
-	// lands, the route answers 503 with `unsupported`, and --no-dsh answers
-	// `disabled`. Either way the app falls back to its in-app PRoot host, so no
-	// chat ever depends on a half-landed bridge route.
+	// DeepSeek Harness model gateway: DSH always authenticates as a provider
+	// route, and the app already holds the user's credentials — so the app points
+	// a DSH custom route (`api: openai-completions`) at this loopback endpoint,
+	// which applies the real key upstream. A keyless endpoint is therefore just a
+	// provider with no key, and no secret ever enters the container.
+	var dshGateways dsh.Cache
+	defer dshGateways.Close()
+	mux.HandleFunc("/api/dsh/gateway", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if noDsh {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"success":false,"disabled":true,"error":"DeepSeek Harness is turned off in the app"}`))
+			return
+		}
+		id := r.URL.Query().Get("provider")
+		if claudeMgr == nil || id == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"success":false,"error":"provider is required, and Claude Code must be enabled"}`))
+			return
+		}
+		p, ok := claudeMgr.SavedProvider(id)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"success":false,"error":"no such provider"}`))
+			return
+		}
+		models := make([]string, 0, len(p.Models))
+		for _, m := range p.Models {
+			if m.ID != "" {
+				models = append(models, m.ID)
+			}
+		}
+		gw, err := dshGateways.For(dsh.Config{
+			ID:          p.ID,
+			BaseURL:     p.BaseURL,
+			APIKey:      p.APIKey,
+			AuthMode:    p.AuthMode,
+			Headers:     p.Headers,
+			OpenAIStyle: p.OpenAIStyle,
+			Models:      models,
+		})
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = fmt.Fprintf(w, `{"success":false,"error":%q}`, err.Error())
+			return
+		}
+		answer := map[string]interface{}{
+			"success":  true,
+			"provider": p.ID,
+			"base_url": gw.URL(),
+			"api":      "openai-completions",
+			"models":   models,
+		}
+		if len(models) > 0 {
+			answer["model"] = models[0]
+		}
+		_ = json.NewEncoder(w).Encode(answer)
+	})
+
+	// Session host: not served yet, so the app runs the session through its own
+	// in-app PRoot host.
 	mux.HandleFunc("/api/dsh/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -400,7 +458,7 @@ func main() {
 			_, _ = w.Write([]byte(`{"success":false,"disabled":true,"error":"DeepSeek Harness is turned off in the app"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"success":false,"unsupported":true,"error":"This bridge build does not serve DeepSeek Harness yet"}`))
+		_, _ = w.Write([]byte(`{"success":false,"unsupported":true,"error":"This bridge build runs DSH sessions in the app, not here"}`))
 	})
 
 	// Custom AntiGem plugins on disk: list, install (ZIP or GitHub repository), update, remove, export
