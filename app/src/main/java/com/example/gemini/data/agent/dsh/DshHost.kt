@@ -131,9 +131,16 @@ class ProotDshHost(
         environment.putAll(request.environment)
         // DSH guests refuse an empty key variable even when the endpoint behind the
         // route wants no Authorization header at all (Kilo's free pool, a local
-        // proxy), so a keyless route still travels as a placeholder value.
-        environment[request.route.custom?.let { keyEnvFor(it.name) } ?: "DEEPSEEK_API_KEY"] =
-            request.route.apiKey.ifBlank { KEYLESS_PLACEHOLDER }
+        // proxy). A route the harness resolves itself already has its key in the DSH
+        // credential store, so nothing is injected for it: a placeholder would shadow
+        // the stored value and every turn would fail as unauthorised.
+        val custom = request.route.custom
+        if (custom != null || request.route.apiKey.isNotBlank()) {
+            val keyEnv = custom?.let { keyEnvFor(it.name) }
+                ?: PRESET_KEY_ENV[request.route.provider]
+                ?: keyEnvFor(request.route.provider)
+            environment[keyEnv] = request.route.apiKey.ifBlank { KEYLESS_PLACEHOLDER }
+        }
 
         val process = LocalEnvironmentManager.startGuestProcess(
             context = context,
@@ -146,47 +153,56 @@ class ProotDshHost(
     }
 
     /**
-     * Writes `$DSH_HOME/settings.yaml` and `$DSH_HOME/cordis.patch.yml`.
+     * Makes the harness able to boot, and nothing more.
      *
-     * DSH 0.2.0 reads the Cordis patch, not settings.yaml (which it renames to
-     * `settings.yaml.imported`), so a custom route *must* appear in both: the
-     * settings row is what the harness reports, the patch is what makes the
-     * provider resolvable at boot. `deepseek-official` needs neither because its
-     * key comes from the environment.
+     * A route DSH already declares needs no file at all: provider, model and profile
+     * patch are the harness's own, the key comes from its credential store, and the
+     * per-session provider/model arrive in the `initialize` frame. Writing a
+     * `settings.yaml` here used to be harmless, but the harness *imports* that file
+     * into the profile's patch and keeps whatever it finds — which is how a bridge
+     * gateway ended up pinned in the `sdk` profile long after the bridge moved ports.
+     * So settings.yaml is only written for a route that genuinely needs a custom
+     * endpoint, and an empty top-level array is written otherwise.
      */
     private fun writeHomeConfig(request: DshSessionRequest) {
         val home = File(LocalEnvironmentManager.getUbuntuRootDir(context), DshGuestPaths.DSH_HOME.removePrefix("/"))
         home.mkdirs()
         val route = request.route
-        val settings = buildString {
-            appendLine("agent-default-model:")
-            appendLine("  provider: ${route.provider}")
-            appendLine("  model: ${yamlQuote(route.model)}")
-            route.custom?.let { custom ->
-                appendLine("llm-pi-ai:")
-                appendLine("  providers:")
-                appendLine("    ${custom.name}:")
-                appendLine("      apiKeyEnv: ${keyEnvFor(custom.name)}")
-                appendLine("      api: ${custom.api}")
-                appendLine("      baseURL: ${yamlQuote(custom.baseUrl)}")
-                appendLine("      models:")
-                appendLine("        - id: ${yamlQuote(route.model)}")
-            }
+        val custom = route.custom
+        val settings = File(home, "settings.yaml")
+        if (custom == null) {
+            // A leftover file would be imported over the profile patch on the next boot.
+            if (settings.exists()) settings.delete()
+        } else {
+            settings.writeText(
+                buildString {
+                    appendLine("agent-default-model:")
+                    appendLine("  provider: ${route.provider}")
+                    appendLine("  model: ${yamlQuote(route.model)}")
+                    appendLine("llm-pi-ai:")
+                    appendLine("  providers:")
+                    appendLine("    ${custom.name}:")
+                    appendLine("      apiKeyEnv: ${keyEnvFor(custom.name)}")
+                    appendLine("      api: ${custom.api}")
+                    appendLine("      baseURL: ${yamlQuote(custom.baseUrl)}")
+                    appendLine("      models:")
+                    appendLine("        - id: ${yamlQuote(route.model)}")
+                },
+            )
         }
-        File(home, "settings.yaml").writeText(settings)
 
         // A release that reads nothing else from this file still requires a
         // top-level array: an empty file parses as null and dsh aborts at boot
         // with "must be a top-level YAML array of loader patch entries".
         val patch = buildString {
-            route.custom?.let { custom ->
+            custom?.let {
                 appendLine("- id: llm-pi-ai")
                 appendLine("  config:")
                 appendLine("    providers:")
-                appendLine("      ${custom.name}:")
-                appendLine("        apiKeyEnv: ${keyEnvFor(custom.name)}")
-                appendLine("        api: ${custom.api}")
-                appendLine("        baseURL: ${yamlQuote(custom.baseUrl)}")
+                appendLine("      ${it.name}:")
+                appendLine("        apiKeyEnv: ${keyEnvFor(it.name)}")
+                appendLine("        api: ${it.api}")
+                appendLine("        baseURL: ${yamlQuote(it.baseUrl)}")
                 appendLine("        models:")
                 appendLine("          - id: ${yamlQuote(route.model)}")
             }
@@ -206,6 +222,24 @@ class ProotDshHost(
         /** Provider key variable DSH's custom route reads (see [DshModelRoute]). */
         fun keyEnvFor(name: String): String =
             name.uppercase().replace(Regex("[^A-Z0-9]"), "_") + "_API_KEY"
+
+        /**
+         * Env vars DSH's own presets read, so a key can be handed to a route the
+         * harness resolves itself. The picker's provider id is the preset id.
+         */
+        val PRESET_KEY_ENV = mapOf(
+            "deepseek-official" to "DEEPSEEK_API_KEY",
+            "nvidia" to "NVIDIA_API_KEY",
+            "openrouter" to "OPENROUTER_API_KEY",
+            "groq" to "GROQ_API_KEY",
+            "google" to "GEMINI_API_KEY",
+            "huggingface" to "HF_TOKEN",
+            "minimax" to "MINIMAX_API_KEY",
+            "meta" to "META_API_KEY",
+            "kimi-coding" to "KIMI_API_KEY",
+            "github-copilot" to "COPILOT_GITHUB_TOKEN",
+            "xai" to "XAI_API_KEY",
+        )
     }
 }
 

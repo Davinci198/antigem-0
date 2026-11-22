@@ -68,7 +68,7 @@ class DshChatBackend(
     private val _selectedModelId = MutableStateFlow(modelKey(prefs.route.value.provider, prefs.route.value.model))
     val selectedModelId: StateFlow<String> = _selectedModelId.asStateFlow()
 
-    private val _availableModels = MutableStateFlow(knownModels())
+    private val _availableModels = MutableStateFlow(listOf(routeModel(prefs.route.value.provider, prefs.route.value.model)))
     val availableModels: StateFlow<List<AiModel>> = _availableModels.asStateFlow()
 
     /** True when the payload and its Node runtime are on disk inside the container. */
@@ -80,7 +80,7 @@ class DshChatBackend(
 
     private val storage = File(application.filesDir, "dsh-chats")
 
-    private val catalog = DshModelCatalog()
+    private val catalog = DshModelCatalog(File(application.filesDir, "ubuntu"))
 
     // ── lifecycle ───────────────────────────────────────────────────────────
 
@@ -186,45 +186,56 @@ class DshChatBackend(
     }
 
     /**
-     * Adds every model the bridge's providers can chat with to the picker.
+     * Replaces the picker with the routes this DSH home can actually run.
      *
-     * Runs on start and stays additive: a bridge that is down leaves the built-in
-     * DeepSeek entries in place rather than emptying the picker.
+     * The list comes from DSH's own profile patches and credential store, so a route
+     * the picker offers is a route DSH can resolve with the key it already holds. An
+     * empty answer leaves the picker on the current route instead of blanking it.
      */
     fun refreshModels() {
         backendScope.launch {
-            val providers = catalog.providers()
-            if (providers.isEmpty()) return@launch
-            val models = knownModels().toMutableList()
-            for (id in providers.sorted()) {
-                if (_availableModels.value.any { it.description == id }) continue
-                val gateway = catalog.gateway(id) ?: continue
-                gateway.models.sorted().forEach { model ->
-                    models += AiModel(
-                        id = modelKey(id, model),
-                        displayName = prettyModel(model),
-                        description = id,
-                        key = model,
-                    )
-                }
+            // Falling back to the harness's own default route keeps the picker usable when
+            // a provider cannot list its ids (offline, or a catalogue behind a slow API).
+            val routes = catalog.routes().ifEmpty { listOfNotNull(catalog.defaultRoute()) }
+            if (routes.isEmpty()) {
+                Log.w(TAG, "no DSH provider is configured; keeping ${prefs.route.value.provider}")
+                return@launch
+            }
+            val models = routes.map { route ->
+                AiModel(
+                    id = modelKey(route.provider, route.model),
+                    displayName = prettyModel(route.model),
+                    description = route.provider,
+                    key = route.model,
+                )
             }
             _availableModels.value = models
+            keepSelectionInside(models)
         }
     }
 
-    /** Official routes need no gateway; everything else is pointed at the bridge's gateway for that provider. */
-    private suspend fun resolvedRoute(base: DshModelRoute): DshModelRoute {
-        if (base.provider == DshPreferences.DEFAULT_PROVIDER) return base.copy(custom = null)
-        val gateway = catalog.gateway(base.provider) ?: return base
-        return base.copy(
-            apiKey = "",
-            custom = DshCustomRoute(
-                name = base.provider,
-                api = gateway.api.ifBlank { DshPreferences.DEFAULT_CUSTOM_API },
-                baseUrl = gateway.base_url,
-            ),
-        )
+    /** A saved route that DSH no longer offers would answer every prompt with an error. */
+    private suspend fun keepSelectionInside(models: List<AiModel>) {
+        val current = _selectedModelId.value
+        if (models.any { it.id == current }) return
+        val fallback = catalog.defaultRoute()
+            ?.let { modelKey(it.provider, it.model) }
+            ?.takeIf { key -> models.any { it.id == key } }
+            ?: models.first().id
+        _selectedModelId.value = fallback
+        prefs.setRoute(prefs.route.value.copy(provider = providerOf(fallback), model = modelOf(fallback)))
+        Log.i(TAG, "route $current is not configured in DSH; using $fallback")
     }
+
+    /**
+     * A DSH route needs no rewriting: DSH owns the endpoint and the key.
+     *
+     * Older builds pointed every non-official route at the bridge's loopback gateway
+     * and saved that as the route's `custom` endpoint; such a route is dropped here so
+     * the chat resolves through DSH's own provider configuration instead.
+     */
+    private fun resolvedRoute(base: DshModelRoute): DshModelRoute =
+        if (base.custom == null) base else base.copy(apiKey = "", custom = null)
 
     // ── a turn ──────────────────────────────────────────────────────────────
 
@@ -463,10 +474,13 @@ class DshChatBackend(
     private fun titleFrom(content: String): String =
         content.trim().replace(Regex("\\s+"), " ").take(48).ifBlank { NEW_CHAT_TITLE }
 
-    /** The models DSH's official provider is verified against; the bridge's providers add their own. */
-    private fun knownModels(): List<AiModel> = listOf(
-        AiModel(id = modelKey(DshPreferences.DEFAULT_PROVIDER, "deepseek-v4-flash"), displayName = "DeepSeek V4 Flash", description = DshPreferences.DEFAULT_PROVIDER, isDefault = true, key = "deepseek-v4-flash"),
-        AiModel(id = modelKey(DshPreferences.DEFAULT_PROVIDER, "deepseek-v4-pro"), displayName = "DeepSeek V4 Pro", description = DshPreferences.DEFAULT_PROVIDER, key = "deepseek-v4-pro"),
+    /** The saved route as a picker entry, shown until the DSH catalogue has loaded. */
+    private fun routeModel(provider: String, model: String): AiModel = AiModel(
+        id = modelKey(provider, model),
+        displayName = prettyModel(model),
+        description = provider,
+        isDefault = true,
+        key = model,
     )
 
     private fun modelKey(provider: String, model: String): String = DshModelKeys.of(provider, model)

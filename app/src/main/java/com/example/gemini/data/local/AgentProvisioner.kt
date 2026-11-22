@@ -4,6 +4,8 @@ import android.content.Context
 import android.system.Os
 import android.util.Log
 import com.example.gemini.data.agent.dsh.DshCompatPatch
+import com.example.gemini.data.agent.dsh.DshConfigParser
+import com.example.gemini.data.agent.dsh.DshProfilePatch
 import com.example.gemini.data.agent.dsh.DshGuestPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -585,6 +587,38 @@ object AgentProvisioner {
         } else {
             log("[dsh] free-pi plugin installed")
         }
+        mirrorProviderConfig(context, log)
+    }
+
+    /**
+     * Copies the `web` profile's provider entries into the `sdk` profile.
+     *
+     * The chat boots `sdk`; a user adds providers to `web` through DSH's own settings.
+     * Without this, a fresh install has an `sdk` profile that declares no provider, and
+     * every chat route fails as unknown even though the harness is configured next door.
+     * Idempotent, additive, and silent about a missing file: this is convenience, not a
+     * prerequisite, so it never fails the install.
+     */
+    private suspend fun mirrorProviderConfig(context: Context, log: (String) -> Unit) {
+        val source = guestFile(context, "$DSH_WEB_PROFILE_DIR/cordis.patch.yml")
+        val target = guestFile(context, "$DSH_SDK_PROFILE_DIR/cordis.patch.yml")
+        if (!source.isFile) return
+        val providers = runCatching {
+            DshConfigParser.llmProviders(source.readText())
+        }.onFailure { log("[dsh] web profile patch unreadable: ${it.message}") }.getOrNull()
+        if (providers.isNullOrEmpty()) return
+        val existing = runCatching { if (target.isFile) target.readText() else "" }
+            .getOrDefault("")
+        val merged = DshProfilePatch.ensureProviders(existing, providers)
+        if (merged == existing) {
+            log("[dsh] sdk profile already declares ${providers.joinToString { it.id }}")
+            return
+        }
+        runCatching {
+            target.parentFile?.mkdirs()
+            target.writeText(merged)
+            log("[dsh] sdk profile now declares ${DshConfigParser.llmProviders(merged).joinToString { it.id }}")
+        }.onFailure { log("[dsh] could not update the sdk profile patch: ${it.message}") }
     }
 
     private suspend fun installFreePiOnProfile(context: Context, log: (String) -> Unit, profileDir: String): Boolean {
