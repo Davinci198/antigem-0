@@ -217,7 +217,7 @@ internal class ProcessDshSession(
                 BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { reader ->
                     while (true) {
                         val line = reader.readLine() ?: break
-                        if (line.isNotBlank()) flow.trySend(line)
+                        if (line.isNotBlank()) flow.tryEmit(line)
                     }
                 }
             } catch (e: IOException) {
