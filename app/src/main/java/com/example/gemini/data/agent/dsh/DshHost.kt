@@ -247,10 +247,12 @@ internal class ProcessDshSession(
  * answers `{"sessionId":..}`; `GET /sessions/{id}/events` streams NDJSON lines
  * exactly as the guest prints them; `POST /sessions/{id}/prompt` carries one
  * newline-delimited frame; `DELETE /sessions/{id}` shuts it down.
+ *
+ * Until the bridge serves that route, [available] answers false and the backend
+ * falls back to [ProotDshHost], so no chat fails because of a half-landed host.
  */
 class BridgeDshHost(
     private val bridgeUrl: () -> String,
-    private val installed: () -> Boolean,
 ) : DshHost {
 
     override val kind = DshHostKind.BRIDGE
@@ -268,7 +270,15 @@ class BridgeDshHost(
 
     private fun url(path: String) = bridgeUrl().trimEnd('/') + "/api/dsh" + path
 
-    override suspend fun available(): Boolean = installed()
+    override suspend fun available(): Boolean = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(url("/status"))
+            .get()
+            .build()
+        runCatching {
+            client.newCall(request).execute().use { response -> response.isSuccessful }
+        }.getOrDefault(false)
+    }
 
     override suspend fun open(request: DshSessionRequest): DshSession = withContext(Dispatchers.IO) {
         val body = buildJsonObject {

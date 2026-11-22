@@ -5,5 +5,8 @@ enum class AgentKind {
     AGY,
     CLAUDE,
     HERMES,
-    OPENCODE
+    OPENCODE,
+
+    /** DeepSeek Harness (`dsh`), driven over its SDK profile. */
+    DEEPSEEK_HARNESS
 }

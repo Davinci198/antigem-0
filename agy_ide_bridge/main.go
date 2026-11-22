@@ -57,6 +57,7 @@ Flags:
   --no-opencode             Disable OpenCode (no /api/opencode endpoints, never runs the opencode CLI)
   --hermes-bin <path>       Custom path to the Hermes Agent CLI (default: hermes on PATH)
   --no-hermes               Disable Hermes Agent (no /api/hermes endpoints, never runs the hermes CLI)
+  --no-dsh                  Disable DeepSeek Harness (no /api/dsh endpoints, never runs the dsh CLI)
   -d, --dir <path>          Custom workspace directory
   -h, --help                Show help documentation`)
 }
@@ -144,6 +145,10 @@ func main() {
 	var noOpenCode bool
 	var customHermesBin string
 	var noHermes bool
+	// noDsh: the app passes --no-dsh while the agent is turned off. The route
+	// itself is not served yet, so a disabled harness and a build without the
+	// /api/dsh package behave the same: the app falls back to its own host.
+	var noDsh bool
 	var forceStart bool
 	var skipHub bool
 	var cliToken string
@@ -202,6 +207,8 @@ func main() {
 			}
 		case arg == "--no-hermes":
 			noHermes = true
+		case arg == "--no-dsh":
+			noDsh = true
 		case strings.HasPrefix(arg, "--port="):
 			cfg.Port = strings.TrimPrefix(arg, "--port=")
 		case arg == "-p" || arg == "--port":
@@ -381,6 +388,20 @@ func main() {
 		hermesMgr = hermes.NewManager(cfg.HomeDir, customHermesBin)
 		mux.Handle("/api/hermes/", hermesMgr)
 	}
+
+	// DeepSeek Harness: the SDK session host (pkg/dsh) is the next step. Until it
+	// lands, the route answers 503 with `unsupported`, and --no-dsh answers
+	// `disabled`. Either way the app falls back to its in-app PRoot host, so no
+	// chat ever depends on a half-landed bridge route.
+	mux.HandleFunc("/api/dsh/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if noDsh {
+			_, _ = w.Write([]byte(`{"success":false,"disabled":true,"error":"DeepSeek Harness is turned off in the app"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":false,"unsupported":true,"error":"This bridge build does not serve DeepSeek Harness yet"}`))
+	})
 
 	// Custom AntiGem plugins on disk: list, install (ZIP or GitHub repository), update, remove, export
 	mux.Handle("/api/custom-plugins/", plugins.NewManager(cfg.HomeDir))
