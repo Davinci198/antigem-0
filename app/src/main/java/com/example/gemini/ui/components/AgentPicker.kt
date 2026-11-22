@@ -116,6 +116,19 @@ fun AgentPicker(
     }
 }
 
+/** Small badge marking a DeepSeek Harness conversation in lists. */
+@Composable
+fun DshBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(DshAccent.copy(alpha = 0.16f))
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+    ) {
+        Text(text = "DeepSeek", fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = DshAccent)
+    }
+}
+
 /** Small badge marking a Claude Code conversation in lists. */
 @Composable
 fun ClaudeBadge(modifier: Modifier = Modifier) {

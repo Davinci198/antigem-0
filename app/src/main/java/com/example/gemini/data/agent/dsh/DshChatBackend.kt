@@ -20,7 +20,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
@@ -118,7 +120,6 @@ class DshChatBackend(
         )
         _conversations.value = _conversations.value + conversation
         store.currentConversation.value = conversation
-        store.messages.value = emptyList()
         persistConversations()
     }
 
@@ -131,8 +132,9 @@ class DshChatBackend(
         _isLoadingConversation.value = false
     }
 
-    fun loadMessages(conversationId: String) {
-        _messages.value = readMessages(conversationId)
+    /** Messages of a chat that is not open, for export and share. */
+    suspend fun loadMessages(conversationId: String): List<ChatMessage> = withContext(Dispatchers.IO) {
+        readMessages(conversationId)
     }
 
     override fun deleteConversation(id: String) {
@@ -220,27 +222,30 @@ class DshChatBackend(
                 failTurn("DeepSeek Harness is not installed in the container yet. Open Settings → Agents to install it.")
                 return
             }
-            session = host.open(
+            val opened = host.open(
                 DshSessionRequest(
                     setupId = conversation.sessionId,
                     workspace = WORKSPACE,
                     route = route,
                 ),
             )
-            activeSession = session
+            // Held in a `val`: the turn's lambdas capture it, so a `var` would stop
+            // smart-casting and leave every `opened.send` nullable.
+            session = opened
+            activeSession = opened
             val parser = DshSdkParser(conversation.sessionId)
 
-            session.send(DshProtocol.initializeFrame(WORKSPACE, route.provider, route.model))
+            opened.send(DshProtocol.initializeFrame(WORKSPACE, route.provider, route.model))
 
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
                 var prompted = false
                 try {
-                    session.lines.collect { line ->
+                    opened.lines.collect { line ->
                         when (val event = parser.parse(line)) {
                             DshEvent.Initialized -> {
                                 if (!prompted) {
                                     prompted = true
-                                    session.send(DshProtocol.promptFrame(conversation.sessionId, prompt))
+                                    opened.send(DshProtocol.promptFrame(conversation.sessionId, prompt))
                                 }
                             }
                             is DshEvent.Text -> appendText(assistantId, event.delta)
