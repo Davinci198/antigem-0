@@ -200,27 +200,49 @@ fun DshWebScreen(
 
 /**
  * Builds the WebView that hosts the DSH web GUI and loads [url] (which already
- * carries the launch token). JavaScript and DOM storage are required by the
- * harness GUI; the wide viewport lets its layout use the full screen width.
+ * carries the launch token). JavaScript, DOM storage and cookies are required by
+ * the harness GUI and by its sign-in flow; the wide viewport lets its layout use
+ * the full screen width.
+ *
+ * `setSupportMultipleWindows(false)` is the part that makes "Sign in with
+ * GitHub" work: the free-pi card opens the OAuth page with `window.open`, and a
+ * WebView that does not support popups shows a blank page instead. With this
+ * off, the target window is loaded in this same view, cookies included.
  */
 @SuppressLint("SetJavaScriptEnabled")
-private fun buildDshWebView(context: Context, url: String): WebView =
-    WebView(context).apply {
-        layoutParams = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        )
-        setBackgroundColor(android.graphics.Color.WHITE)
-        settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
-        settings.useWideViewPort = true
-        webViewClient = object : WebViewClient() {
-            // Keep every navigation inside this WebView so the launch token
-            // never leaves the app for an external browser.
-            override fun shouldOverrideUrlLoading(
-                view: WebView,
-                request: WebResourceRequest
-            ): Boolean = false
-        }
-        loadUrl(url)
+private fun buildDshWebView(context: Context, url: String): WebView {
+    val web = WebView(context)
+    web.layoutParams = ViewGroup.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT
+    )
+    web.setBackgroundColor(android.graphics.Color.WHITE)
+    web.settings.apply {
+        javaScriptEnabled = true
+        domStorageEnabled = true
+        databaseEnabled = true
+        useWideViewPort = true
+        setSupportMultipleWindows(false)
+        mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
     }
+    CookieManager.getInstance().apply {
+        setAcceptCookie(true)
+        setAcceptThirdPartyCookies(web, true)
+    }
+    web.webChromeClient = object : WebChromeClient() {
+        override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+            Log.d(TAG, "web console: ${message.message()}")
+            return true
+        }
+    }
+    web.webViewClient = object : WebViewClient() {
+        // Keep every navigation inside this WebView so the launch token never
+        // leaves the app for an external browser.
+        override fun shouldOverrideUrlLoading(
+            view: WebView,
+            request: WebResourceRequest
+        ): Boolean = false
+    }
+    web.loadUrl(url)
+    return web
+}
