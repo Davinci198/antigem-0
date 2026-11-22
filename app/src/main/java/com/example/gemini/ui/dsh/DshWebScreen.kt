@@ -2,6 +2,7 @@ package com.example.gemini.ui.dsh
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.os.Message
 import android.util.Log
 import android.view.ViewGroup
@@ -238,10 +239,15 @@ private fun buildDshWebView(context: Context, url: String): WebView {
 
         /**
          * The FreePi card finishes sign-in in a popup ("finish in the browser tab
-         * that opens"). A WebView without this hook silently drops that window and
-         * leaves the user on a blank page, so the popup is captured and its first
-         * URL is loaded in the main view instead: cookies, the OAuth redirect back
-         * to 127.0.0.1 and the harness session all stay in one place.
+         * that opens"). Two wrong answers here were tried on device: a WebView
+         * without this hook drops the window (blank page), and loading the popup's
+         * URL into this view navigates the harness GUI away mid-flow, so the code
+         * it shows disappears.
+         *
+         * The popup therefore goes to the phone's browser: GitHub's sign-in works
+         * there (device code, existing session, 2FA — a WebView cannot offer the
+         * passkey/password steps), while the harness keeps its own page and picks
+         * the token up from its server.
          */
         override fun onCreateWindow(
             view: WebView,
@@ -257,8 +263,16 @@ private fun buildDshWebView(context: Context, url: String): WebView {
                     request: WebResourceRequest
                 ): Boolean {
                     val target = request.url.toString()
-                    Log.d(TAG, "popup navigation: $target")
-                    web.loadUrl(target)
+                    Log.d(TAG, "popup handoff to the browser: $target")
+                    val opened = runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, request.url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }.isSuccess
+                    if (!opened) {
+                        Log.w(TAG, "no browser for the sign-in popup; loading it here")
+                        web.loadUrl(target)
+                    }
                     popupView.destroy()
                     return true
                 }
