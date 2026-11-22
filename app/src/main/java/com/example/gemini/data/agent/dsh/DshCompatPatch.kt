@@ -77,7 +77,11 @@ object DshCompatPatch {
             return result to Result.PATCHED
         }
 
+        // No known publication call left. It is only "already patched" if it
+        // carries our own rewrite; otherwise the release publishes some other way
+        // and we cannot promise a working session, so fail loudly.
         check(HARD_LINK_CALL_MARKERS.none { it in result }) { incompatible(site, version) }
+        check(COPY_FILE_IMPORT.containsMatchIn(result)) { incompatible(site, version) }
         return source to Result.ALREADY_PATCHED
     }
 
