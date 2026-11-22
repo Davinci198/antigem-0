@@ -35,13 +35,14 @@ private const val WEB_READY_TIMEOUT_MS = 120_000L
  * Full-screen overlay that runs the DSH web profile inside the Ubuntu guest and
  * shows its GUI in a WebView.
  *
- * The `dsh web` process outlives the screen on purpose: [DshWebServer] keeps it
- * warm for ten minutes after the screen closes, because a boot under proot costs
- * tens of seconds and users open this screen repeatedly. While the harness has
- * not announced its URL yet, a status line with the elapsed wait is shown; once
+ * The `dsh web` process is owned by this screen and only by this screen: it is
+ * spawned the first time [isVisible] turns true, and [DshWebServerInstance.stop]
+ * runs both when the screen is hidden again and when the composable leaves the
+ * composition, so no guest process can outlive the screen. While the harness
+ * has not announced its URL yet, a small status line is shown; once
  * [DshWebServerInstance.url] carries the advertised URL (launch token included),
- * it is loaded in a plain WebView. The page itself gets no overlays of any kind
- * — the only chrome is the slim top bar above the WebView.
+ * it is loaded in a plain WebView. The page itself gets no overlays of any
+ * kind — the only chrome is the slim top bar above the WebView.
  */
 @Composable
 fun DshWebScreen(
@@ -52,7 +53,6 @@ fun DshWebScreen(
     val context = LocalContext.current
     var instance by remember { mutableStateOf<DshWebServerInstance?>(null) }
     var startFailed by remember { mutableStateOf(false) }
-    var waitedMs by remember { mutableLongStateOf(0L) }
 
     // Spawn the harness only while the screen is visible. The finally block
     // covers the narrow race where the screen is hidden (or leaves composition)
@@ -72,20 +72,16 @@ fun DshWebScreen(
                 instance = started
             }
         } finally {
-            // The instance is owned by DshWebServer now; a failed attach only has
-            // to make sure nothing half-started survives.
-            if (started == null) DshWebServer.stopNow()
+            if (started != null && instance != started) started.stop()
         }
     }
 
-    // Closing the screen leaves the harness warm for the next open; the server
-    // stops itself after ten minutes of nobody watching it.
+    // Stop on hide and on leave; there is no long-lived mode for this screen.
     DisposableEffect(isVisible) {
         onDispose {
+            instance?.stop()
             instance = null
             startFailed = false
-            waitedMs = 0L
-            DshWebServer.release()
         }
     }
 
@@ -99,17 +95,15 @@ fun DshWebScreen(
         while (waited < WEB_READY_TIMEOUT_MS) {
             if (running.url.value != null) return@LaunchedEffect
             if (!running.isAlive) {
-                DshWebServer.stopNow()
                 instance = null
                 startFailed = true
                 return@LaunchedEffect
             }
             delay(500)
             waited += 500
-            waitedMs = waited
         }
         if (instance === running) {
-            DshWebServer.stopNow()
+            running.stop()
             instance = null
             startFailed = true
         }
@@ -193,17 +187,9 @@ fun DshWebScreen(
                         CircularProgressIndicator()
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Starting DeepSeek Harness… ${waitedMs / 1000}s",
+                            text = "Starting DeepSeek Harness…",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "The first start takes about a minute; after that it reopens instantly.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 32.dp)
                         )
                     }
                 }
