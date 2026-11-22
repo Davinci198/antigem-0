@@ -78,6 +78,26 @@ class DshChatBackend(
     private var activeSession: DshSession? = null
     private var activeTurn: Job? = null
 
+    /**
+     * A booted `dsh --profile sdk` process kept alive for the next turn.
+     *
+     * Booting the harness under PRoot costs several seconds — Node start-up, plugin
+     * load, the model probe — and that price was being paid on every single turn
+     * because the process was closed as soon as the answer ended. The SDK accepts
+     * repeated `session/prompt` frames on one initialised process, so the process is
+     * kept and the next turn in the same conversation skips the boot entirely.
+     */
+    private var warm: WarmSession? = null
+
+    /** Request ids must keep rising: a reused process has already seen 1 and 2 once. */
+    private var requestSeq = 1
+
+    private class WarmSession(
+        val conversationId: String,
+        val route: DshModelRoute,
+        val session: DshSession,
+    )
+
     private val storage = File(application.filesDir, "dsh-chats")
 
     private val catalog = DshModelCatalog(File(application.filesDir, "ubuntu"))
@@ -92,6 +112,7 @@ class DshChatBackend(
 
     fun stop() {
         stopStreaming()
+        dropWarm()
     }
 
     override fun retryConnections() {
@@ -105,6 +126,10 @@ class DshChatBackend(
     }
 
     fun detach() {
+        // A new chat must not inherit the previous conversation's process: the
+        // harness keeps the session it booted for, so reusing it would answer inside
+        // the old conversation.
+        dropWarm()
         _messages.value = emptyList()
         _conversationError.value = null
     }
@@ -134,6 +159,7 @@ class DshChatBackend(
 
     override fun selectConversation(id: String) {
         val conversation = _conversations.value.firstOrNull { it.id == id } ?: return
+        dropWarm()
         _isLoadingConversation.value = true
         store.currentConversation.value = conversation
         _messages.value = readMessages(id)
@@ -272,20 +298,40 @@ class DshChatBackend(
         activeTurn = null
         val session = activeSession
         activeSession = null
-        backendScope.launch { runCatching { session?.close() } }
+        val kept = warm
+        warm = null
+        backendScope.launch {
+            runCatching { session?.close() }
+            if (kept?.session !== session) runCatching { kept?.session?.close() }
+        }
         finishStreaming()
+    }
+
+    /** Shuts the kept process down, e.g. when the conversation is closed or the app stops. */
+    private fun dropWarm() {
+        val kept = warm ?: return
+        warm = null
+        backendScope.launch { runCatching { kept.session.close() } }
     }
 
     private suspend fun runTurn(conversation: Conversation, prompt: String, assistantId: String) {
         val route = resolvedRoute(prefs.route.value)
         val host = host()
         var session: DshSession? = null
+        var promote = false
         try {
             if (!host.available()) {
                 failTurn("DeepSeek Harness is not installed in the container yet. Open Settings → Agents to install it.")
                 return
             }
-            val opened = host.open(
+            // A kept process is reused only for the conversation and route that booted
+            // it; anything else gets a cold start so a route change cannot answer with
+            // the previous provider's model.
+            val kept = warm?.takeIf {
+                it.conversationId == conversation.id && it.route == route && it.session.isAlive
+            }
+            if (kept == null) dropWarm()
+            val opened = kept?.session ?: host.open(
                 DshSessionRequest(
                     setupId = conversation.sessionId,
                     workspace = WORKSPACE,
@@ -298,17 +344,44 @@ class DshChatBackend(
             activeSession = opened
             val parser = DshSdkParser(conversation.sessionId)
 
-            opened.send(DshProtocol.initializeFrame(WORKSPACE, route.provider, route.model))
+            if (kept == null) {
+                opened.send(
+                    DshProtocol.initializeFrame(
+                        cwd = WORKSPACE,
+                        provider = route.provider,
+                        model = route.model,
+                        id = nextRequestId(),
+                    ),
+                )
+            }
 
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
-                var prompted = false
+                var prompted = kept != null
                 try {
                     opened.lines.collect { line ->
                         when (val event = parser.parse(line)) {
                             DshEvent.Initialized -> {
                                 if (!prompted) {
                                     prompted = true
-                                    opened.send(DshProtocol.promptFrame(conversation.sessionId, prompt))
+                                    opened.send(
+                                        DshProtocol.promptFrame(
+                                            sessionId = conversation.sessionId,
+                                            text = prompt,
+                                            id = nextRequestId(),
+                                        ),
+                                    )
+                                }
+                            }
+                            DshEvent.PromptAccepted -> {
+                                if (!prompted) {
+                                    prompted = true
+                                    opened.send(
+                                        DshProtocol.promptFrame(
+                                            sessionId = conversation.sessionId,
+                                            text = prompt,
+                                            id = nextRequestId(),
+                                        ),
+                                    )
                                 }
                             }
                             is DshEvent.Text -> appendText(assistantId, event.delta)
@@ -323,7 +396,7 @@ class DshChatBackend(
                         }
                     }
                     // The stream closed without a verdict: the process died.
-                    throw TurnFailed("DeepSeek Harness stopped before it finished the answer.")
+                    throw TurnFailed(describeDeath(opened))
                 } catch (_: TurnFinished) {
                     true
                 } catch (failed: TurnFailed) {
@@ -331,16 +404,45 @@ class DshChatBackend(
                     false
                 }
             }
-            if (ended == null) failTurn("DeepSeek Harness did not answer in time.")
+            if (ended == null) {
+                failTurn("DeepSeek Harness did not answer in time.")
+            } else if (ended) {
+                promote = true
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             Log.w(TAG, "dsh turn failed", error)
             failTurn(error.message ?: "DeepSeek Harness could not start.")
         } finally {
-            runCatching { session?.close() }
+            val finished = session
+            if (promote && finished != null && finished.isAlive) {
+                // Keep it: the next turn in this conversation starts answering straight away.
+                warm = WarmSession(conversation.id, route, finished)
+            } else {
+                runCatching { finished?.close() }
+            }
             if (activeSession === session) activeSession = null
             finishStreaming()
+        }
+    }
+
+    private fun nextRequestId(): Int = ++requestSeq
+
+    /**
+     * Why a session that promised an answer stopped without one.
+     *
+     * The harness writes its real reason to stderr (a rejected profile patch, an
+     * unusable provider, an exhausted quota) and keeps stdout for the protocol, so
+     * the tail is the only evidence there is; showing it in the chat turns a mute
+     * "it stopped" into something that can be acted on.
+     */
+    private fun describeDeath(session: DshSession): String {
+        val tail = session.diagnostics().takeLast(3).joinToString(" · ").take(400)
+        return if (tail.isBlank()) {
+            "DeepSeek Harness stopped before it finished the answer."
+        } else {
+            "DeepSeek Harness stopped before it finished the answer: $tail"
         }
     }
 
