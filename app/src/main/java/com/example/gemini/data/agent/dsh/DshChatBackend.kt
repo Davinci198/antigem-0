@@ -196,10 +196,10 @@ class DshChatBackend(
             val providers = catalog.providers()
             if (providers.isEmpty()) return@launch
             val models = knownModels().toMutableList()
-            for (id in providers) {
+            for (id in providers.sorted()) {
                 if (_availableModels.value.any { it.description == id }) continue
                 val gateway = catalog.gateway(id) ?: continue
-                gateway.models.forEach { model ->
+                gateway.models.sorted().forEach { model ->
                     models += AiModel(
                         id = modelKey(id, model),
                         displayName = prettyModel(model),
