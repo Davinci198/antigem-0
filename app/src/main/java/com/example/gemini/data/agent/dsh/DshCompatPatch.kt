@@ -39,12 +39,33 @@ object DshCompatPatch {
             importVariants = ATTACHMENT_IMPORT_VARIANTS,
             callVariants = ATTACHMENT_CALL_VARIANTS,
         ),
+        // The free-pi plugin writes its install key with a sync hard link, which
+        // PRoot cannot create either. It installs under the web profile's own
+        // node_modules, so this path is relative to that root, not to the DSH
+        // payload's node_modules.
+        PatchSite(
+            relativePath = "dsh-free-pi-official/index.js",
+            importVariants = FREEPI_IMPORT_VARIANTS,
+            callVariants = FREEPI_CALL_VARIANTS,
+            patchedImport = COPY_FILE_SYNC_IMPORT,
+            guestRoot = FREEPI_PLUGIN_ROOT,
+        ),
     )
+
+    /** Where the DSH payload's own packages live inside the guest. */
+    const val DSH_PAYLOAD_ROOT = "/usr/local/lib/dsh/node_modules"
+
+    /** Where the web profile keeps the free-pi plugin. */
+    const val FREEPI_PLUGIN_ROOT = "/root/.dsh/profiles/web/node_modules"
 
     data class PatchSite(
         val relativePath: String,
         val importVariants: List<Pair<String, String>>,
         val callVariants: List<Pair<String, String>>,
+        /** Import that must remain after the rewrite; defaults to the promises copyFile import. */
+        val patchedImport: Regex? = null,
+        /** Guest directory the relative path is resolved against. */
+        val guestRoot: String = DSH_PAYLOAD_ROOT,
     )
 
     /** Outcome of rewriting one file. */
@@ -72,16 +93,16 @@ object DshCompatPatch {
                 ?: throw IncompatibleReleaseException(incompatible(site, version))
             result = result.replace(importBefore, importAfter)
             site.callVariants.forEach { (before, after) -> result = result.replace(before, after) }
-            if (!COPY_FILE_IMPORT.containsMatchIn(result)) throw IncompatibleReleaseException(incompatible(site, version))
-            if (HARD_LINK_CALL_MARKERS.any { it in result }) throw IncompatibleReleaseException(incompatible(site, version))
+            if (!(site.patchedImport ?: COPY_FILE_IMPORT).containsMatchIn(result)) throw IncompatibleReleaseException(incompatible(site, version))
+            if (hasHardLinkCall(result)) throw IncompatibleReleaseException(incompatible(site, version))
             return result to Result.PATCHED
         }
 
         // No known publication call left. It is only "already patched" if it
         // carries our own rewrite; otherwise the release publishes some other way
         // and we cannot promise a working session, so fail loudly.
-        if (HARD_LINK_CALL_MARKERS.any { it in result }) throw IncompatibleReleaseException(incompatible(site, version))
-        if (!COPY_FILE_IMPORT.containsMatchIn(result)) throw IncompatibleReleaseException(incompatible(site, version))
+        if (hasHardLinkCall(result)) throw IncompatibleReleaseException(incompatible(site, version))
+        if (!(site.patchedImport ?: COPY_FILE_IMPORT).containsMatchIn(result)) throw IncompatibleReleaseException(incompatible(site, version))
         return source to Result.ALREADY_PATCHED
     }
 
@@ -129,8 +150,30 @@ object DshCompatPatch {
         "await link(staged.path, target);" to "await copyFile(staged.path, target, 1);",
     )
 
+    // The plugin imports from node:fs with single quotes and has no `fs` namespace
+    // in scope, so the rewrite keeps the same no-clobber numeric flag (1 ===
+    // COPYFILE_EXCL) used by the promises-based sites.
+    private val FREEPI_IMPORT_VARIANTS = listOf(
+        "import { chmodSync, linkSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'" to
+            "import { chmodSync, copyFileSync, linkSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'",
+    )
+
+    private val FREEPI_CALL_VARIANTS = listOf(
+        "linkSync(temp, file)" to "copyFileSync(temp, file, 1)",
+    )
+
     private val COPY_FILE_IMPORT =
         Regex("""import \{[^}]*\bcopyFile\b[^}]*\} from "node:fs/promises";""")
 
+    private val COPY_FILE_SYNC_IMPORT =
+        Regex("""import \{[^}]*\bcopyFileSync\b[^}]*\} from 'node:fs';?""")
+
     private val HARD_LINK_CALL_MARKERS = listOf("await link(", ".link(", "linkFile(")
+
+    /** `linkSync(` must not match `unlinkSync(`, so it is matched with a boundary, not a substring. */
+    private val HARD_LINK_CALL_PATTERNS = listOf(Regex("""(?<![\w.$])linkSync\("""))
+
+    private fun hasHardLinkCall(source: String): Boolean =
+        HARD_LINK_CALL_MARKERS.any { it in source } ||
+            HARD_LINK_CALL_PATTERNS.any { it.containsMatchIn(source) }
 }

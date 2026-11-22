@@ -116,9 +116,68 @@ class DshCompatPatchTest {
     }
 
     @Test
+    fun `patches the free-pi plugin linkSync publication`() {
+        // Verbatim head and call from the published dsh-free-pi-official tarball.
+        val source = """
+            import { chmodSync, linkSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+            export function loadInstallSecret(home) {
+              const file = join(home, 'freepi-install.json');
+              linkSync(temp, file);
+            }
+        """.trimIndent()
+
+        val (patched, result) = DshCompatPatch.patch(freepiSite, source, VERSION)
+
+        assertEquals(DshCompatPatch.Result.PATCHED, result)
+        assertTrue(patched.contains("copyFileSync(temp, file, 1);"))
+        assertTrue(patched.contains("import { chmodSync, copyFileSync, linkSync"))
+        assertTrue(!patched.contains("linkSync(temp, file)"))
+    }
+
+    @Test
+    fun `leaves an already patched free-pi plugin untouched`() {
+        val source = """
+            import { chmodSync, copyFileSync, linkSync, mkdirSync } from 'node:fs'
+            copyFileSync(temp, file, 1);
+        """.trimIndent()
+
+        val (patched, result) = DshCompatPatch.patch(freepiSite, source, VERSION)
+
+        assertEquals(DshCompatPatch.Result.ALREADY_PATCHED, result)
+        assertEquals(source, patched)
+    }
+
+    @Test(expected = DshCompatPatch.IncompatibleReleaseException::class)
+    fun `fails loudly when the free-pi plugin shape is unknown`() {
+        val source = """
+            import { publishSync } from "@deepseek-ai/fs-publish";
+            publishSync(temp, file);
+        """.trimIndent()
+
+        DshCompatPatch.patch(freepiSite, source, VERSION)
+    }
+
+    @Test(expected = DshCompatPatch.IncompatibleReleaseException::class)
+    fun `fails when the free-pi plugin still links after the rewrite`() {
+        val source = """
+            import { chmodSync, linkSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+            linkSync(temp, file);
+            linkSync(other, otherFile);
+        """.trimIndent()
+
+        // The second, unknown call site survives the rewrite, so the guard trips
+        // instead of shipping a half-patched file.
+        DshCompatPatch.patch(freepiSite, source, VERSION)
+    }
+
+    @Test
     fun `every patched site names a release file under the dsh package scope`() {
         assertTrue(DshCompatPatch.PATCHED_FILES.isNotEmpty())
         DshCompatPatch.PATCHED_FILES.forEach { site ->
+            if (site.relativePath == "dsh-free-pi-official/index.js") {
+                // The plugin installs under the web profile's own node_modules.
+                return@forEach
+            }
             assertTrue(site.relativePath.startsWith("@deepseek-ai/"))
             assertTrue(site.relativePath.endsWith("/lib/index.js"))
         }
@@ -126,5 +185,8 @@ class DshCompatPatchTest {
 
     private companion object {
         const val VERSION = "0.2.2-rc.5"
+
+        val freepiSite = DshCompatPatch.PATCHED_FILES
+            .first { it.relativePath.contains("free-pi") }
     }
 }
