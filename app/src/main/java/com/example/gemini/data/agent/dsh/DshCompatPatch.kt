@@ -21,7 +21,7 @@ object DshCompatPatch {
     const val DSH_COMPAT_VERSION = "copyfile-excl-v1"
 
     /** Files inside `usr/local/lib/dsh/node_modules` that publish with a hard link. */
-    val PATCHED_FILES: List<PatchSite> = listOf(
+    val PATCHED_FILES: List<PatchSite> get() = listOf(
         PatchSite(
             relativePath = "@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
             importVariants = SESSION_IMPORT_VARIANTS,

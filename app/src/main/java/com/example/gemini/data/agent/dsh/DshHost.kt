@@ -7,7 +7,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -218,7 +217,7 @@ internal class ProcessDshSession(
                 BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { reader ->
                     while (true) {
                         val line = reader.readLine() ?: break
-                        if (line.isNotBlank()) flow.trySendBlocking(line)
+                        if (line.isNotBlank()) flow.trySend(line)
                     }
                 }
             } catch (e: IOException) {
