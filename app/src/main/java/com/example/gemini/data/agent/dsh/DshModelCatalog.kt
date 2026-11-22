@@ -2,13 +2,13 @@ package com.example.gemini.data.agent.dsh
 
 import android.util.Log
 import com.example.gemini.data.preferences.AuthPreferences
+import com.example.gemini.data.remote.AgyBridgeService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 /**
  * The providers and models a DSH chat may be pointed at.
@@ -21,10 +21,8 @@ import java.util.concurrent.TimeUnit
  * catalogue down to models that can actually hold a conversation.
  */
 class DshModelCatalog(
-    private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build(),
+    /** The bridge's own client: it carries the framed security header every route requires. */
+    private val http: OkHttpClient = AgyBridgeService.instance.client,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
