@@ -27,6 +27,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
+import java.util.Collections.synchronizedList
 import java.util.concurrent.TimeUnit
 
 /** Where a DeepSeek Harness process runs. */
@@ -80,6 +81,15 @@ interface DshSession {
     suspend fun close()
 
     val isAlive: Boolean
+
+    /**
+     * What the harness wrote to stderr, newest last.
+     *
+     * DSH keeps stdout clean for the JSON-RPC frames, so every human-readable reason a
+     * session failed — a rejected profile patch, an unusable provider, a bad key — lands
+     * here instead. Without it a dead chat can only report "it stopped".
+     */
+    fun diagnostics(): List<String> = emptyList()
 }
 
 /**
@@ -264,6 +274,11 @@ internal class ProcessDshSession(
      */
     private val readerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** The last handful of stderr lines, so a dead session can say why it died. */
+    private val stderrTail = synchronizedList(mutableListOf<String>())
+
+    override fun diagnostics(): List<String> = synchronized(stderrTail) { stderrTail.toList() }
+
     init {
         readerScope.launch {
             try {
@@ -276,6 +291,29 @@ internal class ProcessDshSession(
             } catch (e: IOException) {
                 Log.w("ProcessDshSession", "dsh stream closed: ${e.message}")
             }
+        }
+        // stderr carries everything DSH wants to tell a human. Left unread it is not just
+        // invisible, it is a pipe that fills up and blocks the child mid-sentence.
+        readerScope.launch {
+            try {
+                BufferedReader(InputStreamReader(process.errorStream, Charsets.UTF_8)).use { reader ->
+                    while (true) {
+                        val line = reader.readLine()?.trim() ?: break
+                        if (line.isBlank()) continue
+                        Log.w("DshStderr", line.take(400))
+                        synchronized(stderrTail) {
+                            stderrTail += line.take(300)
+                            while (stderrTail.size > STDERR_TAIL_LIMIT) stderrTail.removeAt(0)
+                        }
+                    }
+                }
+            } catch (e: IOException) {
+                Log.w("ProcessDshSession", "dsh stderr closed: ${e.message}")
+            }
+        }
+        readerScope.launch {
+            val code = runCatching { process.waitFor() }.getOrDefault(-1)
+            Log.i("ProcessDshSession", "dsh exited with code $code")
         }
     }
 
@@ -290,6 +328,10 @@ internal class ProcessDshSession(
         if (process.isAlive) runCatching { process.destroyForcibly() }
         readerScope.cancel()
         Unit
+    }
+
+    private companion object {
+        const val STDERR_TAIL_LIMIT = 40
     }
 }
 

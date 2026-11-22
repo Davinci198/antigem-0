@@ -57,6 +57,8 @@ fun DshWebScreen(
     var instance by remember { mutableStateOf<DshWebServerInstance?>(null) }
     var startFailed by remember { mutableStateOf(false) }
     var restartRequested by remember { mutableIntStateOf(0) }
+    /** One free re-boot per visit: Android killing the harness must not leave a dead page. */
+    var autoRestartUsed by remember { mutableStateOf(false) }
 
     // The harness outlives this screen: [DshWebServer] owns one process and this
     // effect only attaches to it, so reopening the screen is instant and does not
@@ -73,6 +75,12 @@ fun DshWebScreen(
         } else {
             instance = started
         }
+    }
+
+    // A fresh visit may use the free restart again; a running one must not, or a
+    // harness that keeps dying would be rebooted in a loop instead of reported.
+    LaunchedEffect(isVisible) {
+        if (isVisible) autoRestartUsed = false
     }
 
     // Leaving the screen keeps the process alive on purpose; only the local view
@@ -105,6 +113,26 @@ fun DshWebScreen(
         if (instance === running) {
             DshWebServer.stopNow()
             instance = null
+            startFailed = true
+        }
+    }
+
+    // A harness that was serving and then vanished was killed from outside the app:
+    // Motorola's battery care suspends this package and the system then stops it,
+    // which takes the guest Node process with it. Booting it again is the honest
+    // answer (the page is still on screen and the user expects a chat), and it costs
+    // one restart attempt — a harness that keeps dying still ends up on the message.
+    LaunchedEffect(instance) {
+        val running = instance ?: return@LaunchedEffect
+        while (running.isAlive) delay(1_000)
+        if (instance !== running) return@LaunchedEffect
+        DshWebServer.stopNow()
+        instance = null
+        if (running.url.value != null && !autoRestartUsed) {
+            Log.w(TAG, "the harness was running and is gone; restarting it once")
+            autoRestartUsed = true
+            restartRequested++
+        } else {
             startFailed = true
         }
     }
@@ -182,7 +210,7 @@ fun DshWebScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "DeepSeek Harness did not start: it is not installed in the container, or its web profile stopped answering.",
+                        text = "DeepSeek Harness stopped before its page could load. If this keeps happening, allow unrestricted battery use for this app: Android suspends it in the background, which takes the harness down with it.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
