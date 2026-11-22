@@ -356,10 +356,6 @@ class MainActivity : ComponentActivity() {
                                         onNavigateToBrowser = {
                                             previousViewMode = currentViewMode
                                             currentViewMode = AppViewMode.BROWSER
-                                        },
-                                        onNavigateToDshWeb = {
-                                            previousViewMode = currentViewMode
-                                            currentViewMode = AppViewMode.DSH_WEB
                                         }
                                     )
                                 }
