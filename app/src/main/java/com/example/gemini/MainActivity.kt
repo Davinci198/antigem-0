@@ -31,7 +31,8 @@ enum class AppViewMode {
     IDE,
     TERMINAL,
     BROWSER,
-    NOTES
+    NOTES,
+    DSH_WEB
 }
 
 class MainActivity : ComponentActivity() {
@@ -320,6 +321,10 @@ class MainActivity : ComponentActivity() {
                                         onNavigateToBrowser = {
                                             previousViewMode = currentViewMode
                                             currentViewMode = AppViewMode.BROWSER
+                                        },
+                                        onNavigateToDshWeb = {
+                                            previousViewMode = currentViewMode
+                                            currentViewMode = AppViewMode.DSH_WEB
                                         }
                                     )
                                 }
@@ -351,6 +356,10 @@ class MainActivity : ComponentActivity() {
                                         onNavigateToBrowser = {
                                             previousViewMode = currentViewMode
                                             currentViewMode = AppViewMode.BROWSER
+                                        },
+                                        onNavigateToDshWeb = {
+                                            previousViewMode = currentViewMode
+                                            currentViewMode = AppViewMode.DSH_WEB
                                         }
                                     )
                                 }
@@ -390,6 +399,26 @@ class MainActivity : ComponentActivity() {
                                         onClose = {
                                             currentViewMode =
                                                 if (previousViewMode == AppViewMode.BROWSER) AppViewMode.CHAT else previousViewMode
+                                        }
+                                    )
+                                }
+
+                                // DeepSeek Harness web GUI (free-pi lives there): the guest process
+                                // belongs to this screen and dies with it.
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer {
+                                            val isVisible = currentViewMode == AppViewMode.DSH_WEB
+                                            alpha = if (isVisible) 1f else 0f
+                                            translationX = if (isVisible) 0f else 20000f
+                                        }
+                                ) {
+                                    com.example.gemini.ui.dsh.DshWebScreen(
+                                        isVisible = currentViewMode == AppViewMode.DSH_WEB,
+                                        onClose = {
+                                            currentViewMode =
+                                                if (previousViewMode == AppViewMode.DSH_WEB) AppViewMode.CHAT else previousViewMode
                                         }
                                     )
                                 }
