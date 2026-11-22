@@ -5,8 +5,10 @@ import android.util.Log
 import com.example.gemini.data.local.LocalEnvironmentManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -86,12 +88,60 @@ object DshWebServer {
         return runCatching { patch.writeText("[]\n") }.isSuccess
     }
 
+    /** How long a harness nobody is looking at keeps its port and its Node VM. */
+    private const val IDLE_STOP_MILLIS = 10 * 60_000L
+
+    private val lock = Any()
+    private var current: DshWebServerInstance? = null
+    private var idleStop: Job? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     /**
-     * Spawns `dsh web` inside the guest. Returns null (and logs) when the payload
-     * is missing or the spawn fails; a started instance keeps running until
-     * [DshWebServerInstance.stop] or the app process dies.
+     * Returns a running web profile, spawning one only when there is none.
+     *
+     * A boot under proot costs tens of seconds (the harness loads every plugin
+     * and probes its model context), so a screen that opened once keeps using
+     * the same process: closing and reopening it renders immediately instead of
+     * paying the boot again.
      */
-    fun start(context: Context, log: (String) -> Unit = {}): DshWebServerInstance? {
+    fun start(context: Context, log: (String) -> Unit = {}): DshWebServerInstance? = synchronized(lock) {
+        idleStop?.cancel()
+        idleStop = null
+        current?.let { existing ->
+            if (existing.isAlive) {
+                log("[dsh-web] reusing the running web profile")
+                return existing
+            }
+            current = null
+        }
+        startLocked(context, log)?.also { current = it }
+    }
+
+    /**
+     * Called when the screen that asked for the harness goes away: the server
+     * stays warm for [IDLE_STOP_MILLIS] so a reopen is instant, then stops.
+     */
+    fun release() {
+        synchronized(lock) {
+            idleStop?.cancel()
+            idleStop = scope.launch {
+                delay(IDLE_STOP_MILLIS)
+                stopNow()
+            }
+        }
+    }
+
+    /** Stops the warm server now (the app is leaving the foreground, or the screen failed). */
+    fun stopNow() {
+        val running = synchronized(lock) {
+            idleStop?.cancel()
+            idleStop = null
+            current.also { current = null }
+        }
+        running?.stop()
+    }
+
+    private fun startLocked(context: Context, log: (String) -> Unit): DshWebServerInstance? {
         if (!available(context)) {
             log("[dsh-web] DSH payload or Node runtime is missing; web profile not started")
             return null
