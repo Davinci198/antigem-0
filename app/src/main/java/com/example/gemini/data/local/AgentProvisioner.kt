@@ -3,6 +3,8 @@ package com.example.gemini.data.local
 import android.content.Context
 import android.system.Os
 import android.util.Log
+import com.example.gemini.data.agent.dsh.DshCompatPatch
+import com.example.gemini.data.agent.dsh.DshGuestPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,6 +29,7 @@ import java.util.concurrent.TimeUnit
  *  - claude   -> official Claude Code native linux-arm64 binary (no npm/node needed)
  *  - opencode -> official OpenCode platform binary taken from the npm tarball (no npm/node needed)
  *  - hermes   -> official Hermes Agent installer (needs git + curl inside the container)
+ *  - dsh      -> official npm payload `@deepseek-ai/dsh` (needs Node 24 inside the container)
  *
  * Everything is idempotent: a hidden marker file inside the rootfs records the installed version,
  * so a second call only logs "already installed". Downloads happen on the Android side (OkHttp,
@@ -46,6 +49,26 @@ object AgentProvisioner {
     const val OPENCODE_PATH = "/root/.opencode/bin/opencode"
     const val HERMES_PATH = "/root/.local/bin/hermes"
 
+    /**
+     * DeepSeek Harness is an npm package, not a native binary, so the install target is the
+     * payload's own bin entry. `/usr/local/bin/dsh` is a guest symlink to it; the app checks the
+     * real path because a dangling guest symlink still exists on the host side.
+     */
+    const val DSH_PATH = DshGuestPaths.DSH_PAYLOAD
+    const val DSH_BIN = DshGuestPaths.DSH_BIN
+    const val DSH_HOME_PATH = DshGuestPaths.DSH_HOME
+
+    /** Pinned release. The proot rewrite in [DshCompatPatch] is version-specific. */
+    const val DSH_VERSION = "0.2.0-rc.2"
+
+    /** DSH declares `engines.node >= 24.9.0`; Ubuntu's own package is older, so we ship Node 24. */
+    private const val NODE_VERSION = "v24.19.0"
+    private const val NODE_HOME = "/usr/local/lib/nodejs"
+    private const val DSH_PACKAGE_NAME = "@deepseek-ai/dsh"
+    private const val DSH_MARKER = ".antigem-dsh-version"
+    private const val DSH_COMPAT_MARKER = ".antigem-dsh-android-compat-version"
+    private const val NODE_MARKER = ".antigem-node-version"
+
     private const val GUEST_DOWNLOAD_DIR = "/root/.antigem-downloads"
     private const val GUEST_TMP_DIR = "/root/.antigem-tmp"
 
@@ -63,6 +86,7 @@ object AgentProvisioner {
     private const val APT_TIMEOUT_SECONDS = 15 * 60L
     private const val BINARY_INSTALL_TIMEOUT_SECONDS = 10 * 60L
     private const val HERMES_TIMEOUT_SECONDS = 30 * 60L
+    private const val NPM_INSTALL_TIMEOUT_SECONDS = 30 * 60L
     private const val PROGRESS_STEP_BYTES = 16L * 1024L * 1024L
 
     private val agents = listOf(
@@ -70,6 +94,7 @@ object AgentProvisioner {
         Agent(CLAUDE_PATH, ".antigem-claude-version", "claude"),
         Agent(OPENCODE_PATH, ".antigem-opencode-version", "opencode"),
         Agent(HERMES_PATH, ".antigem-hermes-version", "hermes"),
+        Agent(DSH_PATH, DSH_MARKER, "dsh"),
     )
 
     data class Agent(val guestPath: String, val markerName: String, val label: String)
@@ -143,7 +168,7 @@ object AgentProvisioner {
 
         provisionMutex.withLock {
             val results = mutableListOf<AgentInstallResult>()
-            log("Agent tools: checking agy, claude, opencode and hermes inside the container...")
+            log("Agent tools: checking agy, claude, opencode, hermes and dsh inside the container...")
 
             val downloads = guestFile(appContext, GUEST_DOWNLOAD_DIR).apply { ensureDirectory() }
             guestFile(appContext, GUEST_TMP_DIR).apply { ensureDirectory() }
@@ -152,6 +177,7 @@ object AgentProvisioner {
             results += installClaude(appContext, downloads, log)
             results += installOpencode(appContext, downloads, log)
             results += installHermes(appContext, log)
+            results += installDsh(appContext, downloads, log)
 
             removeContainerGatewayUnits(appContext, log)
 
@@ -361,6 +387,165 @@ object AgentProvisioner {
         archive.delete()
         marker.writeTextOrNull(version)
         return AgentInstallResult(agent, true, version, "installed $installed")
+    }
+
+    // ----------------------------------------------------------------- dsh
+
+    /**
+     * Installs DeepSeek Harness the only way it exists: as an npm package.
+     *
+     * Two things make this different from agy/claude/opencode:
+     *  - the payload is Node, not a native binary, and it declares
+     *    `engines.node >= 24.9.0`, which Ubuntu's own `nodejs` package does not
+     *    satisfy, so Node [NODE_VERSION] is unpacked from the official tarball
+     *    first (checksum-verified against SHASUMS256.txt);
+     *  - DSH publishes files with POSIX hard links, which PRoot cannot create,
+     *    so every install ends in [applyDshCompat] (idempotent).
+     *
+     * npm runs inside the guest because it needs the registry over the guest
+     * network — unlike the other agents, whose archives are downloaded on the
+     * Android side. The new payload is staged in a sibling directory and moved
+     * into place, so a failed npm run never destroys a working install.
+     */
+    private suspend fun installDsh(
+        context: Context,
+        downloads: File,
+        log: (String) -> Unit,
+    ): AgentInstallResult {
+        val agent = "dsh"
+        val spec = agents.first { it.label == agent }
+        val marker = markerFile(context, spec)
+        val payload = guestFile(context, DSH_PATH)
+        if ((payload.isFile || payload.canExecute()) && !marker.readTextOrNull().isNullOrBlank()) {
+            return if (applyDshCompat(context, log)) {
+                AgentInstallResult(agent, true, marker.readTextOrNull().orEmpty(), "already installed")
+            } else {
+                AgentInstallResult(agent, false, "", "proot compatibility rewrite failed")
+            }
+        }
+
+        if (!ensureGuestLibs(context, log)) {
+            return AgentInstallResult(agent, false, "", "container prerequisites missing (apt failed)")
+        }
+        if (!ensureNode(context, downloads, log)) {
+            return AgentInstallResult(agent, false, "", "Node $NODE_VERSION is missing and could not be installed")
+        }
+
+        log("[dsh] installing DeepSeek Harness $DSH_VERSION (npm, inside the container)...")
+        val installed = runGuest(
+            context = context,
+            agent = agent,
+            log = log,
+            timeoutSeconds = NPM_INSTALL_TIMEOUT_SECONDS,
+            script = """
+                set -e
+                export PATH=$NODE_HOME/bin:${'$'}PATH
+                node --version
+                rm -rf /usr/local/lib/dsh.updating
+                mkdir -p /usr/local/lib/dsh.updating
+                npm install --prefix /usr/local/lib/dsh.updating --omit=dev --no-audit --no-fund \
+                  $DSH_PACKAGE_NAME@$DSH_VERSION
+                test -f /usr/local/lib/dsh.updating/node_modules/.bin/dsh
+                rm -rf /usr/local/lib/dsh.previous
+                if [ -d /usr/local/lib/dsh ]; then mv /usr/local/lib/dsh /usr/local/lib/dsh.previous; fi
+                if mv /usr/local/lib/dsh.updating /usr/local/lib/dsh; then rm -rf /usr/local/lib/dsh.previous; \
+                  else mv /usr/local/lib/dsh.previous /usr/local/lib/dsh; exit 4; fi
+                ln -sfn /usr/local/lib/dsh/node_modules/.bin/dsh $DSH_BIN
+                /usr/local/bin/dsh --profile headless --help > /dev/null
+                node -e "console.log(require('/usr/local/lib/dsh/node_modules/$DSH_PACKAGE_NAME/package.json').version)"
+            """.trimIndent(),
+        ) ?: return AgentInstallResult(agent, false, "", "npm install failed")
+
+        if (!applyDshCompat(context, log)) {
+            return AgentInstallResult(agent, false, "", "proot compatibility rewrite failed")
+        }
+        marker.writeTextOrNull(DSH_VERSION)
+        return AgentInstallResult(agent, true, DSH_VERSION, "installed $installed")
+    }
+
+    /**
+     * Unpacks the official Node build DSH needs. Ubuntu 25.10 ships node 22, and
+     * `engines.node >= 24.9.0` is enforced by DSH itself, so apt cannot satisfy it.
+     */
+    private suspend fun ensureNode(
+        context: Context,
+        downloads: File,
+        log: (String) -> Unit,
+    ): Boolean {
+        val marker = File(LocalEnvironmentManager.getUbuntuRootDir(context), NODE_MARKER)
+        if (guestFile(context, "$NODE_HOME/bin/node").canExecute() &&
+            marker.readTextOrNull() == NODE_VERSION
+        ) {
+            return true
+        }
+
+        val fileName = "node-$NODE_VERSION-linux-arm64.tar.gz"
+        val sums = runCatching { fetchText("https://nodejs.org/dist/$NODE_VERSION/SHASUMS256.txt") }
+            .getOrNull()
+            ?: return false.also { log("[dsh] Node checksum list is unreachable") }
+        val sha256 = sums.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.endsWith("  $fileName") }
+            ?.substringBefore(' ')
+            ?: return false.also { log("[dsh] Node $NODE_VERSION is not in the checksum list") }
+
+        log("[dsh] downloading Node $NODE_VERSION for DeepSeek Harness...")
+        download(downloads, fileName, "https://nodejs.org/dist/$NODE_VERSION/$fileName", "dsh", log)
+            ?: return false
+
+        val ok = runGuest(
+            context = context,
+            agent = "dsh",
+            log = log,
+            timeoutSeconds = BINARY_INSTALL_TIMEOUT_SECONDS,
+            script = """
+                set -e
+                echo "$sha256  $GUEST_DOWNLOAD_DIR/$fileName" | sha256sum -c -
+                rm -rf $NODE_HOME
+                mkdir -p $NODE_HOME
+                tar -xzf $GUEST_DOWNLOAD_DIR/$fileName -C $NODE_HOME --strip-components=1
+                for command in node npm npx corepack; do
+                  ln -sfn $NODE_HOME/bin/${'$'}command /usr/local/bin/${'$'}command
+                done
+                rm -f $GUEST_DOWNLOAD_DIR/$fileName
+                node --version
+            """.trimIndent(),
+        ) != null
+        if (ok) marker.writeTextOrNull(NODE_VERSION)
+        return ok
+    }
+
+    /**
+     * Applies the PRoot hard-link rewrite to the installed payload. Runs on the
+     * host path (plain file I/O, no guest process) and is skipped once the compat
+     * marker matches [DshCompatPatch.DSH_COMPAT_VERSION].
+     */
+    private fun applyDshCompat(context: Context, log: (String) -> Unit): Boolean {
+        val modules = guestFile(context, "/usr/local/lib/dsh/node_modules")
+        if (!modules.isDirectory) return false
+        val compatMarker = File(LocalEnvironmentManager.getUbuntuRootDir(context), DSH_COMPAT_MARKER)
+        if (compatMarker.readTextOrNull() == DshCompatPatch.DSH_COMPAT_VERSION) return true
+
+        var touched = 0
+        return try {
+            DshCompatPatch.PATCHED_FILES.forEach { site ->
+                val file = File(modules, site.relativePath)
+                if (!file.isFile) return@forEach
+                touched += 1
+                val source = file.readText()
+                val (patched, result) = DshCompatPatch.patch(site, source, DSH_VERSION)
+                if (result == DshCompatPatch.Result.PATCHED) {
+                    file.writeText(patched)
+                    log("[dsh] rewrote hard-link publishing in ${site.relativePath} (proot)")
+                }
+            }
+            check(touched > 0) { "no DeepSeek Harness package was found to patch" }
+            compatMarker.writeTextOrNull(DshCompatPatch.DSH_COMPAT_VERSION)
+            true
+        } catch (e: Exception) {
+            log("[dsh] ${e.message}")
+            false
+        }
     }
 
     // ------------------------------------------------------------- hermes
