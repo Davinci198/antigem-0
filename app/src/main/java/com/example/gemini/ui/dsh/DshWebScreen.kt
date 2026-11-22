@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -55,33 +56,29 @@ fun DshWebScreen(
     val context = LocalContext.current
     var instance by remember { mutableStateOf<DshWebServerInstance?>(null) }
     var startFailed by remember { mutableStateOf(false) }
+    var restartRequested by remember { mutableIntStateOf(0) }
 
-    // Spawn the harness only while the screen is visible. The finally block
-    // covers the narrow race where the screen is hidden (or leaves composition)
-    // while the spawn is still in flight: the assignment below never ran, so
-    // the freshly started process would otherwise leak.
-    LaunchedEffect(isVisible) {
-        if (!isVisible || instance != null) return@LaunchedEffect
+    // The harness outlives this screen: [DshWebServer] owns one process and this
+    // effect only attaches to it, so reopening the screen is instant and does not
+    // spawn another `dsh web`. Restarting is the user's decision (the refresh
+    // action in the top bar), never a side effect of closing the overlay.
+    LaunchedEffect(isVisible, restartRequested) {
+        if (!isVisible) return@LaunchedEffect
         startFailed = false
-        var started: DshWebServerInstance? = null
-        try {
-            started = withContext(Dispatchers.IO) {
-                DshWebServer.start(context) { line -> Log.d(TAG, line) }
-            }
-            if (started == null) {
-                startFailed = true
-            } else {
-                instance = started
-            }
-        } finally {
-            if (started != null && instance != started) started.stop()
+        val started = withContext(Dispatchers.IO) {
+            DshWebServer.start(context) { line -> Log.d(TAG, line) }
+        }
+        if (started == null) {
+            startFailed = true
+        } else {
+            instance = started
         }
     }
 
-    // Stop on hide and on leave; there is no long-lived mode for this screen.
+    // Leaving the screen keeps the process alive on purpose; only the local view
+    // state is dropped, so the WebView is recreated against the same server.
     DisposableEffect(isVisible) {
         onDispose {
-            instance?.stop()
             instance = null
             startFailed = false
         }
@@ -97,6 +94,7 @@ fun DshWebScreen(
         while (waited < WEB_READY_TIMEOUT_MS) {
             if (running.url.value != null) return@LaunchedEffect
             if (!running.isAlive) {
+                DshWebServer.stopNow()
                 instance = null
                 startFailed = true
                 return@LaunchedEffect
@@ -105,7 +103,7 @@ fun DshWebScreen(
             waited += 500
         }
         if (instance === running) {
-            running.stop()
+            DshWebServer.stopNow()
             instance = null
             startFailed = true
         }
@@ -144,6 +142,18 @@ fun DshWebScreen(
                         .weight(1f)
                         .padding(start = 12.dp)
                 )
+                IconButton(onClick = {
+                    DshWebServer.stopNow()
+                    instance = null
+                    startFailed = false
+                    restartRequested++
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Restart the harness",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 IconButton(onClick = onClose) {
                     Icon(
                         imageVector = Icons.Default.Close,

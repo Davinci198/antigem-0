@@ -7,8 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlowimport kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.BufferedReader
@@ -97,7 +96,40 @@ object DshWebServer {
      * own input — which is exactly what an ANR on typing looks like. `exec`
      * keeps this a single process, so the URL line still arrives on stdout.
      */
-    fun start(context: Context, log: (String) -> Unit = {}): DshWebServerInstance? {
+    private val lock = Any()
+    private var current: DshWebServerInstance? = null
+
+    /**
+     * Returns the running web profile, spawning one only when there is none.
+     *
+     * The harness stays up until someone stops it: a boot under proot costs tens
+     * of seconds, and every tap on the chat's robot button used to spawn another
+     * `dsh web` (a new port, another Node VM). One process now serves every
+     * visit, and the screen's refresh action is the only thing that restarts it.
+     */
+    fun start(context: Context, log: (String) -> Unit = {}): DshWebServerInstance? = synchronized(lock) {
+        current?.let { existing ->
+            if (existing.isAlive) {
+                log("[dsh-web] reusing the running web profile")
+                return existing
+            }
+            current = null
+        }
+        startLocked(context, log)?.also { current = it }
+    }
+
+    /** Stops the background web profile (the screen's refresh action, or the user asking). */
+    fun stopNow() {
+        val running = synchronized(lock) {
+            current.also { current = null }
+        }
+        running?.stop()
+    }
+
+    /** True while a web profile is alive, so the screen can show its state. */
+    fun isRunning(): Boolean = synchronized(lock) { current?.isAlive == true }
+
+    private fun startLocked(context: Context, log: (String) -> Unit): DshWebServerInstance? {
         if (!available(context)) {
             log("[dsh-web] DSH payload or Node runtime is missing; web profile not started")
             return null
