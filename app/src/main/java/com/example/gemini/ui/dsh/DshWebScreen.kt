@@ -2,6 +2,7 @@ package com.example.gemini.ui.dsh
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Message
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.*
@@ -222,7 +223,7 @@ private fun buildDshWebView(context: Context, url: String): WebView {
         domStorageEnabled = true
         databaseEnabled = true
         useWideViewPort = true
-        setSupportMultipleWindows(false)
+        setSupportMultipleWindows(true)
         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
     }
     CookieManager.getInstance().apply {
@@ -231,7 +232,39 @@ private fun buildDshWebView(context: Context, url: String): WebView {
     }
     web.webChromeClient = object : WebChromeClient() {
         override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-            Log.d(TAG, "web console: ${message.message()}")
+            Log.d(TAG, "web console: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")
+            return true
+        }
+
+        /**
+         * The FreePi card finishes sign-in in a popup ("finish in the browser tab
+         * that opens"). A WebView without this hook silently drops that window and
+         * leaves the user on a blank page, so the popup is captured and its first
+         * URL is loaded in the main view instead: cookies, the OAuth redirect back
+         * to 127.0.0.1 and the harness session all stay in one place.
+         */
+        override fun onCreateWindow(
+            view: WebView,
+            isDialog: Boolean,
+            isUserGesture: Boolean,
+            resultMsg: Message
+        ): Boolean {
+            if (!isUserGesture) return false
+            val popup = WebView(context)
+            popup.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    popupView: WebView,
+                    request: WebResourceRequest
+                ): Boolean {
+                    val target = request.url.toString()
+                    Log.d(TAG, "popup navigation: $target")
+                    web.loadUrl(target)
+                    popupView.destroy()
+                    return true
+                }
+            }
+            (resultMsg.obj as? WebView.WebViewTransport)?.webView = popup
+            resultMsg.sendToTarget()
             return true
         }
     }
@@ -241,7 +274,26 @@ private fun buildDshWebView(context: Context, url: String): WebView {
         override fun shouldOverrideUrlLoading(
             view: WebView,
             request: WebResourceRequest
-        ): Boolean = false
+        ): Boolean {
+            Log.d(TAG, "navigation: ${request.url}")
+            return false
+        }
+
+        override fun onPageStarted(view: WebView, pageUrl: String?, favicon: android.graphics.Bitmap?) {
+            Log.d(TAG, "page started: $pageUrl")
+        }
+
+        override fun onPageFinished(view: WebView, pageUrl: String?) {
+            Log.d(TAG, "page finished: $pageUrl")
+        }
+
+        override fun onReceivedError(
+            view: WebView,
+            request: WebResourceRequest,
+            error: WebResourceError
+        ) {
+            Log.w(TAG, "page error ${error.errorCode} on ${request.url}: ${error.description}")
+        }
     }
     web.loadUrl(url)
     return web
