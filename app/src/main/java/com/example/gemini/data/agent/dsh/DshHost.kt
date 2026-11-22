@@ -174,6 +174,9 @@ class ProotDshHost(
         }
         File(home, "settings.yaml").writeText(settings)
 
+        // A release that reads nothing else from this file still requires a
+        // top-level array: an empty file parses as null and dsh aborts at boot
+        // with "must be a top-level YAML array of loader patch entries".
         val patch = buildString {
             route.custom?.let { custom ->
                 appendLine("- id: llm-pi-ai")
@@ -186,7 +189,7 @@ class ProotDshHost(
                 appendLine("        models:")
                 appendLine("          - id: ${yamlQuote(route.model)}")
             }
-        }
+        }.ifBlank { "[]\n" }
         File(home, "cordis.patch.yml").writeText(patch)
     }
 

@@ -87,11 +87,22 @@ fun DshWebScreen(
 
     // A harness that boots but never announces its URL (a hang under proot is
     // real: the install verification did exactly that) must fail visibly
-    // instead of spinning forever.
+    // instead of spinning forever. A process that dies early (a bad
+    // cordis.patch.yml aborts the boot) fails immediately.
     LaunchedEffect(instance) {
         val running = instance ?: return@LaunchedEffect
-        delay(WEB_READY_TIMEOUT_MS)
-        if (instance === running && running.url.value == null) {
+        var waited = 0L
+        while (waited < WEB_READY_TIMEOUT_MS) {
+            if (running.url.value != null) return@LaunchedEffect
+            if (!running.isAlive) {
+                instance = null
+                startFailed = true
+                return@LaunchedEffect
+            }
+            delay(500)
+            waited += 500
+        }
+        if (instance === running) {
             running.stop()
             instance = null
             startFailed = true
