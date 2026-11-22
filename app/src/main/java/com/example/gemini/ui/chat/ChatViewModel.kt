@@ -481,6 +481,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun selectModel(modelId: String) = when {
         isOpenCodeActive -> openCodeBackend.selectModel(modelId)
         isClaudeActive -> claudeBackend.selectModel(modelId)
+        isDshActive -> dshBackend.selectModel(modelId)
         else -> agyBackend.selectModel(modelId)
     }
     /** Texts typed on the start screen before its chat exists (Hermes opens one in its own coroutine). */

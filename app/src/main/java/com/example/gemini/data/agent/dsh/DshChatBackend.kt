@@ -65,10 +65,10 @@ class DshChatBackend(
     private val _isLoadingConversation = MutableStateFlow(false)
     override val isLoadingConversation: StateFlow<Boolean> = _isLoadingConversation.asStateFlow()
 
-    private val _selectedModelId = MutableStateFlow(prefs.route.value.model)
+    private val _selectedModelId = MutableStateFlow(modelKey(prefs.route.value.provider, prefs.route.value.model))
     val selectedModelId: StateFlow<String> = _selectedModelId.asStateFlow()
 
-    private val _availableModels = MutableStateFlow(defaultModels())
+    private val _availableModels = MutableStateFlow(knownModels())
     val availableModels: StateFlow<List<AiModel>> = _availableModels.asStateFlow()
 
     /** True when the payload and its Node runtime are on disk inside the container. */
@@ -80,20 +80,29 @@ class DshChatBackend(
 
     private val storage = File(application.filesDir, "dsh-chats")
 
+    private val catalog = DshModelCatalog()
+
     // ── lifecycle ───────────────────────────────────────────────────────────
 
     fun start() {
         restore()
         refreshInstallState()
+        refreshModels()
     }
 
     fun stop() {
         stopStreaming()
     }
 
-    override fun retryConnections() = refreshInstallState()
+    override fun retryConnections() {
+        refreshInstallState()
+        refreshModels()
+    }
 
-    override fun onAppForegrounded() = refreshInstallState()
+    override fun onAppForegrounded() {
+        refreshInstallState()
+        refreshModels()
+    }
 
     fun detach() {
         _messages.value = emptyList()
@@ -170,8 +179,51 @@ class DshChatBackend(
     }
 
     fun selectModel(modelId: String) {
+        val provider = providerOf(modelId)
+        val model = modelOf(modelId)
         _selectedModelId.value = modelId
-        prefs.setRoute(prefs.route.value.copy(model = modelId))
+        prefs.setRoute(prefs.route.value.copy(provider = provider, model = model))
+    }
+
+    /**
+     * Adds every model the bridge's providers can chat with to the picker.
+     *
+     * Runs on start and stays additive: a bridge that is down leaves the built-in
+     * DeepSeek entries in place rather than emptying the picker.
+     */
+    fun refreshModels() {
+        backendScope.launch {
+            val providers = catalog.providers()
+            if (providers.isEmpty()) return@launch
+            val models = knownModels().toMutableList()
+            for (id in providers) {
+                if (_availableModels.value.any { it.description == id }) continue
+                val gateway = catalog.gateway(id) ?: continue
+                gateway.models.forEach { model ->
+                    models += AiModel(
+                        id = modelKey(id, model),
+                        displayName = prettyModel(model),
+                        description = id,
+                        key = model,
+                    )
+                }
+            }
+            _availableModels.value = models
+        }
+    }
+
+    /** Official routes need no gateway; everything else is pointed at the bridge's gateway for that provider. */
+    private suspend fun resolvedRoute(base: DshModelRoute): DshModelRoute {
+        if (base.provider == DshPreferences.DEFAULT_PROVIDER) return base.copy(custom = null)
+        val gateway = catalog.gateway(base.provider) ?: return base
+        return base.copy(
+            apiKey = "",
+            custom = DshCustomRoute(
+                name = base.provider,
+                api = gateway.api.ifBlank { DshPreferences.DEFAULT_CUSTOM_API },
+                baseUrl = gateway.base_url,
+            ),
+        )
     }
 
     // ── a turn ──────────────────────────────────────────────────────────────
@@ -214,7 +266,7 @@ class DshChatBackend(
     }
 
     private suspend fun runTurn(conversation: Conversation, prompt: String, assistantId: String) {
-        val route = prefs.route.value
+        val route = resolvedRoute(prefs.route.value)
         val host = host()
         var session: DshSession? = null
         try {
@@ -411,11 +463,19 @@ class DshChatBackend(
     private fun titleFrom(content: String): String =
         content.trim().replace(Regex("\\s+"), " ").take(48).ifBlank { NEW_CHAT_TITLE }
 
-    /** The models DSH's official provider is verified against; a custom route adds its own. */
-    private fun defaultModels(): List<AiModel> = listOf(
-        AiModel(id = "deepseek-v4-flash", displayName = "DeepSeek V4 Flash", description = "deepseek-official", isDefault = true, key = "deepseek-v4-flash"),
-        AiModel(id = "deepseek-v4-pro", displayName = "DeepSeek V4 Pro", description = "deepseek-official", key = "deepseek-v4-pro"),
+    /** The models DSH's official provider is verified against; the bridge's providers add their own. */
+    private fun knownModels(): List<AiModel> = listOf(
+        AiModel(id = modelKey(DshPreferences.DEFAULT_PROVIDER, "deepseek-v4-flash"), displayName = "DeepSeek V4 Flash", description = DshPreferences.DEFAULT_PROVIDER, isDefault = true, key = "deepseek-v4-flash"),
+        AiModel(id = modelKey(DshPreferences.DEFAULT_PROVIDER, "deepseek-v4-pro"), displayName = "DeepSeek V4 Pro", description = DshPreferences.DEFAULT_PROVIDER, key = "deepseek-v4-pro"),
     )
+
+    private fun modelKey(provider: String, model: String): String = DshModelKeys.of(provider, model)
+
+    private fun providerOf(modelId: String): String = DshModelKeys.provider(modelId, prefs.route.value.provider)
+
+    private fun modelOf(modelId: String): String = DshModelKeys.model(modelId)
+
+    private fun prettyModel(model: String): String = DshModelKeys.label(model)
 
     private class TurnFinished : Exception()
     private class TurnFailed(message: String) : Exception(message)

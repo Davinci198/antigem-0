@@ -72,6 +72,7 @@ object AgentProvisioner {
     /** Optional free-pi plugin for the DSH `web` profile; its absence never blocks the chat. */
     private const val DSH_FREEPI_PLUGIN = "dsh-free-pi-official@beta"
     private const val DSH_WEB_PROFILE_DIR = "/root/.dsh/profiles/web"
+    private const val DSH_SDK_PROFILE_DIR = "/root/.dsh/profiles/sdk"
 
     private const val GUEST_DOWNLOAD_DIR = "/root/.antigem-downloads"
     private const val GUEST_TMP_DIR = "/root/.antigem-tmp"
@@ -558,18 +559,36 @@ object AgentProvisioner {
     }
 
     /**
-     * Installs the free-pi plugin for DSH's `web` profile, after the DSH payload
-     * itself is in place. Purely optional: any failure here is only logged, so a
-     * broken plugin step never fails the DSH install and the native chat does
-     * not need it.
+     * Installs the free-pi plugin for DSH's `web` and `sdk` profiles, after the
+     * DSH payload itself is in place. Purely optional: any failure here is only
+     * logged, so a broken plugin step never fails the DSH install and the native
+     * chat does not need it.
+     *
+     * The `web` profile is where the ads bar lives. The `sdk` profile is what the
+     * in-app chat boots, and it gains the same plugin so the chat can resolve the
+     * `freepi` provider too. FreePi itself still gates on the bar being visibly
+     * on screen, so chat prompts are only served while the harness page is open.
      */
     private suspend fun installDshFreePi(context: Context, log: (String) -> Unit) {
         if (!guestFile(context, DSH_PATH).let { it.isFile || it.canExecute() }) return
-        if (guestFile(context, "$DSH_WEB_PROFILE_DIR/node_modules/dsh-free-pi-official/package.json").isFile) {
-            log("[dsh] free-pi plugin already installed")
-            return
+        var changed = false
+        if (!guestFile(context, "$DSH_WEB_PROFILE_DIR/node_modules/dsh-free-pi-official/package.json").isFile) {
+            log("[dsh] installing free-pi plugin $DSH_FREEPI_PLUGIN (web profile)...")
+            if (installFreePiOnProfile(context, log, DSH_WEB_PROFILE_DIR)) changed = true
         }
-        log("[dsh] installing free-pi plugin $DSH_FREEPI_PLUGIN...")
+        if (!guestFile(context, "$DSH_SDK_PROFILE_DIR/node_modules/dsh-free-pi-official/package.json").isFile) {
+            log("[dsh] installing free-pi plugin (sdk profile, for the in-app chat)...")
+            if (installFreePiOnProfile(context, log, DSH_SDK_PROFILE_DIR)) changed = true
+        }
+        if (changed && !applyDshCompat(context, log, force = true)) {
+            log("[dsh] free-pi plugin installed but the proot rewrite failed; free-pi will not start")
+        } else {
+            log("[dsh] free-pi plugin installed")
+        }
+    }
+
+    private suspend fun installFreePiOnProfile(context: Context, log: (String) -> Unit, profileDir: String): Boolean {
+        if (!guestFile(context, DSH_PATH).let { it.isFile || it.canExecute() }) return false
         val installed = runGuest(
             context = context,
             agent = "dsh",
@@ -580,31 +599,25 @@ object AgentProvisioner {
                 export PATH=$NODE_HOME/bin:${'$'}PATH
                 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
                 corepack enable pnpm > /dev/null 2>&1 || true
-                if timeout 240 dsh plugin --profile web add $DSH_FREEPI_PLUGIN; then
+                if timeout 240 dsh plugin --profile ${profileDir.let { it.substringAfterLast('/') }} add $DSH_FREEPI_PLUGIN; then
                   echo "plugin added with dsh plugin"
-                elif test -f $DSH_WEB_PROFILE_DIR/package.json; then
+                elif test -f $profileDir/package.json; then
                   # pnpm is absent, but the profile already exists: npm writes the
                   # dependency into the same package.json, so DSH still loads it.
                   echo "dsh plugin add failed; installing with npm into the profile directory"
-                  npm install --prefix $DSH_WEB_PROFILE_DIR --no-audit --no-fund $DSH_FREEPI_PLUGIN
+                  npm install --prefix $profileDir --no-audit --no-fund $DSH_FREEPI_PLUGIN
                 else
-                  echo "profile $DSH_WEB_PROFILE_DIR is not initialised; skipping plugin"
+                  echo "profile $profileDir is not initialised; skipping plugin"
                   exit 1
                 fi
-                test -d $DSH_WEB_PROFILE_DIR/node_modules/dsh-free-pi-official
+                test -d $profileDir/node_modules/dsh-free-pi-official
             """.trimIndent(),
         )
         if (installed == null) {
             log("[dsh] free-pi plugin could not be installed (optional; chat works without it)")
-        } else {
-            // The plugin publishes its install key with a hard link, which PRoot
-            // cannot create, so it is patched here, after it lands on disk.
-            if (!applyDshCompat(context, log, force = true)) {
-                log("[dsh] free-pi plugin installed but the proot rewrite failed; free-pi will not start")
-            } else {
-                log("[dsh] free-pi plugin installed")
-            }
+            return false
         }
+        return true
     }
 
     // ------------------------------------------------------------- hermes
