@@ -416,12 +416,13 @@ func main() {
 			_, _ = w.Write([]byte(`{"success":false,"error":"no such provider"}`))
 			return
 		}
-		models := make([]string, 0, len(p.Models))
+		listed := make([]string, 0, len(p.Models))
 		for _, m := range p.Models {
 			if m.ID != "" {
-				models = append(models, m.ID)
+				listed = append(listed, m.ID)
 			}
 		}
+		models := dsh.ChatModels(listed)
 		gw, err := dshGateways.For(dsh.Config{
 			ID:          p.ID,
 			BaseURL:     p.BaseURL,
@@ -443,8 +444,8 @@ func main() {
 			"api":      "openai-completions",
 			"models":   models,
 		}
-		if len(models) > 0 {
-			answer["model"] = models[0]
+		if def := dsh.DefaultModel(models); def != "" {
+			answer["model"] = def
 		}
 		_ = json.NewEncoder(w).Encode(answer)
 	})
