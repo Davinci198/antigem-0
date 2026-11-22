@@ -35,7 +35,7 @@ import java.net.URI
  */
 object DshWebServer {
 
-    private const val TAG = "DshWebServer"
+    internal const val TAG = "DshWebServer"
 
     /** Prefix of the ready line `dsh web` prints (`dsh web: <url>?token=<launch token>`). */
     const val URL_LINE_PREFIX = "dsh web: "
@@ -124,12 +124,12 @@ class DshWebServerInstance internal constructor(
                     while (true) {
                         val line = reader.readLine() ?: break
                         if (line.isBlank()) continue
-                        Log.i(TAG, "dsh web: $line")
+                        Log.i(DshWebServer.TAG, "dsh web: $line")
                         DshWebServer.extractAdvertisedUrl(line)?.let { urlState.value = it }
                     }
                 }
             } catch (e: IOException) {
-                Log.w(TAG, "dsh web stream closed: ${e.message}")
+                Log.w(DshWebServer.TAG, "dsh web stream closed: ${e.message}")
             }
         }
     }
