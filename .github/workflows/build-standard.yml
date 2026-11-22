@@ -74,7 +74,7 @@ jobs:
           chmod +x gradlew
           # The proot hard-link rewrite and the SDK wire parser are the two pieces
           # that fail silently at runtime, so their guards run on every build.
-          ./gradlew --no-daemon :app:testStandardReleaseUnitTest \
+          ./gradlew --no-daemon :app:testStandardDebugUnitTest \
             --tests "com.example.gemini.data.agent.dsh.*"
 
       - name: Verify APK signature
