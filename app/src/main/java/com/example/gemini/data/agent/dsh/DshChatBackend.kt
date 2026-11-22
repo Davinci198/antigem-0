@@ -91,7 +91,7 @@ class DshChatBackend(
         stopStreaming()
     }
 
-    fun retryConnections() = refreshInstallState()
+    override fun retryConnections() = refreshInstallState()
 
     override fun onAppForegrounded() = refreshInstallState()
 
@@ -254,7 +254,7 @@ class DshChatBackend(
                                 addTool(assistantId, event.callId, event.name, event.detail.orEmpty())
                             is DshEvent.ToolCompleted ->
                                 completeTool(assistantId, event.callId, event.name, event.summary)
-                            DshEvent.TurnCompleted -> throw TurnFinished
+                            DshEvent.TurnCompleted -> throw TurnFinished()
                             is DshEvent.Failed -> throw TurnFailed(event.message)
                             else -> Unit
                         }
@@ -264,7 +264,7 @@ class DshChatBackend(
                 } catch (_: TurnFinished) {
                     true
                 } catch (failed: TurnFailed) {
-                    failTurn(failed.message)
+                    failTurn(failed.message ?: "DeepSeek Harness failed.")
                     false
                 }
             }
@@ -336,7 +336,7 @@ class DshChatBackend(
         setMessages(
             _messages.value.map { message ->
                 if (message.id != messageId) return@map message
-                val existing = message.toolCalls.indexWhere { it.id == callId }
+                val existing = message.toolCalls.indexOfFirst { it.id == callId }
                 if (existing < 0) return@map message
                 message.copy(
                     toolCalls = message.toolCalls.toMutableList().also { calls ->

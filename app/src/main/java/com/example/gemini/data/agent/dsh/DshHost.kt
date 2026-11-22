@@ -128,8 +128,11 @@ class ProotDshHost(
             "DSH_PERMISSION_MODE" to "workspace-write",
         )
         environment.putAll(request.environment)
+        // DSH guests refuse an empty key variable even when the endpoint behind the
+        // route wants no Authorization header at all (Kilo's free pool, a local
+        // proxy), so a keyless route still travels as a placeholder value.
         environment[request.route.custom?.let { keyEnvFor(it.name) } ?: "DEEPSEEK_API_KEY"] =
-            request.route.apiKey
+            request.route.apiKey.ifBlank { KEYLESS_PLACEHOLDER }
 
         val process = LocalEnvironmentManager.startGuestProcess(
             context = context,
@@ -192,6 +195,9 @@ class ProotDshHost(
 
     private companion object {
         const val TAG = "ProotDshHost"
+
+        /** Stands in for the key of a route that authenticates by other means. */
+        const val KEYLESS_PLACEHOLDER = "antigem-keyless"
 
         /** Provider key variable DSH's custom route reads (see [DshModelRoute]). */
         fun keyEnvFor(name: String): String =
