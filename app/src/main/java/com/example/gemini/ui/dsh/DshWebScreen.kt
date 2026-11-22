@@ -22,10 +22,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 
 private const val TAG = "DshWebScreen"
+
+/** How long `dsh web` may take to print its URL before the screen fails. */
+private const val WEB_READY_TIMEOUT_MS = 120_000L
 
 /**
  * Full-screen overlay that runs the DSH web profile inside the Ubuntu guest and
@@ -78,6 +82,19 @@ fun DshWebScreen(
             instance?.stop()
             instance = null
             startFailed = false
+        }
+    }
+
+    // A harness that boots but never announces its URL (a hang under proot is
+    // real: the install verification did exactly that) must fail visibly
+    // instead of spinning forever.
+    LaunchedEffect(instance) {
+        val running = instance ?: return@LaunchedEffect
+        delay(WEB_READY_TIMEOUT_MS)
+        if (instance === running && running.url.value == null) {
+            running.stop()
+            instance = null
+            startFailed = true
         }
     }
 
@@ -142,7 +159,7 @@ fun DshWebScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "DeepSeek Harness is not installed in the container",
+                        text = "DeepSeek Harness did not start: it is not installed in the container, or its web profile stopped answering.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,

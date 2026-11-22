@@ -456,7 +456,11 @@ object AgentProvisioner {
                 if mv /usr/local/lib/dsh.updating /usr/local/lib/dsh; then rm -rf /usr/local/lib/dsh.previous; \
                   else mv /usr/local/lib/dsh.previous /usr/local/lib/dsh; exit 4; fi
                 ln -sfn /usr/local/lib/dsh/node_modules/.bin/dsh $DSH_BIN
-                /usr/local/bin/dsh --profile headless --help > /dev/null
+                # No profile boot here: `dsh --profile headless --help` boots the harness and
+                # hangs under proot (seen on device for >10 min, blocking provisioning on the
+                # mutex). Verify the payload itself instead; the profile is exercised by chat.
+                test -x $DSH_BIN
+                test -f /usr/local/lib/dsh/node_modules/$DSH_PACKAGE_NAME/package.json
                 node -e "console.log(require('/usr/local/lib/dsh/node_modules/$DSH_PACKAGE_NAME/package.json').version)"
             """.trimIndent(),
         ) ?: return AgentInstallResult(agent, false, "", "npm install failed")
@@ -576,7 +580,7 @@ object AgentProvisioner {
                 export PATH=$NODE_HOME/bin:${'$'}PATH
                 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
                 corepack enable pnpm > /dev/null 2>&1 || true
-                if dsh plugin --profile web add $DSH_FREEPI_PLUGIN; then
+                if timeout 240 dsh plugin --profile web add $DSH_FREEPI_PLUGIN; then
                   echo "plugin added with dsh plugin"
                 elif test -f $DSH_WEB_PROFILE_DIR/package.json; then
                   # pnpm is absent, but the profile already exists: npm writes the
