@@ -90,6 +90,12 @@ object DshWebServer {
      * Spawns `dsh web` inside the guest. Returns null (and logs) when the payload
      * is missing or the spawn fails; a started instance keeps running until
      * [DshWebServerInstance.stop] or the app process dies.
+     *
+     * The spawn replaces any leftover web profile first: a force-stop or a crash
+     * leaves the Node VM inside proot alive (it outlived the app in testing), and
+     * a stray `dsh web` keeps burning CPU until the phone starts timing out its
+     * own input — which is exactly what an ANR on typing looks like. `exec`
+     * keeps this a single process, so the URL line still arrives on stdout.
      */
     fun start(context: Context, log: (String) -> Unit = {}): DshWebServerInstance? {
         if (!available(context)) {
@@ -102,7 +108,11 @@ object DshWebServer {
         return try {
             val process = LocalEnvironmentManager.startGuestProcess(
                 context = context,
-                guestArgv = listOf(DshGuestPaths.DSH_BIN, "web", "--no-open", "--port", "0"),
+                guestArgv = listOf(
+                    "/bin/sh",
+                    "-c",
+                    "pkill -f 'dsh web' >/dev/null 2>&1; exec ${DshGuestPaths.DSH_BIN} web --no-open --port 0",
+                ),
                 guestCwd = "/root",
                 environment = mapOf(
                     "NARB_DISABLE_NATIVE_CACHE" to "1",
