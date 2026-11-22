@@ -6,6 +6,7 @@ import com.example.gemini.data.local.LocalEnvironmentManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -220,8 +221,17 @@ internal class ProcessDshSession(
 
     override val isAlive: Boolean get() = process.isAlive
 
+    /**
+     * The stdout reader always runs on [Dispatchers.IO], whatever scope the caller
+     * passes in: a chat backend hands in `viewModelScope`, whose dispatcher is the
+     * main thread, and a blocking `readLine` there froze the UI until Android
+     * declared the app unresponsive ("Input dispatching timed out", main thread in
+     * BufferedReader.readLine above ProcessDshSession).
+     */
+    private val readerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     init {
-        scope.launch {
+        readerScope.launch {
             try {
                 BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { reader ->
                     while (true) {
@@ -244,6 +254,7 @@ internal class ProcessDshSession(
         runCatching { process.outputStream.close() }
         runCatching { process.destroy() }
         if (process.isAlive) runCatching { process.destroyForcibly() }
+        readerScope.cancel()
         Unit
     }
 }
