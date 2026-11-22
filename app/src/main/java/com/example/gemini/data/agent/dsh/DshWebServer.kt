@@ -72,6 +72,21 @@ object DshWebServer {
     }
 
     /**
+     * Repairs a `cordis.patch.yml` an older build left empty for a route without
+     * a custom provider. The harness refuses to boot on it ("must be a top-level
+     * YAML array of loader patch entries"), and the file is ours, so rewriting it
+     * as an empty array is safe and heals installs that are already broken.
+     * Returns true when it rewrote the file.
+     */
+    fun repairPatchFile(rootfs: File): Boolean {
+        val patch = File(rootfs, DshGuestPaths.DSH_HOME.removePrefix("/")).resolve("cordis.patch.yml")
+        if (!patch.isFile) return false
+        val body = runCatching { patch.readText() }.getOrNull()?.trim() ?: return false
+        if (body.startsWith("-") || body.startsWith("[")) return false
+        return runCatching { patch.writeText("[]\n") }.isSuccess
+    }
+
+    /**
      * Spawns `dsh web` inside the guest. Returns null (and logs) when the payload
      * is missing or the spawn fails; a started instance keeps running until
      * [DshWebServerInstance.stop] or the app process dies.
@@ -80,6 +95,9 @@ object DshWebServer {
         if (!available(context)) {
             log("[dsh-web] DSH payload or Node runtime is missing; web profile not started")
             return null
+        }
+        if (repairPatchFile(LocalEnvironmentManager.getUbuntuRootDir(context))) {
+            log("[dsh-web] rewrote an empty cordis.patch.yml as [] before booting")
         }
         return try {
             val process = LocalEnvironmentManager.startGuestProcess(

@@ -1,8 +1,11 @@
 package com.example.gemini.data.agent.dsh
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * Guards the extraction of the web URL from the ready line `dsh web` prints.
@@ -79,5 +82,36 @@ class DshWebServerTest {
     fun `rejects malformed urls`() {
         assertNull(DshWebServer.extractAdvertisedUrl("dsh web: not a url"))
         assertNull(DshWebServer.extractAdvertisedUrl("dsh web: "))
+    }
+
+    private fun rootfsWithPatch(body: String?): File {
+        val root = java.nio.file.Files.createTempDirectory("dsh-home").toFile()
+        File(root, "root/.dsh").mkdirs()
+        if (body != null) File(root, "root/.dsh/cordis.patch.yml").writeText(body)
+        return root
+    }
+
+    @Test
+    fun `repairs the empty patch file an older build wrote`() {
+        val root = rootfsWithPatch("")
+        assertTrue(DshWebServer.repairPatchFile(root))
+        assertEquals("[]", File(root, "root/.dsh/cordis.patch.yml").readText().trim())
+    }
+
+    @Test
+    fun `leaves a real patch list alone`() {
+        val root = rootfsWithPatch("- id: llm-pi-ai\n  config: {}\n")
+        assertFalse(DshWebServer.repairPatchFile(root))
+    }
+
+    @Test
+    fun `leaves an already repaired file alone`() {
+        val root = rootfsWithPatch("[]\n")
+        assertFalse(DshWebServer.repairPatchFile(root))
+    }
+
+    @Test
+    fun `there is nothing to repair when the file does not exist`() {
+        assertFalse(DshWebServer.repairPatchFile(rootfsWithPatch(null)))
     }
 }
