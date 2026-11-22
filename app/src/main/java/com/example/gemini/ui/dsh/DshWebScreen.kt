@@ -11,17 +11,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.gemini.R
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +33,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 
 private const val TAG = "DshWebScreen"
+
+/**
+ * Probe run after every page load: the harness answers a token-less or stale
+ * request with a small 401 page whose text body is this sentence. That page is
+ * a normal, successfully loaded page, so no error callback fires for it — it has
+ * to be recognised from its text.
+ */
+private const val AUTH_PAGE_PROBE =
+    "(document.body && document.body.innerText || '').slice(0, 200)"
+
+/** How many times one visit may reload the page after landing on the 401 page. */
+private const val MAX_AUTH_RELOADS = 3
 
 /** How long `dsh web` may take to print its URL before the screen fails. */
 private const val WEB_READY_TIMEOUT_MS = 120_000L
@@ -59,6 +74,13 @@ fun DshWebScreen(
     var restartRequested by remember { mutableIntStateOf(0) }
     /** One free re-boot per visit: Android killing the harness must not leave a dead page. */
     var autoRestartUsed by remember { mutableStateOf(false) }
+    /**
+     * Bumped when the page turns out to be the harness 401 page, which recreates
+     * the WebView against the freshest advertised URL. The launch token is
+     * printed once per `dsh web` start and rotates whenever the process boots
+     * again, so a page loaded from an older URL stops being authorised.
+     */
+    var authReloads by remember { mutableIntStateOf(0) }
 
     // The harness outlives this screen: [DshWebServer] owns one process and this
     // effect only attaches to it, so reopening the screen is instant and does not
@@ -140,6 +162,12 @@ fun DshWebScreen(
     val idleUrlFlow = remember { MutableStateFlow<String?>(null) }
     val url by (instance?.url ?: idleUrlFlow).collectAsState()
 
+    // A new advertised URL is authoritative: it carries the current token, so the
+    // 401-reload budget starts over.
+    LaunchedEffect(url) {
+        authReloads = 0
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -160,7 +188,7 @@ fun DshWebScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "DeepSeek Harness",
+                    text = stringResource(R.string.dsh_web_title),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -171,6 +199,27 @@ fun DshWebScreen(
                         .padding(start = 12.dp)
                 )
                 IconButton(onClick = {
+                    // Same page, opened in the phone's browser with a live token: Chrome
+                    // keeps the session cookie afterwards, so it never asks for the token
+                    // again. Nothing is copied by hand.
+                    val target = url
+                    if (target != null) {
+                        val opened = runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }.isSuccess
+                        if (!opened) Log.w(TAG, "no browser to open $target")
+                    }
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.OpenInNew,
+                        contentDescription = stringResource(R.string.dsh_web_open_browser),
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                IconButton(onClick = {
                     DshWebServer.stopNow()
                     instance = null
                     startFailed = false
@@ -178,14 +227,14 @@ fun DshWebScreen(
                 }) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
-                        contentDescription = "Restart the harness",
+                        contentDescription = stringResource(R.string.dsh_web_restart),
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 IconButton(onClick = onClose) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Close",
+                        contentDescription = stringResource(R.string.dsh_web_close),
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -195,11 +244,25 @@ fun DshWebScreen(
         val currentUrl = url
         when {
             currentUrl != null -> {
-                // Recreate the WebView only if the advertised URL ever changes;
-                // the page area stays untouched while the harness is running.
-                key(currentUrl) {
+                // Recreate the WebView when the advertised URL changes, and also when
+                // a load landed on the harness 401 page: that reload has to re-read the
+                // freshest URL (its launch token), which only a fresh page load does.
+                key(currentUrl, authReloads) {
                     AndroidView(
-                        factory = { ctx -> buildDshWebView(ctx, currentUrl) },
+                        factory = { ctx ->
+                            buildDshWebView(
+                                ctx,
+                                currentUrl,
+                                onAuthPage = {
+                                    if (authReloads < MAX_AUTH_RELOADS) {
+                                        Log.w(TAG, "the page is the harness 401 page; reloading with the current token")
+                                        authReloads++
+                                    } else {
+                                        Log.w(TAG, "still unauthorised after $MAX_AUTH_RELOADS reloads")
+                                    }
+                                }
+                            )
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -210,7 +273,7 @@ fun DshWebScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "DeepSeek Harness stopped before its page could load. If this keeps happening, allow unrestricted battery use for this app: Android suspends it in the background, which takes the harness down with it.",
+                        text = stringResource(R.string.dsh_web_stopped_message),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -227,7 +290,7 @@ fun DshWebScreen(
                         CircularProgressIndicator()
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Starting DeepSeek Harness…",
+                            text = stringResource(R.string.dsh_web_starting),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -250,7 +313,11 @@ fun DshWebScreen(
  * off, the target window is loaded in this same view, cookies included.
  */
 @SuppressLint("SetJavaScriptEnabled")
-private fun buildDshWebView(context: Context, url: String): WebView {
+private fun buildDshWebView(
+    context: Context,
+    url: String,
+    onAuthPage: () -> Unit
+): WebView {
     val web = WebView(context)
     web.layoutParams = ViewGroup.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -337,6 +404,15 @@ private fun buildDshWebView(context: Context, url: String): WebView {
 
         override fun onPageFinished(view: WebView, pageUrl: String?) {
             Log.d(TAG, "page finished: $pageUrl")
+            // A stale launch token is not an error: the harness answers 200 with a
+            // small "authentication required" page. Read it and let the caller
+            // reload against the freshest advertised URL instead of leaving the
+            // user on a dead page.
+            view.evaluateJavascript(AUTH_PAGE_PROBE) { text ->
+                if (text != null && text.lowercase().contains("authentication required")) {
+                    onAuthPage()
+                }
+            }
         }
 
         override fun onReceivedError(

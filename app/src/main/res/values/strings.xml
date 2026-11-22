@@ -13,4 +13,10 @@
     <string name="share_transcript">Share Transcript</string>
     <string name="reset_terminal">Reset Terminal</string>
     <string name="no_urls_found">No URLs found in transcript</string>
+    <string name="dsh_web_title">DeepSeek Harness</string>
+    <string name="dsh_web_open_browser">Open in browser</string>
+    <string name="dsh_web_restart">Restart the harness</string>
+    <string name="dsh_web_close">Close</string>
+    <string name="dsh_web_starting">Starting DeepSeek Harness…</string>
+    <string name="dsh_web_stopped_message">DeepSeek Harness stopped before its page could load. If this keeps happening, allow unrestricted battery use for this app: Android suspends it in the background, which takes the harness down with it.</string>
 </resources>
