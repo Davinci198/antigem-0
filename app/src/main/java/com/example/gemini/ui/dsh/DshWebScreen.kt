@@ -32,6 +32,7 @@ import com.example.gemini.data.agent.dsh.DshWebServerInstance
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val TAG = "DshWebScreen"
@@ -112,6 +113,7 @@ fun DshWebScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var instance by remember { mutableStateOf(DshWebRetained.instance) }
     var startFailed by remember { mutableStateOf(false) }
     var restartRequested by remember { mutableIntStateOf(0) }
@@ -242,18 +244,31 @@ fun DshWebScreen(
                         .padding(start = 12.dp)
                 )
                 IconButton(onClick = {
-                    // Same page, opened in the phone's browser with a live token: Chrome
-                    // keeps the session cookie afterwards, so it never asks for the token
-                    // again. Nothing is copied by hand.
+                    // Same page, opened in the phone's browser. The launch URL is checked
+                    // from this process first: Chrome shows the harness 401 page as if it
+                    // were the harness, so a URL that no longer mints a session cookie must
+                    // not be opened at all.
                     val target = url
-                    if (target != null) {
-                        val opened = runCatching {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                        }.isSuccess
-                        if (!opened) Log.w(TAG, "no browser to open $target")
+                    if (target == null) {
+                        Log.w(TAG, "no harness URL yet; not opening the browser")
+                    } else {
+                        scope.launch {
+                            val usable = withContext(Dispatchers.IO) {
+                                DshWebServer.probeLaunchUrl(target)
+                            }
+                            if (!usable) {
+                                Log.w(TAG, "the advertised URL does not authenticate; asking for a new one")
+                                restartRequested++
+                                return@launch
+                            }
+                            val opened = runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }.isSuccess
+                            if (!opened) Log.w(TAG, "no browser to open $target")
+                        }
                     }
                 }) {
                     Icon(

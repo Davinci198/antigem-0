@@ -15,7 +15,9 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URL
 
 /**
  * Runs the DSH web profile (`dsh web`) inside the Ubuntu container and surfaces
@@ -129,6 +131,40 @@ object DshWebServer {
 
     /** True while a web profile is alive, so the screen can show its state. */
     fun isRunning(): Boolean = synchronized(lock) { current?.isAlive == true }
+
+    /**
+     * Checks whether [url] still authenticates, from this process, before it is handed to
+     * another app.
+     *
+     * The harness answers a `GET /?token=<launch token>` with a 303 to `./` and the signed
+     * session cookie; a token from a harness that has since restarted (or any URL rebuilt by
+     * hand) gets the minimal 401 page instead. Chrome cannot tell the two apart before the
+     * user sees the page, so the app asks first and only opens a URL that minted a cookie.
+     */
+    fun probeLaunchUrl(url: String): Boolean {
+        val connection = try {
+            (URL(url).openConnection() as HttpURLConnection)
+        } catch (e: Exception) {
+            Log.w(TAG, "cannot probe $url: ${e.message}")
+            return false
+        }
+        return try {
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.requestMethod = "GET"
+            val status = connection.responseCode
+            val cookie = connection.headerFields["Set-Cookie"]?.firstOrNull()
+            val accepted = status == 303 && !cookie.isNullOrBlank()
+            if (!accepted) Log.w(TAG, "launch URL answered $status without a session cookie")
+            accepted
+        } catch (e: Exception) {
+            Log.w(TAG, "probe of $url failed: ${e.message}")
+            false
+        } finally {
+            connection.disconnect()
+        }
+    }
 
     private fun startLocked(context: Context, log: (String) -> Unit): DshWebServerInstance? {
         if (!available(context)) {
