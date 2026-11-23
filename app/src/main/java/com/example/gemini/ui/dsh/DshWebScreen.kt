@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.gemini.R
+import com.example.gemini.data.agent.dsh.DshUiInjector
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
 import kotlinx.coroutines.Dispatchers
@@ -387,6 +388,7 @@ private fun buildDshWebView(
             return true
         }
     }
+    val injector = DshUiInjector(context)
     web.webViewClient = object : WebViewClient() {
         // Keep every navigation inside this WebView so the launch token never
         // leaves the app for an external browser.
@@ -400,10 +402,13 @@ private fun buildDshWebView(
 
         override fun onPageStarted(view: WebView, pageUrl: String?, favicon: android.graphics.Bitmap?) {
             Log.d(TAG, "page started: $pageUrl")
+            // The polyfill has to be in place before the harness scripts run.
+            injector.injectEarlyPolyfill(view)
         }
 
         override fun onPageFinished(view: WebView, pageUrl: String?) {
             Log.d(TAG, "page finished: $pageUrl")
+            injector.inject(view)
             // A stale launch token is not an error: the harness answers 200 with a
             // small "authentication required" page. Read it and let the caller
             // reload against the freshest advertised URL instead of leaving the
