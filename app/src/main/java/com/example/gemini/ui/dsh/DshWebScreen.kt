@@ -7,6 +7,7 @@ import android.os.Message
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.*
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,7 @@ import com.example.gemini.data.agent.dsh.DshUiInjector
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -116,7 +118,10 @@ fun DshWebScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var instance by remember { mutableStateOf(DshWebRetained.instance) }
+    // A harness that is already serving is attached to immediately, not after another trip
+    // through the start effect: a cold boot takes up to a minute and that wait belongs to the
+    // first visit only.
+    var instance by remember { mutableStateOf(DshWebRetained.instance?.takeIf { it.isAlive }) }
     var startFailed by remember { mutableStateOf(false) }
     var restartRequested by remember { mutableIntStateOf(0) }
     /** One free re-boot per visit: Android killing the harness must not leave a dead page. */
@@ -136,7 +141,10 @@ fun DshWebScreen(
     LaunchedEffect(isVisible, restartRequested) {
         if (!isVisible) return@LaunchedEffect
         startFailed = false
-        val started = withContext(Dispatchers.IO) {
+        // NonCancellable: leaving the screen while the harness boots used to cancel this
+        // effect, drop the started instance, and leave a live harness nobody was attached to;
+        // the page then never loaded until the next visit.
+        val started = withContext(NonCancellable + Dispatchers.IO) {
             DshWebServer.start(context) { line -> Log.d(TAG, line) }
         }
         if (started == null) {
@@ -253,6 +261,11 @@ fun DshWebScreen(
                     val target = url
                     if (target == null) {
                         Log.w(TAG, "no harness URL yet; not opening the browser")
+                        Toast.makeText(
+                            context,
+                            R.string.dsh_web_not_ready,
+                            Toast.LENGTH_SHORT
+                        ).show()
                     } else {
                         scope.launch {
                             val usable = withContext(Dispatchers.IO) {
