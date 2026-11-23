@@ -1340,6 +1340,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Hermes conversations live in the bridge's session store on disk;
         // after an app restart the drawer starts empty until they are pulled back
         if (AgentKind.HERMES in enabledAgents.value) hermesBackend.restoreSessions()
+        // DeepSeek Harness chats are saved by the backend itself, but only a start() restores them:
+        // without this line the drawer was empty after every cold start and the chats written in the
+        // previous run stayed on disk, out of reach, until an agent was toggled.
+        if (isDshEnabled) dshBackend.start()
         // The app opens on the start screen (agent picker) instead of a chat nobody asked for:
         // the first message creates the chat of the agent picked there.
         claudeAccount.onAccountChanged = {

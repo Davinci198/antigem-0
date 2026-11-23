@@ -567,7 +567,9 @@ class DshChatBackend(
             if (!file.isFile) return@runCatching emptyList()
             json.decodeFromString<List<Conversation>>(file.readText())
                 .filter { it.agent == AgentKind.DEEPSEEK_HARNESS }
-        }.getOrDefault(emptyList())
+        }.onFailure { Log.w(TAG, "dsh chats could not be read: ${it.message}") }
+            .getOrDefault(emptyList())
+        Log.i(TAG, "dsh chats restored: ${_conversations.value.size}")
     }
 
     private fun persistConversations() {
