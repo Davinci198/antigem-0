@@ -71,10 +71,12 @@ private object DshWebRetained {
     fun attach(context: Context, url: String, key: String, onAuthPage: () -> Unit): WebView {
         val existing = webView
         if (existing != null && webKey == key) {
+            Log.i(TAG, "reusing the loaded page (no reload)")
             (existing.parent as? ViewGroup)?.removeView(existing)
             return existing
         }
         existing?.let { runCatching { (it.parent as? ViewGroup)?.removeView(it) }; runCatching { it.destroy() } }
+        Log.i(TAG, "loading the harness page: ${url.substringBefore('?')}")
         return buildDshWebView(context, url, onAuthPage).also {
             webView = it
             webKey = key
@@ -468,13 +470,13 @@ private fun buildDshWebView(
         }
 
         override fun onPageStarted(view: WebView, pageUrl: String?, favicon: android.graphics.Bitmap?) {
-            Log.d(TAG, "page started: $pageUrl")
+            Log.i(TAG, "page started: ${pageUrl?.substringBefore('?')}")
             // The polyfill has to be in place before the harness scripts run.
             injector.injectEarlyPolyfill(view)
         }
 
         override fun onPageFinished(view: WebView, pageUrl: String?) {
-            Log.d(TAG, "page finished: $pageUrl")
+            Log.i(TAG, "page finished: ${pageUrl?.substringBefore('?')}")
             injector.inject(view)
             // A stale launch token is not an error: the harness answers 200 with a
             // small "authentication required" page. Read it and let the caller
