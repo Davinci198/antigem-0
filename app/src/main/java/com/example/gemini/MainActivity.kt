@@ -533,9 +533,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleIncomingFileIntent(intent)
         routeShadeApproval(intent)
         routeScheduledPrompt(intent)
+        // The guest hook also works while the app is already running, so a scripted check does not
+        // have to force-stop the app first.
+        intent.getStringExtra("cmd")?.takeIf { it.isNotBlank() }?.let { runGuestDebugCommand(it) }
     }
 
     private fun routeScheduledPrompt(intent: Intent?) {
