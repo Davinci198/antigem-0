@@ -377,6 +377,9 @@ object LocalServerManager {
         // makes the next chat turn fail (the client picks the systemd backend, which has no manager
         // there). Clear it on every start, even when every agent is already installed.
         AgentProvisioner.removeContainerGatewayUnits(appContext) { Log.d(TAG, it) }
+        // Self-healing on every start: an existing container gets the process monitor without a
+        // reinstall (SELinux hides /proc/stat from apps, so htop cannot work in there).
+        AgentProvisioner.ensureMtop(appContext) { Log.d(TAG, it) }
 
         val command = resolveServerCommand(appContext)
         if (command == null) {

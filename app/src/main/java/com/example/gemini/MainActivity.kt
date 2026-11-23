@@ -18,6 +18,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import com.example.gemini.theme.GeminiTheme
 import com.example.gemini.ui.chat.ChatScreen
@@ -110,6 +111,11 @@ class MainActivity : ComponentActivity() {
         com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.start(this)
         handleIncomingFileIntent(intent)
         maybeRequestAllFilesAccess()
+        // Automation hook: `adb shell am start -n com.antigem/com.example.gemini.MainActivity
+        // --es cmd "<command>"` runs one command inside the Ubuntu container and appends its output
+        // to files/exec.log, which adb can read without root. Nothing else lets a script look
+        // inside the container.
+        intent.getStringExtra("cmd")?.takeIf { it.isNotBlank() }?.let { runGuestDebugCommand(it) }
 
         setContent {
             val initialThemeMode = remember { chatViewModel.authPreferences.getThemeModeSync() }
@@ -544,6 +550,24 @@ class MainActivity : ComponentActivity() {
             action == com.example.gemini.data.notifications.ApprovalNotification.ACTION_DENY_ALL
         ) {
             chatViewModel.handleShadeApproval(action)
+        }
+    }
+
+    /** Runs one command in the container for the adb hook and appends the output to exec.log. */
+    private fun runGuestDebugCommand(cmd: String) {
+        val log = java.io.File(getExternalFilesDir(null), "exec.log")
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                log.appendText("$ $cmd\n")
+                val result = com.example.gemini.data.local.LocalEnvironmentManager.executeCommand(
+                    command = cmd,
+                    context = this@MainActivity,
+                    timeoutSeconds = 300,
+                )
+                log.appendText(result.output + "\n(exit ${result.exitCode})\n")
+            } catch (e: Exception) {
+                log.appendText("hook failed: ${e.message}\n")
+            }
         }
     }
 

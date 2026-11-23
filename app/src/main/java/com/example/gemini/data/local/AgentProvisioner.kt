@@ -190,6 +190,7 @@ object AgentProvisioner {
             removeContainerGatewayUnits(appContext, log)
 
             ensureGuestPath(appContext, log)
+            ensureMtop(appContext, log)
 
             results.forEach { result ->
                 if (result.installed) {
@@ -825,8 +826,8 @@ PYEOF
      */
     private suspend fun ensureGuestLibs(context: Context, log: (String) -> Unit): Boolean {
         val marker = File(LocalEnvironmentManager.getUbuntuRootDir(context), ".antigem-prereqs")
-        if (marker.readTextOrNull() == "1") return true
-        log("[agents] installing container prerequisites (libstdc++6, ca-certificates)...")
+        if (marker.readTextOrNull() == "2") return true
+        log("[agents] installing container prerequisites (libstdc++6, ca-certificates, python3)...")
         val ok = runGuest(
             context = context,
             agent = "agents",
@@ -834,15 +835,48 @@ PYEOF
             timeoutSeconds = APT_TIMEOUT_SECONDS,
             script = """
                 set -e
-                if [ ! -e /usr/lib/aarch64-linux-gnu/libstdc++.so.6 ] || [ ! -e /etc/ssl/certs/ca-certificates.crt ]; then
+                if [ ! -e /usr/lib/aarch64-linux-gnu/libstdc++.so.6 ] || [ ! -e /etc/ssl/certs/ca-certificates.crt ] || ! command -v python3 >/dev/null 2>&1; then
                   apt-get update -qq
-                  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libstdc++6 ca-certificates
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libstdc++6 ca-certificates python3-minimal
                 fi
                 echo PREREQS_OK
             """.trimIndent(),
         ) != null
-        if (ok) marker.writeTextOrNull("1")
+        if (ok) marker.writeTextOrNull("2")
         return ok
+    }
+
+    /**
+     * Installs the mtop process monitor into the container.
+     *
+     * SELinux hides `/proc/stat` and the other global `/proc` files from apps, so htop and w cannot
+     * work inside this rootfs; mtop reads `/proc` per process instead and is the only monitor that
+     * reports anything real here. The version marker only skips the copy when the bundled script is
+     * unchanged, so the command heals an existing container without reinstalling anything.
+     */
+    fun ensureMtop(context: Context, log: (String) -> Unit = {}) {
+        val root = LocalEnvironmentManager.getUbuntuRootDir(context)
+        if (!root.isDirectory) return
+        val target = File(root, "usr/local/bin/mtop")
+        val marker = File(root, ".antigem-mtop-version")
+        if (target.isFile && marker.readTextOrNull() == MTOP_VERSION) return
+        try {
+            target.parentFile?.ensureDirectory()
+            context.assets.open("mtop.py").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            Os.chmod(target.absolutePath, 0b111101101)
+            val readme = File(root, "root/README_procwatch.md")
+            readme.parentFile?.mkdirs()
+            context.assets.open("README_procwatch.md").use { input ->
+                readme.outputStream().use { output -> input.copyTo(output) }
+            }
+            marker.writeTextOrNull(MTOP_VERSION)
+            log("[agents] mtop installed in the container (usr/local/bin/mtop)")
+        } catch (e: Exception) {
+            // A monitor is never worth failing a provision over.
+            log("[agents] mtop install failed: ${e.message}")
+        }
     }
 
     /**
@@ -1044,4 +1078,6 @@ PYEOF
     }
 
     private const val MAX_AUTO_ATTEMPTS = 2
+    /** Bump when assets/mtop.py changes, so the copy is refreshed on the next provision. */
+    private const val MTOP_VERSION = "2procwatch-4"
 }
