@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSeek Harness în antigem — rezumat tehnic</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1d2129; --line: #2a2f3a;
+    --text: #e6e9ef; --dim: #9aa3b2; --accent: #4ade80; --accent2: #38bdf8;
+    --warn: #fbbf24; --bad: #f87171;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 32px 20px 72px; }
+  header.hero { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 32px; }
+  .kicker { color: var(--accent); font-size: 13px; letter-spacing: .12em; text-transform: uppercase; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 8px 0 12px; }
+  h2 { font-size: 21px; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 24px 0 8px; color: var(--accent2); }
+  p, li { color: var(--text); }
+  .meta { color: var(--dim); font-size: 14px; }
+  code { font-family: var(--mono); font-size: 13px; background: var(--panel2);
+         padding: 1px 5px; border-radius: 4px; color: #cfe3ff; }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+        padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 13px; }
+  pre code { background: none; padding: 0; color: #cfe3ff; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin: 14px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 16px 0; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .stat b { display: block; font-size: 24px; color: var(--accent); }
+  .stat span { color: var(--dim); font-size: 13px; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 999px;
+         border: 1px solid var(--line); color: var(--dim); margin-right: 6px; }
+  .ok { color: var(--accent); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  ul { padding-left: 20px; } li { margin: 5px 0; }
+  blockquote { margin: 14px 0; padding: 10px 14px; border-left: 3px solid var(--accent);
+               background: var(--panel); color: var(--dim); border-radius: 0 8px 8px 0; }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line);
+           color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kicker">antigem · agent DSH</div>
+  <h1>DeepSeek Harness în antigem — rezumat tehnic complet</h1>
+  <p class="meta">
+    Stare: integrat, dovedit pe device, împins pe <code>master</code>.
+    Data: 2026-11-23 · commit de merge <code>f8421d1</code> ·
+    CI antigem <code>45183184681</code> <span class="ok">success</span>.
+  </p>
+</header>
+
+<h2>1. Ce face integrarea</h2>
+<p>
+  antigem tratează DeepSeek Harness (DSH) ca un al doilea backend de agent, alături de Gemini.
+  Utilizatorul alege agentul din picker, iar antigem fie vorbește cu DSH prin protocolul lui de chat,
+  fie afișează chiar interfața web a harness-ului într-un WebView. Nimic din DSH nu este rescris în
+  Kotlin: versiunea, modelele, providerii și cheile sunt ale harness-ului.
+</p>
+
+<div class="card">
+  <p style="margin:0">
+    <strong>Principiul care a ținut totul împreună:</strong> o singură cusătură, două implementări.
+    <code>DshHost</code> definește operațiile (pornire, oprire, execuție comandă, stare); în spatele ei stau
+    <code>ProotDshHost</code> (container PRoot local) și <code>BridgeDshHost</code> (daemon-ul din
+    harness-ul existent). Restul aplicației nu știe care e folosit.
+  </p>
+</div>
+
+<h2>2. Arhitectură și fișiere</h2>
+<table>
+  <tr><th>Fișier</th><th>Rol</th></tr>
+  <tr><td><code>data/agent/dsh/DshHost.kt</code></td><td>Cusătura: interfața comună + cele două implementări</td></tr>
+  <tr><td><code>DshChatBackend.kt</code></td><td>Tururile de chat prin protocolul DSH (sesiune, streaming, oprire)</td></tr>
+  <tr><td><code>DshProtocol.kt</code></td><td>Parsarea evenimentelor și a mesajelor de protocol</td></tr>
+  <tr><td><code>DshModelCatalog.kt</code></td><td>Catalogul de modele citit din DSH + <code>PRESETS</code> de provideri</td></tr>
+  <tr><td><code>DshProfilePatch.kt</code></td><td><code>ensureProviders()</code>: scrie providerii în profilul DSH</td></tr>
+  <tr><td><code>DshPreferences.kt</code></td><td>Alegerea rutelor, modelului, portului</td></tr>
+  <tr><td><code>DshWebServer.kt</code> + <code>ui/dsh/DshWebScreen.kt</code></td><td><code>dsh web</code> pornit o dată, cald, și afișat în WebView</td></tr>
+  <tr><td><code>DshUiInjector.kt</code> <span class="tag">nou</span></td><td>CSS/JS mobil injectat în GUI-ul harness-ului</td></tr>
+  <tr><td><code>DshCompatPatch.kt</code></td><td>Patch de compatibilitate 0.2.0 → 0.2.2</td></tr>
+  <tr><td><code>data/local/AgentProvisioner.kt</code></td><td>Instalează DSH în container (<code>DSH_VERSION = 0.2.2-rc.5</code>)</td></tr>
+</table>
+
+<h2>3. Provideri și modele</h2>
+<ul>
+  <li><strong>NVIDIA</strong> ca provider principal (<code>https://integrate.api.nvidia.com/v1</code>): 33 de id-uri listate, filtrate la cele care pot purta o conversație; implicita e din familia <em>Nemotron</em>.</li>
+  <li><strong>FreePi</strong> pe rutele <code>web</code> și <code>sdk</code>; <strong>DeepSeek oficial</strong>, OpenRouter, Groq, Gemini și HuggingFace există ca preset-uri în <code>DshModelCatalog.PRESETS</code>.</li>
+  <li><strong>Cheile stau în DSH</strong> (profile patches + credential store), nu în antigem și nu în bridge: aplicația nu scrie <code>settings.yaml</code> pentru o rută nativă.</li>
+  <li>Catalogul se citește din DSH, deci un model nou apărut în harness apare în picker fără update de aplicație.</li>
+  <li>Id-urile din picker sunt <code>provider|model</code>, ca un model cu același nume la doi provideri să nu se amestece.</li>
+</ul>
+
+<h2>4. Performanță (măsurată, nu estimată)</h2>
+<div class="grid">
+  <div class="stat"><b>6,3 s</b><span>de la tastă la „Completed"</span></div>
+  <div class="stat"><b>132 tok/s</b><span>debit în tur</span></div>
+  <div class="stat"><b>78 %</b><span>cache hit pe prompt</span></div>
+  <div class="stat"><b>56,3 K</b><span>tokeni în contextul testat</span></div>
+</div>
+<p>
+  Rețeta: un singur <code>dsh web</code> ținut cald (nu pornit la fiecare mesaj), proces <code>sdk</code>
+  reutilizat între tururi, <code>stderr</code> drenat (un pipe plin bloca procesul), și un buton
+  <em>Refresh</em> în bara de sus în loc de reporniri automate.
+</p>
+
+<h2>5. Probleme rezolvate, cu cauza reală</h2>
+<table>
+  <tr><th>Simptom</th><th>Cauză</th><th>Rezolvare</th></tr>
+  <tr>
+    <td>ANR la tastare în chat</td>
+    <td>Citirea răspunsului pe thread-ul principal</td>
+    <td><code>readerScope</code> dedicat, plus <code>MainThreadWatchdog</code></td>
+  </tr>
+  <tr>
+    <td>„DSH fell" aleatoriu</td>
+    <td>Android suspenda pachetul (<code>BatteryCare setPackagesSuspendedAsUser</code>)</td>
+    <td><code>com.antigem</code> pe lista albă</td>
+  </tr>
+  <tr>
+    <td>Tur mort fără explicație</td>
+    <td><code>stderr</code> nedrenat umplea pipe-ul</td>
+    <td>Drenare continuă a <code>stderr</code></td>
+  </tr>
+  <tr>
+    <td>Pagina „authentication required"</td>
+    <td>Token de lansare expirat (răspuns 200, nu eroare)</td>
+    <td>Detecție după text + reîncărcare cu URL-ul cel mai proaspăt (≤3)</td>
+  </tr>
+  <tr>
+    <td>Sign-in GitHub nu funcționa în WebView</td>
+    <td>WebView nu poate oferi passkey/2FA</td>
+    <td>Popup-ul merge în browserul sistemului, harness-ul preia tokenul</td>
+  </tr>
+  <tr>
+    <td>Modele lipsă din profil</td>
+    <td>YAML cu <code>models:</code> imbricat, rescris greșit</td>
+    <td>Parser corect + <code>ensureProviders()</code> + oglindire în <code>AgentProvisioner</code></td>
+  </tr>
+  <tr>
+    <td>Bridge picat după update</td>
+    <td>Id-uri de provider schimbate între versiuni</td>
+    <td>Auto-vindecare la pornire</td>
+  </tr>
+</table>
+
+<h2>6. Patch-ul de compatibilitate 0.2.0 → 0.2.2</h2>
+<p>Patch-ul se aplică idempotent pe arborele instalat și e acoperit de teste:</p>
+<ul>
+  <li>atașamentele nu mai sunt un pachet separat (0.2.0 le publica așa, 0.2.2 le-a împăturit înapoi);</li>
+  <li><code>copyfile-excl-v2</code>: fișierele de sesiune se copiază prin cusătura <code>fs</code>, fără flag-ul dispărut;</li>
+  <li>validare pe text, nu pe numere de versiune, ca un rc nou să nu rupă nimic.</li>
+</ul>
+<p>Teste: <code>DshCompatPatchTest</code>, <code>DshModelCatalogTest</code>, <code>DshProfilePatchTest</code>,
+<code>DshProtocolTest</code>, <code>DshWebServerTest</code>.</p>
+
+<h2>7. Interfața mobilă injectată <span class="tag">azi</span></h2>
+<p>
+  GUI-ul harness-ului e gândit pentru desktop: composer-ul nu stă lipit de jos, bara de statistici
+  iese din ecran pe dreapta, iar butoanele flotante se așază peste acțiunile mesajelor.
+  <code>DshUiInjector</code> injectează trei asset-uri scrise pentru DOM-ul 0.2.x:
+</p>
+<pre><code>app/src/main/assets/dsh/early-polyfill.js   // rulează înaintea scripturilor harness-ului
+app/src/main/assets/dsh/mobile-ng.css       // layout, composer lipit jos, bara de statistici
+app/src/main/assets/dsh/inject-ng.js        // drawer, meniuri, tooltip-uri, măsurători</code></pre>
+<p>
+  Injecția e idempotentă (stilul se adaugă o singură dată, scripturile își verifică singure starea),
+  deci o navigare sau un reload le poate rula din nou fără efecte secundare.
+</p>
+
+<h2>8. Cum se verifică</h2>
+<pre><code># chat: un tur complet, fără UI
+{"provider":"nvidia","model":"minimaxai/minimax-m3.1-flash"}  → răspuns complet
+
+# starea harness-ului
+adb shell "tail -5 /sdcard/Android/data/com.antigem/files/dsh-web.log"
+
+# GUI în WebView (CDP)
+node cdp.js "document.body.innerText.slice(-300)"</code></pre>
+<blockquote>
+  Pe device, <code>adb install</code> oprește procesul aplicației: după fiecare instalare,
+  harness-ul trebuie pornit din nou înainte de orice verificare a portului.
+</blockquote>
+
+<h2>9. Stare și limite</h2>
+<ul>
+  <li><span class="ok">Dovedit</span>: chat pe providerii DSH, catalog de modele, GUI cald, semnare GitHub, performanța de mai sus.</li>
+  <li><span class="warn">Verificat doar prin build</span>: efectul vizual al CSS-ului injectat în antigem (necesită deschiderea ecranului DSH în aplicație).</li>
+  <li><span class="warn">Neintegrat</span>: <code>mtop</code> (monitorul de procese care înlocuiește htop în container, fiindcă SELinux ascunde <code>/proc/stat</code>) există acum doar în build-ul DSH mobil, nu și în containerul antigem.</li>
+  <li>Un răspuns gol poate veni de la model, nu de la transport: <code>minimax-m3.1-flash</code> pe NVIDIA are thinking pornit implicit și uneori întoarce <code>content</code> gol.</li>
+</ul>
+
+<footer>
+  antigem · integrarea DeepSeek Harness · rezumat generat 2026-11-23.
+  Versiune DSH: <code>0.2.2-rc.5</code>. Branch: <code>master</code>.
+</footer>
+
+</div>
+</body>
+</html>
