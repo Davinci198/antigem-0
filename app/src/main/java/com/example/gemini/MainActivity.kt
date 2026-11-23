@@ -7,9 +7,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
@@ -17,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -138,6 +143,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
             var currentViewMode by remember { mutableStateOf(initialViewMode) }
+            // The harness page is hidden, not closed: the chip brings it back as it was.
+            var dshWebMinimized by remember { mutableStateOf(false) }
             var previousViewMode by remember { mutableStateOf(AppViewMode.CHAT) }
 
             LaunchedEffect(requestedMode) {
@@ -420,10 +427,45 @@ class MainActivity : ComponentActivity() {
                                     com.example.gemini.ui.dsh.DshWebScreen(
                                         isVisible = currentViewMode == AppViewMode.DSH_WEB,
                                         onClose = {
+                                            dshWebMinimized = false
                                             currentViewMode =
                                                 if (previousViewMode == AppViewMode.DSH_WEB) AppViewMode.CHAT else previousViewMode
+                                        },
+                                        // Minimize keeps the harness and the page loaded; the chip
+                                        // below returns to exactly this state.
+                                        onMinimize = {
+                                            dshWebMinimized = true
+                                            currentViewMode = AppViewMode.CHAT
                                         }
                                     )
+                                }
+
+                                // Return to a minimized harness page without reloading it.
+                                if (dshWebMinimized && currentViewMode != AppViewMode.DSH_WEB) {
+                                    Surface(
+                                        onClick = {
+                                            dshWebMinimized = false
+                                            previousViewMode = currentViewMode
+                                            currentViewMode = AppViewMode.DSH_WEB
+                                        },
+                                        shape = MaterialTheme.shapes.large,
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        shadowElevation = 6.dp,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(end = 16.dp, bottom = 96.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            androidx.compose.material3.Text(
+                                                text = stringResource(R.string.dsh_web_restore),
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
                                 }
 
                                 // Persistent Notes Screen (Notes & to-do lists; open note and scroll survive switching away)

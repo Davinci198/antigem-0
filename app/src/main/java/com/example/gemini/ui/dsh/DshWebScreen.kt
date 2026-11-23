@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -51,26 +52,67 @@ private const val MAX_AUTH_RELOADS = 3
 private const val WEB_READY_TIMEOUT_MS = 120_000L
 
 /**
+ * What must survive a visit of the screen: the harness process handle and the
+ * WebView that is showing its GUI.
+ *
+ * Both used to be dropped when the screen was hidden, which meant the page was
+ * rebuilt and reloaded — a full boot of the harness GUI — every time the user
+ * stepped over to the chat and back. Keeping the view alive makes switching
+ * instant and leaves scroll position, open drawer and a running answer intact.
+ */
+private object DshWebRetained {
+    var instance: DshWebServerInstance? = null
+
+    private var webView: WebView? = null
+    /** URL plus reload counter: a changed counter means the token has to be re-read. */
+    private var webKey: String? = null
+
+    fun attach(context: Context, url: String, key: String, onAuthPage: () -> Unit): WebView {
+        val existing = webView
+        if (existing != null && webKey == key) {
+            (existing.parent as? ViewGroup)?.removeView(existing)
+            return existing
+        }
+        existing?.let { runCatching { (it.parent as? ViewGroup)?.removeView(it) }; runCatching { it.destroy() } }
+        return buildDshWebView(context, url, onAuthPage).also {
+            webView = it
+            webKey = key
+        }
+    }
+
+    /** Drops the page on request (a restart), so the next attach loads a fresh one. */
+    fun dropPage() {
+        webView?.let { runCatching { (it.parent as? ViewGroup)?.removeView(it) }; runCatching { it.destroy() } }
+        webView = null
+        webKey = null
+    }
+}
+
+/**
  * Full-screen overlay that runs the DSH web profile inside the Ubuntu guest and
  * shows its GUI in a WebView.
  *
  * The `dsh web` process is owned by this screen and only by this screen: it is
  * spawned the first time [isVisible] turns true, and [DshWebServerInstance.stop]
- * runs both when the screen is hidden again and when the composable leaves the
- * composition, so no guest process can outlive the screen. While the harness
- * has not announced its URL yet, a small status line is shown; once
- * [DshWebServerInstance.url] carries the advertised URL (launch token included),
- * it is loaded in a plain WebView. The page itself gets no overlays of any
- * kind — the only chrome is the slim top bar above the WebView.
+ * runs on request (the close action), so no guest process can outlive the app.
+ * Hiding the screen — the minimize action, or a switch to the chat — keeps the
+ * process and the loaded page alive, so coming back is instant and lands on the
+ * same scroll position instead of booting the harness GUI again.
+ *
+ * While the harness has not announced its URL yet, a small status line is shown;
+ * once [DshWebServerInstance.url] carries the advertised URL (launch token
+ * included), it is loaded in a plain WebView. The page itself gets no overlays of
+ * any kind — the only chrome is the slim top bar above the WebView.
  */
 @Composable
 fun DshWebScreen(
     isVisible: Boolean,
     onClose: () -> Unit,
+    onMinimize: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var instance by remember { mutableStateOf<DshWebServerInstance?>(null) }
+    var instance by remember { mutableStateOf(DshWebRetained.instance) }
     var startFailed by remember { mutableStateOf(false) }
     var restartRequested by remember { mutableIntStateOf(0) }
     /** One free re-boot per visit: Android killing the harness must not leave a dead page. */
@@ -97,6 +139,7 @@ fun DshWebScreen(
             startFailed = true
         } else {
             instance = started
+            DshWebRetained.instance = started
         }
     }
 
@@ -106,11 +149,10 @@ fun DshWebScreen(
         if (isVisible) autoRestartUsed = false
     }
 
-    // Leaving the screen keeps the process alive on purpose; only the local view
-    // state is dropped, so the WebView is recreated against the same server.
+    // Leaving the screen keeps the process and the page alive on purpose: the view state is
+    // kept by [DshWebRetained], so switching to the chat and back does not boot the GUI again.
     DisposableEffect(isVisible) {
         onDispose {
-            instance = null
             startFailed = false
         }
     }
@@ -220,8 +262,17 @@ fun DshWebScreen(
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
+                IconButton(onClick = onMinimize) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = stringResource(R.string.dsh_web_minimize),
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 IconButton(onClick = {
                     DshWebServer.stopNow()
+                    DshWebRetained.instance = null
+                    DshWebRetained.dropPage()
                     instance = null
                     startFailed = false
                     restartRequested++
@@ -251,9 +302,10 @@ fun DshWebScreen(
                 key(currentUrl, authReloads) {
                     AndroidView(
                         factory = { ctx ->
-                            buildDshWebView(
-                                ctx,
-                                currentUrl,
+                            DshWebRetained.attach(
+                                context = ctx,
+                                url = currentUrl,
+                                key = "$currentUrl#$authReloads",
                                 onAuthPage = {
                                     if (authReloads < MAX_AUTH_RELOADS) {
                                         Log.w(TAG, "the page is the harness 401 page; reloading with the current token")
