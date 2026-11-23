@@ -196,7 +196,8 @@ node cdp.js "document.body.innerText.slice(-300)"</code></pre>
 <ul>
   <li><span class="ok">Dovedit</span>: chat pe providerii DSH, catalog de modele, GUI cald, semnare GitHub, performanța de mai sus.</li>
   <li><span class="warn">Verificat doar prin build</span>: efectul vizual al CSS-ului injectat în antigem (necesită deschiderea ecranului DSH în aplicație).</li>
-  <li><span class="warn">Neintegrat</span>: <code>mtop</code> (monitorul de procese care înlocuiește htop în container, fiindcă SELinux ascunde <code>/proc/stat</code>) există acum doar în build-ul DSH mobil, nu și în containerul antigem.</li>
+  <li><span class="ok">Integrat</span>: <code>mtop</code>, monitorul de procese care înlocuiește htop în container (SELinux ascunde <code>/proc/stat</code> aplicațiilor). Se instalează în <code>/usr/local/bin/mtop</code> la fiecare pornire a serverului, iar <code>python3-minimal</code> vine cu prerechizitele containerului.</li>
+  <li><span class="ok">Scriptabil</span>: <code>adb shell am start -n com.antigem/com.example.gemini.MainActivity --es cmd "&lt;comandă&gt;"</code> rulează o comandă în container și scrie rezultatul în <code>files/exec.log</code>; merge și pe aplicație deja pornită.</li>
   <li>Un răspuns gol poate veni de la model, nu de la transport: <code>minimax-m3.1-flash</code> pe NVIDIA are thinking pornit implicit și uneori întoarce <code>content</code> gol.</li>
 </ul>
 
