@@ -1,0 +1,307 @@
+package com.example.gemini.data.agent.dsh
+
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+
+/**
+ * The DeepSeek Harness SDK wire contract, spoken by `dsh --profile sdk`.
+ *
+ * One JSON object per line on stdin and stdout. The host sends three requests
+ * and the guest answers each by `id`, then streams work as `session.event`
+ * notifications for the requested session:
+ *
+ * ```
+ * -> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"cwd":..,"provider":..,"model":..}}
+ * <- {"jsonrpc":"2.0","id":1,"result":{..}}
+ * -> {"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":..,"contentBlocks":[..]}}
+ * <- {"jsonrpc":"2.0","method":"session.event","params":{"sessionId":..,"event":{"type":..,"data":{..}}}}
+ * -> {"jsonrpc":"2.0","id":3,"method":"shutdown"}
+ * ```
+ *
+ * Failures arrive either as an `error` object on a request id or as a bare
+ * `dsh: <CODE>: <message>` diagnostic line; `dsh: warning: ...` is informational
+ * and never ends a turn. The turn itself ends with `turn/end`.
+ *
+ * This file is deliberately free of Android and org.json types so the contract
+ * is unit-testable on the JVM.
+ */
+object DshProtocol {
+
+    const val INITIALIZE_ID = 1
+    const val PROMPT_ID = 2
+    const val SHUTDOWN_ID = 3
+
+    fun initializeFrame(cwd: String, provider: String, model: String, id: Int = INITIALIZE_ID): String =
+        frame(id, "initialize", buildJsonObject {
+            put("cwd", cwd)
+            put("provider", provider)
+            put("model", model)
+        })
+
+    fun promptFrame(sessionId: String, text: String, id: Int = PROMPT_ID): String =
+        frame(id, "session/prompt", buildJsonObject {
+            put("sessionId", sessionId)
+            put("contentBlocks", buildJsonArray {
+                add(buildJsonObject {
+                    put("type", "text")
+                    put("text", text)
+                })
+            })
+        })
+
+    fun shutdownFrame(id: Int = SHUTDOWN_ID): String = frame(id, "shutdown", null)
+
+    private fun frame(id: Int, method: String, params: JsonObject?): String = buildJsonObject {
+        put("jsonrpc", "2.0")
+        put("id", JsonPrimitive(id))
+        put("method", method)
+        if (params != null) put("params", params)
+    }.toString()
+}
+
+/** One decoded line from the SDK stream. */
+sealed interface DshEvent {
+    /** The `initialize` request was answered; the session can be prompted. */
+    data object Initialized : DshEvent
+
+    /** `session/prompt` was accepted; work is now streaming. */
+    data object PromptAccepted : DshEvent
+
+    data object ShutdownAcknowledged : DshEvent
+
+    data class Status(val running: Boolean) : DshEvent
+
+    /** Assistant text delta (or a replayed compacted run). */
+    data class Text(val delta: String) : DshEvent
+
+    /** Provider reasoning delta. */
+    data class Reasoning(val delta: String) : DshEvent
+
+    data class ToolStarted(val callId: String, val name: String, val detail: String?) : DshEvent
+
+    data class ToolCompleted(val callId: String, val name: String, val summary: String) : DshEvent
+
+    /** `turn/end` with no error: the turn finished and the answer is complete. */
+    data object TurnCompleted : DshEvent
+
+    /** The turn or the process failed; [message] is user-facing. */
+    data class Failed(val message: String) : DshEvent
+
+    data object Ignored : DshEvent
+}
+
+/**
+ * Stateless-per-line decoder for the SDK stream. Stateful only to keep the
+ * assistant text already delivered by a compacted stream from being delivered
+ * twice when the completed message repeats it.
+ */
+class DshSdkParser(private val expectedSessionId: String) {
+
+    private val streamedText = StringBuilder()
+    private val toolNames = mutableMapOf<String, String>()
+
+    fun parse(line: String): DshEvent {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) return DshEvent.Ignored
+
+        val element = runCatching { Json.parseToJsonElement(trimmed) }.getOrNull()
+            ?: return diagnostic(trimmed)
+
+        val frame = element as? JsonObject ?: return DshEvent.Ignored
+
+        frame["id"]?.jsonPrimitive?.intOrNull?.let { id ->
+            (frame["error"] as? JsonObject)?.let { error ->
+                return DshEvent.Failed(
+                    error["message"]?.jsonPrimitive?.contentOrNull
+                        ?.ifBlank { null }
+                        ?: "DeepSeek Harness request $id failed",
+                )
+            }
+            return when (id) {
+                DshProtocol.INITIALIZE_ID -> DshEvent.Initialized
+                DshProtocol.PROMPT_ID -> DshEvent.PromptAccepted
+                DshProtocol.SHUTDOWN_ID -> DshEvent.ShutdownAcknowledged
+                else -> DshEvent.Ignored
+            }
+        }
+
+        val params = frame["params"] as? JsonObject ?: return DshEvent.Ignored
+        return when (frame["method"]?.jsonPrimitive?.contentOrNull) {
+            "session.status" -> {
+                if (params.string("sessionId") != expectedSessionId) DshEvent.Ignored
+                else DshEvent.Status(params.string("status") == "running")
+            }
+            "session.event" -> parseSessionEvent(params)
+            else -> DshEvent.Ignored
+        }
+    }
+
+    private fun diagnostic(line: String): DshEvent {
+        if (!line.startsWith("dsh:", ignoreCase = true)) return DshEvent.Ignored
+        val body = line.removePrefix("dsh:").removePrefix("DSH:").trim()
+        return if (body.startsWith("warning:", ignoreCase = true)) DshEvent.Ignored
+        else DshEvent.Failed(body.ifBlank { "DeepSeek Harness failed" })
+    }
+
+    private fun parseSessionEvent(params: JsonObject): DshEvent {
+        if (params.string("sessionId") != expectedSessionId) return DshEvent.Ignored
+        val event = params["event"] as? JsonObject ?: return DshEvent.Ignored
+        val data = event["data"] as? JsonObject ?: return DshEvent.Ignored
+        return when (event.string("type")) {
+            "assistant/chunk" -> parseChunk(data["chunk"] as? JsonObject)
+            "assistant/message" -> parseCompletedMessage(data)
+            "tool/call" -> {
+                val callId = data.string("callId")
+                val rawName = data.string("name").ifBlank { "Tool" }
+                val arguments = data.string("arguments")
+                val name = displayToolName(rawName)
+                toolNames[callId] = name
+                DshEvent.ToolStarted(callId, name, toolDetail(arguments))
+            }
+            "tool/result" -> {
+                val message = data["message"] as? JsonObject
+                val resultBlock = (message?.get("content") as? JsonArray)?.firstOrNull() as? JsonObject
+                val callId = message?.string("toolCallId").orEmpty()
+                    .ifBlank { resultBlock?.string("toolCallId").orEmpty() }
+                val name = toolNames.remove(callId) ?: "Tool"
+                val error = data["error"] as? JsonObject
+                val text = contentText(resultBlock?.get("content") as? JsonArray)
+                val summary = error?.string("reason").orEmpty()
+                    .ifBlank { error?.string("message").orEmpty() }
+                    .ifBlank { text }
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                    .take(180)
+                    .ifBlank { "$name completed" }
+                DshEvent.ToolCompleted(callId, name, summary)
+            }
+            "turn/end" -> when ((data["reason"] as? JsonObject)?.string("kind")) {
+                "error" -> DshEvent.Failed(
+                    (data["reason"] as? JsonObject)?.get("error")?.let { it as? JsonObject }
+                        ?.string("message").orEmpty()
+                        .ifBlank { "DeepSeek Harness turn failed" },
+                )
+                "blocked" -> DshEvent.Failed("DeepSeek Harness was blocked from completing the task")
+                "aborted" -> DshEvent.Failed("DeepSeek Harness cancelled the turn")
+                else -> DshEvent.TurnCompleted
+            }
+            else -> DshEvent.Ignored
+        }
+    }
+
+    /**
+     * dsh 0.2.0 compacts each step's model stream into `data.stream` instead of
+     * delivering live `assistant/chunk` notifications, so the compacted runs are
+     * replayed as deltas; the completed message content is then dropped when it
+     * only repeats what was already delivered.
+     */
+    private fun parseCompletedMessage(data: JsonObject): DshEvent {
+        val (replayed, reasoning) = replayStream(data["stream"] as? JsonArray)
+        if (replayed.isNotEmpty()) {
+            streamedText.setLength(0)
+            return DshEvent.Text(replayed)
+        }
+        val text = contentText(((data["message"] as? JsonObject)?.get("content")) as? JsonArray)
+        if (text.isNotBlank()) {
+            if (text == streamedText.toString()) {
+                streamedText.setLength(0)
+                return DshEvent.Ignored
+            }
+            return DshEvent.Text(text)
+        }
+        return reasoning ?: DshEvent.Ignored
+    }
+
+    /** Returns the replayed assistant text and, if the step had any, the last reasoning run. */
+    private fun replayStream(stream: JsonArray?): Pair<String, DshEvent?> {
+        if (stream == null) return "" to null
+        val text = StringBuilder()
+        var reasoning: DshEvent? = null
+        for (record in stream) {
+            val entry = record as? JsonObject ?: continue
+            when (entry.string("type")) {
+                "text-chunks" -> {
+                    val texts = entry["texts"] as? JsonArray ?: continue
+                    for (part in texts) {
+                        val delta = part.primitiveText() ?: continue
+                        text.append(delta)
+                        streamedText.append(delta)
+                    }
+                }
+                "reasoning-chunks" -> {
+                    val texts = entry["texts"] as? JsonArray ?: continue
+                    val joined = texts.joinToString("") { it.primitiveText().orEmpty() }
+                    if (joined.isNotEmpty()) reasoning = DshEvent.Reasoning(joined)
+                }
+                "chunk" -> {
+                    val chunkEvent = parseChunk(entry["chunk"] as? JsonObject)
+                    when (chunkEvent) {
+                        is DshEvent.Text -> text.append(chunkEvent.delta)
+                        is DshEvent.Reasoning -> reasoning = chunkEvent
+                        else -> Unit
+                    }
+                }
+            }
+        }
+        return text.toString() to reasoning
+    }
+
+    private fun parseChunk(chunk: JsonObject?): DshEvent {
+        if (chunk == null) return DshEvent.Ignored
+        return when (chunk.string("type")) {
+            "text-delta" -> chunk.string("text").takeIf { it.isNotEmpty() }
+                ?.let { delta ->
+                    streamedText.append(delta)
+                    DshEvent.Text(delta)
+                } ?: DshEvent.Ignored
+            "reasoning-delta" -> chunk.string("text").takeIf { it.isNotEmpty() }
+                ?.let { DshEvent.Reasoning(it) } ?: DshEvent.Ignored
+            else -> DshEvent.Ignored
+        }
+    }
+
+    /** `bash {"command":"ls"}` -> `Bash`, and a one-line detail for the tool card. */
+    private fun displayToolName(rawName: String): String {
+        val base = rawName.substringAfterLast('/').substringAfterLast('.').ifBlank { "Tool" }
+        return base.replaceFirstChar { it.uppercaseChar() }
+    }
+
+    private fun toolDetail(arguments: String): String? {
+        val parsed = runCatching { Json.parseToJsonElement(arguments) as? JsonObject }.getOrNull()
+        val detail = parsed?.let { obj ->
+            listOf("command", "path", "file_path", "query", "pattern", "url")
+                .firstNotNullOfOrNull { key -> obj.string(key).takeIf { it.isNotBlank() } }
+        } ?: arguments.takeIf { it.isNotBlank() }
+        return detail?.replace(Regex("\\s+"), " ")?.trim()?.take(120)
+    }
+
+    private fun contentText(content: JsonArray?): String {
+        if (content == null) return ""
+        val text = StringBuilder()
+        for (block in content) {
+            val json = block as? JsonObject ?: continue
+            if (json.string("type") == "text") text.append(json.string("text"))
+        }
+        return text.toString()
+    }
+}
+
+private fun JsonObject.string(key: String): String =
+    (this[key] as? JsonPrimitive)?.contentOrNull.orEmpty()
+
+private fun JsonElement.primitiveText(): String? = when (this) {
+    is JsonPrimitive -> if (this is JsonNull) null else contentOrNull
+    else -> null
+}

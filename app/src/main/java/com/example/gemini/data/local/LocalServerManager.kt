@@ -40,11 +40,24 @@ object LocalServerManager {
     private var exitObserverJob: Job? = null
     private var activeJob: Job? = null
 
+    /** True while we are taking the bridge down on purpose, so its exit is not treated as a crash. */
+    private var stopRequested = false
+
+    /** Consecutive unrequested exits, reset once the bridge has stayed up for a minute. */
+    private var healAttempts = 0
+    private var healResetJob: Job? = null
+
+    /** The application context of the last start, so an exited bridge can be brought back without a caller. */
+    private var lastContext: Context? = null
+
     // Track whether auto-start has already run during the lifetime of this app process
     private var hasInitialAutoStarted = false
 
     private const val PREFS_NAME = "local_server_prefs"
     private const val KEY_BRIDGE_LAST_UPDATE_TIME = "bridge_last_update_time"
+
+    /** Unrequested exits to heal before giving up, so a broken install cannot loop forever. */
+    private const val MAX_HEAL_ATTEMPTS = 4
 
     fun hasServerScript(context: Context): Boolean {
         val binBridge = File(LocalEnvironmentManager.getBinDir(context), "agy_ide_bridge")
@@ -271,6 +284,7 @@ object LocalServerManager {
      * Immediate force kill for service notification exit (closes session and finishes processes)
      */
     fun forceKillAll() {
+        stopRequested = true
         exitObserverJob?.cancel()
         exitObserverJob = null
         activeJob?.cancel()
@@ -352,6 +366,7 @@ object LocalServerManager {
         }
 
         val appContext = context.applicationContext
+        lastContext = appContext
         ensureBridgeBinary(appContext)
         // the bridge starts Claude Code through the app's launcher (--claude-bin)
         LocalEnvironmentManager.ensureGlibcEnvironment(appContext)
@@ -400,14 +415,51 @@ object LocalServerManager {
 
         _serverSession.value = session
         _status.value = LocalServerStatus.Running()
+        stopRequested = false
+        // a bridge that stays up for a minute has healed: the next kill counts from zero again
+        healResetJob?.cancel()
+        healResetJob = managerScope.launch {
+            delay(60_000L)
+            healAttempts = 0
+        }
 
         exitObserverJob?.cancel()
         exitObserverJob = managerScope.launch {
             session.isExited.collect { isExited ->
                 if (isExited) {
                     _status.value = LocalServerStatus.Stopped(exitCode = 0)
+                    healIfKilled()
                 }
             }
+        }
+    }
+
+    /**
+     * Brings the bridge back when it went away without being asked to.
+     *
+     * The bridge runs in a terminal session owned by this app process, so anything that
+     * ends that session — the OS reclaiming memory, a native crash, the WebView being
+     * killed under it — takes the bridge with it and leaves every chat without a server
+     * until someone taps restart by hand. A few bounded attempts with a growing delay
+     * cover the transient cases; the attempt limit keeps a genuinely broken install from
+     * looping.
+     */
+    private fun healIfKilled() {
+        if (stopRequested) return
+        val context = lastContext ?: return
+        if (healAttempts >= MAX_HEAL_ATTEMPTS) {
+            Log.w(TAG, "[ServerManager] bridge exited $healAttempts times on its own; leaving it stopped")
+            return
+        }
+        healAttempts++
+        val attempt = healAttempts
+        managerScope.launch {
+            delay(2_000L * attempt)
+            if (stopRequested) return@launch
+            val session = _serverSession.value
+            if (session != null && !session.isExited.value) return@launch
+            Log.i(TAG, "[ServerManager] bridge exited on its own; restarting (attempt $attempt)")
+            startServerInternal(context, forceRestart = true)
         }
     }
 
@@ -421,6 +473,7 @@ object LocalServerManager {
      */
     private suspend fun retireServerSession(session: LocalPtySession) {
         _status.value = LocalServerStatus.Starting
+        stopRequested = true
         // its exit must not mark the new server stopped
         exitObserverJob?.cancel()
         exitObserverJob = null
@@ -450,6 +503,7 @@ object LocalServerManager {
 
     private suspend fun stopServerInternal() {
         _status.value = LocalServerStatus.Stopping
+        stopRequested = true
 
         val bridgeUrl = AuthPreferences.currentBridgeHttpUrl
         val session = _serverSession.value

@@ -133,7 +133,8 @@ fun ChatScreen(
     onMinimizeWindow: () -> Unit = {},
     onNavigateToIde: () -> Unit = {},
     onNavigateToTerminal: () -> Unit = {},
-    onNavigateToBrowser: () -> Unit = {}
+    onNavigateToBrowser: () -> Unit = {},
+    onNavigateToDshWeb: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -158,6 +159,7 @@ fun ChatScreen(
     val conversations by viewModel.conversations.collectAsState()
     val currentConv by viewModel.currentConversation.collectAsState()
     val newChatAgent by viewModel.newChatAgent.collectAsState()
+    val activeAgent by viewModel.activeAgent.collectAsState()
     val isClaudeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
     val isHermesChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.HERMES
     val isOpenCodeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.OPENCODE
@@ -1322,6 +1324,17 @@ fun ChatScreen(
                                 contentDescription = "Web Browser Preview",
                                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
                             )
+                        }
+                        if (activeAgent == com.example.gemini.domain.model.AgentKind.DEEPSEEK_HARNESS) {
+                            // The free-pi bar only exists in the harness' own web GUI, so this is
+                            // the one place that opens it.
+                            IconButton(onClick = onNavigateToDshWeb) {
+                                Icon(
+                                    imageVector = Icons.Outlined.SmartToy,
+                                    contentDescription = "DeepSeek Harness Web UI",
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                                )
+                            }
                         }
                         IconButton(onClick = {
                             if (useSshTerminal || (isLocalToolsInstalled && isLocalToolsEnabled)) {

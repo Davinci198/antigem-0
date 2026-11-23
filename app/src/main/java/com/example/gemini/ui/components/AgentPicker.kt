@@ -37,11 +37,15 @@ val HermesAccent = Color(0xFF8B5CF6)
 /** OpenCode accent — its brand green. */
 val OpenCodeAccent = Color(0xFF10B981)
 
+/** DeepSeek Harness accent — DeepSeek's brand blue. */
+val DshAccent = Color(0xFF4D6BFE)
+
 fun AgentKind.label(): String = when (this) {
     AgentKind.AGY -> "Antigravity"
     AgentKind.CLAUDE -> "Claude Code"
     AgentKind.HERMES -> "Hermes"
     AgentKind.OPENCODE -> "OpenCode"
+    AgentKind.DEEPSEEK_HARNESS -> "DeepSeek"
 }
 
 fun AgentKind.accent(): Color = when (this) {
@@ -49,6 +53,7 @@ fun AgentKind.accent(): Color = when (this) {
     AgentKind.CLAUDE -> ClaudeAccent
     AgentKind.HERMES -> HermesAccent
     AgentKind.OPENCODE -> OpenCodeAccent
+    AgentKind.DEEPSEEK_HARNESS -> DshAccent
 }
 
 /**
@@ -108,6 +113,19 @@ fun AgentPicker(
                 )
             }
         }
+    }
+}
+
+/** Small badge marking a DeepSeek Harness conversation in lists. */
+@Composable
+fun DshBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(DshAccent.copy(alpha = 0.16f))
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+    ) {
+        Text(text = "DeepSeek", fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = DshAccent)
     }
 }
 

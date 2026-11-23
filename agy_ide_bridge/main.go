@@ -24,6 +24,7 @@ import (
 	"gemini-server/pkg/agyaccounts"
 	"gemini-server/pkg/claude"
 	"gemini-server/pkg/config"
+	"gemini-server/pkg/dsh"
 	"gemini-server/pkg/handlers"
 	"gemini-server/pkg/hermes"
 	"gemini-server/pkg/hub"
@@ -57,6 +58,7 @@ Flags:
   --no-opencode             Disable OpenCode (no /api/opencode endpoints, never runs the opencode CLI)
   --hermes-bin <path>       Custom path to the Hermes Agent CLI (default: hermes on PATH)
   --no-hermes               Disable Hermes Agent (no /api/hermes endpoints, never runs the hermes CLI)
+  --no-dsh                  Disable DeepSeek Harness (no /api/dsh endpoints, never runs the dsh CLI)
   -d, --dir <path>          Custom workspace directory
   -h, --help                Show help documentation`)
 }
@@ -144,6 +146,10 @@ func main() {
 	var noOpenCode bool
 	var customHermesBin string
 	var noHermes bool
+	// noDsh: the app passes --no-dsh while the agent is turned off. The route
+	// itself is not served yet, so a disabled harness and a build without the
+	// /api/dsh package behave the same: the app falls back to its own host.
+	var noDsh bool
 	var forceStart bool
 	var skipHub bool
 	var cliToken string
@@ -202,6 +208,8 @@ func main() {
 			}
 		case arg == "--no-hermes":
 			noHermes = true
+		case arg == "--no-dsh":
+			noDsh = true
 		case strings.HasPrefix(arg, "--port="):
 			cfg.Port = strings.TrimPrefix(arg, "--port=")
 		case arg == "-p" || arg == "--port":
@@ -381,6 +389,78 @@ func main() {
 		hermesMgr = hermes.NewManager(cfg.HomeDir, customHermesBin)
 		mux.Handle("/api/hermes/", hermesMgr)
 	}
+
+	// DeepSeek Harness model gateway: DSH always authenticates as a provider
+	// route, and the app already holds the user's credentials — so the app points
+	// a DSH custom route (`api: openai-completions`) at this loopback endpoint,
+	// which applies the real key upstream. A keyless endpoint is therefore just a
+	// provider with no key, and no secret ever enters the container.
+	var dshGateways dsh.Cache
+	defer dshGateways.Close()
+	mux.HandleFunc("/api/dsh/gateway", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if noDsh {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"success":false,"disabled":true,"error":"DeepSeek Harness is turned off in the app"}`))
+			return
+		}
+		id := r.URL.Query().Get("provider")
+		if claudeMgr == nil || id == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"success":false,"error":"provider is required, and Claude Code must be enabled"}`))
+			return
+		}
+		p, ok := claudeMgr.SavedProvider(id)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"success":false,"error":"no such provider"}`))
+			return
+		}
+		listed := make([]string, 0, len(p.Models))
+		for _, m := range p.Models {
+			if m.ID != "" {
+				listed = append(listed, m.ID)
+			}
+		}
+		models := dsh.ChatModels(listed)
+		gw, err := dshGateways.For(dsh.Config{
+			ID:          p.ID,
+			BaseURL:     p.BaseURL,
+			APIKey:      p.APIKey,
+			AuthMode:    p.AuthMode,
+			Headers:     p.Headers,
+			OpenAIStyle: p.OpenAIStyle,
+			Models:      models,
+		})
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = fmt.Fprintf(w, `{"success":false,"error":%q}`, err.Error())
+			return
+		}
+		answer := map[string]interface{}{
+			"success":  true,
+			"provider": p.ID,
+			"base_url": gw.URL(),
+			"api":      "openai-completions",
+			"models":   models,
+		}
+		if def := dsh.DefaultModel(models); def != "" {
+			answer["model"] = def
+		}
+		_ = json.NewEncoder(w).Encode(answer)
+	})
+
+	// Session host: not served yet, so the app runs the session through its own
+	// in-app PRoot host.
+	mux.HandleFunc("/api/dsh/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if noDsh {
+			_, _ = w.Write([]byte(`{"success":false,"disabled":true,"error":"DeepSeek Harness is turned off in the app"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":false,"unsupported":true,"error":"This bridge build runs DSH sessions in the app, not here"}`))
+	})
 
 	// Custom AntiGem plugins on disk: list, install (ZIP or GitHub repository), update, remove, export
 	mux.Handle("/api/custom-plugins/", plugins.NewManager(cfg.HomeDir))

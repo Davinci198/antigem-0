@@ -58,6 +58,7 @@ class AgentPreferences(private val context: Context) {
                 if (AgentKind.CLAUDE !in enabled) append(" --no-claude")
                 if (AgentKind.HERMES !in enabled) append(" --no-hermes")
                 if (AgentKind.OPENCODE !in enabled) append(" --no-opencode")
+                if (AgentKind.DEEPSEEK_HARNESS !in enabled) append(" --no-dsh")
             }
         }
     }

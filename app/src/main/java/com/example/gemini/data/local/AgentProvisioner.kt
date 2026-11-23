@@ -3,6 +3,10 @@ package com.example.gemini.data.local
 import android.content.Context
 import android.system.Os
 import android.util.Log
+import com.example.gemini.data.agent.dsh.DshCompatPatch
+import com.example.gemini.data.agent.dsh.DshConfigParser
+import com.example.gemini.data.agent.dsh.DshProfilePatch
+import com.example.gemini.data.agent.dsh.DshGuestPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,6 +31,7 @@ import java.util.concurrent.TimeUnit
  *  - claude   -> official Claude Code native linux-arm64 binary (no npm/node needed)
  *  - opencode -> official OpenCode platform binary taken from the npm tarball (no npm/node needed)
  *  - hermes   -> official Hermes Agent installer (needs git + curl inside the container)
+ *  - dsh      -> official npm payload `@deepseek-ai/dsh` (needs Node 24 inside the container)
  *
  * Everything is idempotent: a hidden marker file inside the rootfs records the installed version,
  * so a second call only logs "already installed". Downloads happen on the Android side (OkHttp,
@@ -46,6 +51,31 @@ object AgentProvisioner {
     const val OPENCODE_PATH = "/root/.opencode/bin/opencode"
     const val HERMES_PATH = "/root/.local/bin/hermes"
 
+    /**
+     * DeepSeek Harness is an npm package, not a native binary, so the install target is the
+     * payload's own bin entry. `/usr/local/bin/dsh` is a guest symlink to it; the app checks the
+     * real path because a dangling guest symlink still exists on the host side.
+     */
+    const val DSH_PATH = DshGuestPaths.DSH_PAYLOAD
+    const val DSH_BIN = DshGuestPaths.DSH_BIN
+    const val DSH_HOME_PATH = DshGuestPaths.DSH_HOME
+
+    /** Pinned release. The proot rewrite in [DshCompatPatch] is version-specific. */
+    const val DSH_VERSION = "0.2.2-rc.5"
+
+    /** DSH declares `engines.node >= 24.9.0`; Ubuntu's own package is older, so we ship Node 24. */
+    private const val NODE_VERSION = "v24.19.0"
+    private const val NODE_HOME = "/usr/local/lib/nodejs"
+    private const val DSH_PACKAGE_NAME = "@deepseek-ai/dsh"
+    private const val DSH_MARKER = ".antigem-dsh-version"
+    private const val DSH_COMPAT_MARKER = ".antigem-dsh-android-compat-version"
+    private const val NODE_MARKER = ".antigem-node-version"
+
+    /** Optional free-pi plugin for the DSH `web` profile; its absence never blocks the chat. */
+    private const val DSH_FREEPI_PLUGIN = "dsh-free-pi-official@beta"
+    private const val DSH_WEB_PROFILE_DIR = "/root/.dsh/profiles/web"
+    private const val DSH_SDK_PROFILE_DIR = "/root/.dsh/profiles/sdk"
+
     private const val GUEST_DOWNLOAD_DIR = "/root/.antigem-downloads"
     private const val GUEST_TMP_DIR = "/root/.antigem-tmp"
 
@@ -63,6 +93,7 @@ object AgentProvisioner {
     private const val APT_TIMEOUT_SECONDS = 15 * 60L
     private const val BINARY_INSTALL_TIMEOUT_SECONDS = 10 * 60L
     private const val HERMES_TIMEOUT_SECONDS = 30 * 60L
+    private const val NPM_INSTALL_TIMEOUT_SECONDS = 30 * 60L
     private const val PROGRESS_STEP_BYTES = 16L * 1024L * 1024L
 
     private val agents = listOf(
@@ -70,6 +101,7 @@ object AgentProvisioner {
         Agent(CLAUDE_PATH, ".antigem-claude-version", "claude"),
         Agent(OPENCODE_PATH, ".antigem-opencode-version", "opencode"),
         Agent(HERMES_PATH, ".antigem-hermes-version", "hermes"),
+        Agent(DSH_PATH, DSH_MARKER, "dsh"),
     )
 
     data class Agent(val guestPath: String, val markerName: String, val label: String)
@@ -143,7 +175,7 @@ object AgentProvisioner {
 
         provisionMutex.withLock {
             val results = mutableListOf<AgentInstallResult>()
-            log("Agent tools: checking agy, claude, opencode and hermes inside the container...")
+            log("Agent tools: checking agy, claude, opencode, hermes and dsh inside the container...")
 
             val downloads = guestFile(appContext, GUEST_DOWNLOAD_DIR).apply { ensureDirectory() }
             guestFile(appContext, GUEST_TMP_DIR).apply { ensureDirectory() }
@@ -152,6 +184,8 @@ object AgentProvisioner {
             results += installClaude(appContext, downloads, log)
             results += installOpencode(appContext, downloads, log)
             results += installHermes(appContext, log)
+            results += installDsh(appContext, downloads, log)
+            installDshFreePi(appContext, log)
 
             removeContainerGatewayUnits(appContext, log)
 
@@ -361,6 +395,263 @@ object AgentProvisioner {
         archive.delete()
         marker.writeTextOrNull(version)
         return AgentInstallResult(agent, true, version, "installed $installed")
+    }
+
+    // ----------------------------------------------------------------- dsh
+
+    /**
+     * Installs DeepSeek Harness the only way it exists: as an npm package.
+     *
+     * Two things make this different from agy/claude/opencode:
+     *  - the payload is Node, not a native binary, and it declares
+     *    `engines.node >= 24.9.0`, which Ubuntu's own `nodejs` package does not
+     *    satisfy, so Node [NODE_VERSION] is unpacked from the official tarball
+     *    first (checksum-verified against SHASUMS256.txt);
+     *  - DSH publishes files with POSIX hard links, which PRoot cannot create,
+     *    so every install ends in [applyDshCompat] (idempotent).
+     *
+     * npm runs inside the guest because it needs the registry over the guest
+     * network — unlike the other agents, whose archives are downloaded on the
+     * Android side. The new payload is staged in a sibling directory and moved
+     * into place, so a failed npm run never destroys a working install.
+     */
+    private suspend fun installDsh(
+        context: Context,
+        downloads: File,
+        log: (String) -> Unit,
+    ): AgentInstallResult {
+        val agent = "dsh"
+        val spec = agents.first { it.label == agent }
+        val marker = markerFile(context, spec)
+        val payload = guestFile(context, DSH_PATH)
+        if ((payload.isFile || payload.canExecute()) && !marker.readTextOrNull().isNullOrBlank()) {
+            return if (applyDshCompat(context, log)) {
+                AgentInstallResult(agent, true, marker.readTextOrNull().orEmpty(), "already installed")
+            } else {
+                AgentInstallResult(agent, false, "", "proot compatibility rewrite failed")
+            }
+        }
+
+        if (!ensureGuestLibs(context, log)) {
+            return AgentInstallResult(agent, false, "", "container prerequisites missing (apt failed)")
+        }
+        if (!ensureNode(context, downloads, log)) {
+            return AgentInstallResult(agent, false, "", "Node $NODE_VERSION is missing and could not be installed")
+        }
+
+        log("[dsh] installing DeepSeek Harness $DSH_VERSION (npm, inside the container)...")
+        val installed = runGuest(
+            context = context,
+            agent = agent,
+            log = log,
+            timeoutSeconds = NPM_INSTALL_TIMEOUT_SECONDS,
+            script = """
+                set -e
+                export PATH=$NODE_HOME/bin:${'$'}PATH
+                node --version
+                rm -rf /usr/local/lib/dsh.updating
+                mkdir -p /usr/local/lib/dsh.updating
+                npm install --prefix /usr/local/lib/dsh.updating --omit=dev --no-audit --no-fund \
+                  $DSH_PACKAGE_NAME@$DSH_VERSION
+                test -f /usr/local/lib/dsh.updating/node_modules/.bin/dsh
+                rm -rf /usr/local/lib/dsh.previous
+                if [ -d /usr/local/lib/dsh ]; then mv /usr/local/lib/dsh /usr/local/lib/dsh.previous; fi
+                if mv /usr/local/lib/dsh.updating /usr/local/lib/dsh; then rm -rf /usr/local/lib/dsh.previous; \
+                  else mv /usr/local/lib/dsh.previous /usr/local/lib/dsh; exit 4; fi
+                ln -sfn /usr/local/lib/dsh/node_modules/.bin/dsh $DSH_BIN
+                # No profile boot here: `dsh --profile headless --help` boots the harness and
+                # hangs under proot (seen on device for >10 min, blocking provisioning on the
+                # mutex). Verify the payload itself instead; the profile is exercised by chat.
+                test -x $DSH_BIN
+                test -f /usr/local/lib/dsh/node_modules/$DSH_PACKAGE_NAME/package.json
+                node -e "console.log(require('/usr/local/lib/dsh/node_modules/$DSH_PACKAGE_NAME/package.json').version)"
+            """.trimIndent(),
+        ) ?: return AgentInstallResult(agent, false, "", "npm install failed")
+
+        if (!applyDshCompat(context, log)) {
+            return AgentInstallResult(agent, false, "", "proot compatibility rewrite failed")
+        }
+        marker.writeTextOrNull(DSH_VERSION)
+        return AgentInstallResult(agent, true, DSH_VERSION, "installed $installed")
+    }
+
+    /**
+     * Unpacks the official Node build DSH needs. Ubuntu 25.10 ships node 22, and
+     * `engines.node >= 24.9.0` is enforced by DSH itself, so apt cannot satisfy it.
+     */
+    private suspend fun ensureNode(
+        context: Context,
+        downloads: File,
+        log: (String) -> Unit,
+    ): Boolean {
+        val marker = File(LocalEnvironmentManager.getUbuntuRootDir(context), NODE_MARKER)
+        if (guestFile(context, "$NODE_HOME/bin/node").canExecute() &&
+            marker.readTextOrNull() == NODE_VERSION
+        ) {
+            return true
+        }
+
+        val fileName = "node-$NODE_VERSION-linux-arm64.tar.gz"
+        val sums = runCatching { fetchText("https://nodejs.org/dist/$NODE_VERSION/SHASUMS256.txt") }
+            .getOrNull()
+            ?: return false.also { log("[dsh] Node checksum list is unreachable") }
+        val sha256 = sums.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.endsWith("  $fileName") }
+            ?.substringBefore(' ')
+            ?: return false.also { log("[dsh] Node $NODE_VERSION is not in the checksum list") }
+
+        log("[dsh] downloading Node $NODE_VERSION for DeepSeek Harness...")
+        download(downloads, fileName, "https://nodejs.org/dist/$NODE_VERSION/$fileName", "dsh", log)
+            ?: return false
+
+        val ok = runGuest(
+            context = context,
+            agent = "dsh",
+            log = log,
+            timeoutSeconds = BINARY_INSTALL_TIMEOUT_SECONDS,
+            script = """
+                set -e
+                echo "$sha256  $GUEST_DOWNLOAD_DIR/$fileName" | sha256sum -c -
+                rm -rf $NODE_HOME
+                mkdir -p $NODE_HOME
+                tar -xzf $GUEST_DOWNLOAD_DIR/$fileName -C $NODE_HOME --strip-components=1
+                for command in node npm npx corepack; do
+                  ln -sfn $NODE_HOME/bin/${'$'}command /usr/local/bin/${'$'}command
+                done
+                rm -f $GUEST_DOWNLOAD_DIR/$fileName
+                node --version
+            """.trimIndent(),
+        ) != null
+        if (ok) marker.writeTextOrNull(NODE_VERSION)
+        return ok
+    }
+
+    /**
+     * Applies the PRoot hard-link rewrite to the installed payload. Runs on the
+     * host path (plain file I/O, no guest process) and is skipped once the compat
+     * marker matches [DshCompatPatch.DSH_COMPAT_VERSION].
+     */
+    private fun applyDshCompat(context: Context, log: (String) -> Unit, force: Boolean = false): Boolean {
+        val modules = guestFile(context, DshCompatPatch.DSH_PAYLOAD_ROOT)
+        if (!modules.isDirectory) return false
+        val compatMarker = File(LocalEnvironmentManager.getUbuntuRootDir(context), DSH_COMPAT_MARKER)
+        if (!force && compatMarker.readTextOrNull() == DshCompatPatch.DSH_COMPAT_VERSION) return true
+
+        var touched = 0
+        return try {
+            DshCompatPatch.PATCHED_FILES.forEach { site ->
+                val file = File(guestFile(context, site.guestRoot), site.relativePath)
+                if (!file.isFile) return@forEach
+                touched += 1
+                val source = file.readText()
+                val (patched, result) = DshCompatPatch.patch(site, source, DSH_VERSION)
+                if (result == DshCompatPatch.Result.PATCHED) {
+                    file.writeText(patched)
+                    log("[dsh] rewrote hard-link publishing in ${site.relativePath} (proot)")
+                }
+            }
+            check(touched > 0) { "no DeepSeek Harness package was found to patch" }
+            compatMarker.writeTextOrNull(DshCompatPatch.DSH_COMPAT_VERSION)
+            true
+        } catch (e: Exception) {
+            log("[dsh] ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Installs the free-pi plugin for DSH's `web` and `sdk` profiles, after the
+     * DSH payload itself is in place. Purely optional: any failure here is only
+     * logged, so a broken plugin step never fails the DSH install and the native
+     * chat does not need it.
+     *
+     * The `web` profile is where the ads bar lives. The `sdk` profile is what the
+     * in-app chat boots, and it gains the same plugin so the chat can resolve the
+     * `freepi` provider too. FreePi itself still gates on the bar being visibly
+     * on screen, so chat prompts are only served while the harness page is open.
+     */
+    private suspend fun installDshFreePi(context: Context, log: (String) -> Unit) {
+        if (!guestFile(context, DSH_PATH).let { it.isFile || it.canExecute() }) return
+        var changed = false
+        if (!guestFile(context, "$DSH_WEB_PROFILE_DIR/node_modules/dsh-free-pi-official/package.json").isFile) {
+            log("[dsh] installing free-pi plugin $DSH_FREEPI_PLUGIN (web profile)...")
+            if (installFreePiOnProfile(context, log, DSH_WEB_PROFILE_DIR)) changed = true
+        }
+        if (!guestFile(context, "$DSH_SDK_PROFILE_DIR/node_modules/dsh-free-pi-official/package.json").isFile) {
+            log("[dsh] installing free-pi plugin (sdk profile, for the in-app chat)...")
+            if (installFreePiOnProfile(context, log, DSH_SDK_PROFILE_DIR)) changed = true
+        }
+        if (changed && !applyDshCompat(context, log, force = true)) {
+            log("[dsh] free-pi plugin installed but the proot rewrite failed; free-pi will not start")
+        } else {
+            log("[dsh] free-pi plugin installed")
+        }
+        mirrorProviderConfig(context, log)
+    }
+
+    /**
+     * Copies the `web` profile's provider entries into the `sdk` profile.
+     *
+     * The chat boots `sdk`; a user adds providers to `web` through DSH's own settings.
+     * Without this, a fresh install has an `sdk` profile that declares no provider, and
+     * every chat route fails as unknown even though the harness is configured next door.
+     * Idempotent, additive, and silent about a missing file: this is convenience, not a
+     * prerequisite, so it never fails the install.
+     */
+    private suspend fun mirrorProviderConfig(context: Context, log: (String) -> Unit) {
+        val source = guestFile(context, "$DSH_WEB_PROFILE_DIR/cordis.patch.yml")
+        val target = guestFile(context, "$DSH_SDK_PROFILE_DIR/cordis.patch.yml")
+        if (!source.isFile) return
+        val providers = runCatching {
+            DshConfigParser.llmProviders(source.readText())
+        }.onFailure { log("[dsh] web profile patch unreadable: ${it.message}") }.getOrNull()
+        if (providers.isNullOrEmpty()) return
+        val existing = runCatching { if (target.isFile) target.readText() else "" }
+            .getOrDefault("")
+        val merged = DshProfilePatch.ensureProviders(existing, providers)
+        if (merged == existing) {
+            log("[dsh] sdk profile already declares ${providers.joinToString { it.id }}")
+            return
+        }
+        runCatching {
+            target.parentFile?.mkdirs()
+            target.writeText(merged)
+            log("[dsh] sdk profile now declares ${DshConfigParser.llmProviders(merged).joinToString { it.id }}")
+        }.onFailure { log("[dsh] could not update the sdk profile patch: ${it.message}") }
+    }
+
+    private suspend fun installFreePiOnProfile(context: Context, log: (String) -> Unit, profileDir: String): Boolean {
+        if (!guestFile(context, DSH_PATH).let { it.isFile || it.canExecute() }) return false
+        val installed = runGuest(
+            context = context,
+            agent = "dsh",
+            log = log,
+            timeoutSeconds = NPM_INSTALL_TIMEOUT_SECONDS,
+            script = """
+                set -e
+                export PATH=$NODE_HOME/bin:${'$'}PATH
+                export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+                corepack enable pnpm > /dev/null 2>&1 || true
+                if timeout 240 dsh plugin --profile ${profileDir.let { it.substringAfterLast('/') }} add $DSH_FREEPI_PLUGIN; then
+                  echo "plugin added with dsh plugin"
+                elif test -f $profileDir/package.json; then
+                  # pnpm is absent, but the profile already exists: npm writes the
+                  # dependency into the same package.json, so DSH still loads it.
+                  echo "dsh plugin add failed; installing with npm into the profile directory"
+                  npm install --prefix $profileDir --no-audit --no-fund $DSH_FREEPI_PLUGIN
+                else
+                  echo "profile $profileDir is not initialised; skipping plugin"
+                  exit 1
+                fi
+                test -d $profileDir/node_modules/dsh-free-pi-official
+            """.trimIndent(),
+        )
+        if (installed == null) {
+            log("[dsh] free-pi plugin could not be installed (optional; chat works without it)")
+            return false
+        }
+        return true
     }
 
     // ------------------------------------------------------------- hermes

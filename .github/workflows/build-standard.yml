@@ -69,6 +69,14 @@ jobs:
             sleep 20
           done
 
+      - name: DeepSeek Harness unit tests
+        run: |
+          chmod +x gradlew
+          # The proot hard-link rewrite and the SDK wire parser are the two pieces
+          # that fail silently at runtime, so their guards run on every build.
+          ./gradlew --no-daemon :app:testStandardDebugUnitTest \
+            --tests "com.example.gemini.data.agent.dsh.*"
+
       - name: Verify APK signature
         run: |
           set -euo pipefail

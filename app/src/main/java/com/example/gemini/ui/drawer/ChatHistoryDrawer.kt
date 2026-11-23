@@ -844,7 +844,8 @@ fun ChatHistoryDrawer(
                         com.example.gemini.domain.model.AgentKind.AGY to "Antigravity",
                         com.example.gemini.domain.model.AgentKind.CLAUDE to "Claude",
                         com.example.gemini.domain.model.AgentKind.HERMES to "Hermes",
-                        com.example.gemini.domain.model.AgentKind.OPENCODE to "OpenCode"
+                        com.example.gemini.domain.model.AgentKind.OPENCODE to "OpenCode",
+                        com.example.gemini.domain.model.AgentKind.DEEPSEEK_HARNESS to "DeepSeek"
                     ).forEach { (agent, label) ->
                         val selected = agentFilter == agent
                         val accent = agent?.accent() ?: ClaudeTerracotta
@@ -1542,6 +1543,8 @@ private fun ChatHistoryItemRow(
                     com.example.gemini.ui.components.HermesBadge(modifier = Modifier.padding(start = 6.dp))
                 } else if (conv.agent == com.example.gemini.domain.model.AgentKind.OPENCODE) {
                     com.example.gemini.ui.components.OpenCodeBadge(modifier = Modifier.padding(start = 6.dp))
+                } else if (conv.agent == com.example.gemini.domain.model.AgentKind.DEEPSEEK_HARNESS) {
+                    com.example.gemini.ui.components.DshBadge(modifier = Modifier.padding(start = 6.dp))
                 }
                 if (subagents.isNotEmpty()) {
                     Surface(

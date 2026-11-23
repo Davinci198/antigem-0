@@ -2381,6 +2381,116 @@ All files created here persist inside the application.
         }
     }
 
+    /** Scratch dir PRoot binds as the guest `/tmp`; needs to be world-executable. */
+    internal fun prootTmpDir(context: Context): File =
+        File(context.filesDir, "tmp").apply {
+            mkdirs()
+            try { Os.chmod(absolutePath, 511) } catch (_: Exception) {}
+        }
+
+    /**
+     * The PRoot invocation every guest process shares. The bind list is what lets
+     * the guest see the app's `/dev`, `/proc` and `/root/workspace`, so it lives in
+     * one place instead of a copy per caller.
+     */
+    internal fun buildProotInvocation(
+        context: Context,
+        guestArgv: List<String>,
+        guestCwd: String = "/root",
+    ): MutableList<String> {
+        val ubuntuDir = getUbuntuRootDir(context)
+        val homeDir = getHomeDir(context)
+        val prootTmpDir = prootTmpDir(context)
+        val shmDir = File(context.filesDir, "shm").apply {
+            mkdirs()
+            try { Os.chmod(absolutePath, 511) } catch (_: Exception) {}
+        }
+        val cmdList = mutableListOf(
+            getProotBinaryPath(context),
+            "--kill-on-exit",
+            "--link2symlink",
+            "--sysvipc",
+            "--kernel-release=\\Linux\\localhost\\6.1.0\\2026.08\\aarch64\\localdomain\\-1\\",
+            "-L",
+            "--change-id=0:0",
+            "--rootfs=${ubuntuDir.absolutePath}",
+            "--cwd=$guestCwd",
+            "--bind=/dev",
+            "--bind=/proc",
+            "--bind=/sys",
+            "--bind=/dev/urandom:/dev/random",
+            "--bind=${shmDir.absolutePath}:/dev/shm",
+            "--bind=${prootTmpDir.absolutePath}:/tmp"
+        )
+        for ((fakeFile, guestPath) in setupFakeSysdata(context)) {
+            cmdList.add("--bind=${fakeFile.absolutePath}:$guestPath")
+        }
+        listOf(
+            "/apex", "/odm", "/product", "/system", "/system_ext", "/vendor",
+            "/plat_property_contexts", "/property_contexts"
+        ).forEach { hostPath ->
+            if (File(hostPath).exists()) {
+                val destInRootfs = File(ubuntuDir, hostPath.removePrefix("/"))
+                if (File(hostPath).isDirectory) {
+                    destInRootfs.mkdirs()
+                } else {
+                    destInRootfs.parentFile?.mkdirs()
+                    if (!destInRootfs.exists()) {
+                        try { destInRootfs.createNewFile() } catch (_: Exception) {}
+                    }
+                }
+                cmdList.add("-b")
+                cmdList.add(hostPath)
+            }
+        }
+        if (File("/storage").exists() && File("/storage").canRead()) {
+            cmdList.add("-b")
+            cmdList.add("/storage")
+        }
+        if (File("/storage/emulated/0").exists()) {
+            cmdList.add("-b")
+            cmdList.add("/storage/emulated/0:/sdcard")
+        } else if (File("/sdcard").exists()) {
+            cmdList.add("-b")
+            cmdList.add("/sdcard")
+        }
+        cmdList.addAll(listOf("-b", "${homeDir.absolutePath}:/root/workspace", "-w", guestCwd))
+        cmdList.addAll(guestArgv)
+        return cmdList
+    }
+
+    /**
+     * Starts a long-lived guest process with an explicit argv and environment
+     * instead of going through `bash -c` like [executeCommand] does.
+     *
+     * The DeepSeek Harness SDK speaks newline-delimited JSON on its own stdin and
+     * stdout, so it must not inherit a shell that would echo, buffer or wrap its
+     * lines, and the caller needs the pipes rather than a collected string.
+     */
+    internal fun startGuestProcess(
+        context: Context,
+        guestArgv: List<String>,
+        guestCwd: String = "/root",
+        environment: Map<String, String> = emptyMap(),
+    ): Process {
+        val builder = ProcessBuilder(buildProotInvocation(context, guestArgv, guestCwd))
+        builder.environment().apply {
+            put("HOME", "/root")
+            put("USER", "root")
+            put("TERM", "xterm-256color")
+            put("LANG", "C.UTF-8")
+            put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+            put("TMPDIR", "/tmp")
+            put("DEBIAN_FRONTEND", "noninteractive")
+            put("PROOT_LOADER", getProotLoaderPath(context))
+            put("PROOT_TMP_DIR", prootTmpDir(context).absolutePath)
+            put("LD_LIBRARY_PATH", "${context.filesDir.absolutePath}/lib:${context.filesDir.absolutePath}/bin")
+            putAll(environment)
+        }
+        builder.redirectErrorStream(true)
+        return builder.start()
+    }
+
     suspend fun executeCommand(
         command: String,
         context: Context? = null,
@@ -2393,74 +2503,8 @@ All files created here persist inside the application.
         val env = mutableMapOf<String, String>()
 
         if (context != null && !isTermuxPackage(context) && isUbuntuInstalled(context)) {
-            val prootBin = getProotBinaryPath(context)
-            val ubuntuDir = getUbuntuRootDir(context)
-            val homeDir = getHomeDir(context)
-            val prootTmpDir = File(context.filesDir, "tmp").apply {
-                mkdirs()
-                try { Os.chmod(absolutePath, 511) } catch (_: Exception) {}
-            }
-            val shmDir = File(context.filesDir, "shm").apply {
-                mkdirs()
-                try { Os.chmod(absolutePath, 511) } catch (_: Exception) {}
-            }
-            val sysdataBindings = setupFakeSysdata(context)
-            val cmdList = mutableListOf(
-                prootBin,
-                "--kill-on-exit",
-                "--link2symlink",
-                "--sysvipc",
-                "--kernel-release=\\Linux\\localhost\\6.1.0\\2026.08\\aarch64\\localdomain\\-1\\",
-                "-L",
-                "--change-id=0:0",
-                "--rootfs=${ubuntuDir.absolutePath}",
-                "--cwd=/root",
-                "--bind=/dev",
-                "--bind=/proc",
-                "--bind=/sys",
-                "--bind=/dev/urandom:/dev/random",
-                "--bind=${shmDir.absolutePath}:/dev/shm",
-                "--bind=${prootTmpDir.absolutePath}:/tmp"
-            )
-            for ((fakeFile, guestPath) in sysdataBindings) {
-                cmdList.add("--bind=${fakeFile.absolutePath}:$guestPath")
-            }
-            listOf(
-                "/apex", "/odm", "/product", "/system", "/system_ext", "/vendor",
-                "/plat_property_contexts", "/property_contexts"
-            ).forEach { hostPath ->
-                if (File(hostPath).exists()) {
-                    val destInRootfs = File(ubuntuDir, hostPath.removePrefix("/"))
-                    if (File(hostPath).isDirectory) {
-                        destInRootfs.mkdirs()
-                    } else {
-                        destInRootfs.parentFile?.mkdirs()
-                        if (!destInRootfs.exists()) {
-                            try { destInRootfs.createNewFile() } catch (_: Exception) {}
-                        }
-                    }
-                    cmdList.add("-b")
-                    cmdList.add(hostPath)
-                }
-            }
-            if (File("/storage").exists() && File("/storage").canRead()) {
-                cmdList.add("-b")
-                cmdList.add("/storage")
-            }
-            if (File("/storage/emulated/0").exists()) {
-                cmdList.add("-b")
-                cmdList.add("/storage/emulated/0:/sdcard")
-            } else if (File("/sdcard").exists()) {
-                cmdList.add("-b")
-                cmdList.add("/sdcard")
-            }
-            cmdList.addAll(
-                listOf(
-                    "-b", "${homeDir.absolutePath}:/root/workspace",
-                    "-w", "/root",
-                    "/bin/bash", "-c", command
-                )
-            )
+            val prootTmpDir = prootTmpDir(context)
+            val cmdList = buildProotInvocation(context, listOf("/bin/bash", "-c", command))
             val processBuilder = ProcessBuilder(cmdList)
             processBuilder.environment()["HOME"] = "/root"
             processBuilder.environment()["USER"] = "root"

@@ -95,6 +95,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val openCodePrefs = com.example.gemini.data.agent.opencode.OpenCodePreferences(application)
     val openCodeBackend = com.example.gemini.data.agent.opencode.OpenCodeChatBackend(application, viewModelScope, store, openCodePrefs)
 
+    /**
+     * DeepSeek Harness: one `dsh --profile sdk` session per turn, either in the container
+     * (ProotDshHost) or owned by the bridge (BridgeDshHost) — see [DshHost].
+     */
+    val dshPrefs = com.example.gemini.data.agent.dsh.DshPreferences(application)
+    val dshBackend = com.example.gemini.data.agent.dsh.DshChatBackend(application, viewModelScope, store, dshPrefs)
+
     /** Agent of the conversation on screen; chat actions go to that agent's backend. */
     val activeAgent: StateFlow<AgentKind> = store.currentConversation
         .map { it?.agent ?: AgentKind.AGY }
@@ -103,6 +110,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val isClaudeActive get() = store.currentConversation.value?.agent == AgentKind.CLAUDE
     private val isHermesActive get() = store.currentConversation.value?.agent == AgentKind.HERMES
     private val isOpenCodeActive get() = store.currentConversation.value?.agent == AgentKind.OPENCODE
+    private val isDshActive get() = store.currentConversation.value?.agent == AgentKind.DEEPSEEK_HARNESS
 
     /** Agent used for new chats, picked on the empty chat screen (remembered). */
     val newChatAgent: StateFlow<AgentKind> = claudePrefs.newChatAgent
@@ -119,6 +127,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val isClaudeEnabled get() = AgentKind.CLAUDE in enabledAgents.value
     private val isOpenCodeEnabled get() = AgentKind.OPENCODE in enabledAgents.value
+    private val isDshEnabled get() = AgentKind.DEEPSEEK_HARNESS in enabledAgents.value
 
     /**
      * Applies an agent selection: saves it, starts / stops Claude Code and OpenCode in the app, leaves a chat of a
@@ -138,6 +147,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             claudeBackend.stop()
         }
         if (AgentKind.OPENCODE in agents) openCodeBackend.start() else openCodeBackend.stop()
+        if (AgentKind.DEEPSEEK_HARNESS in agents) dshBackend.start() else dshBackend.stop()
         // Hermes needs no start/stop — it's always-on (bridge manages the process)
         if (AgentKind.HERMES in agents) hermesBackend.restoreSessions()
         val cur = store.currentConversation.value
@@ -177,18 +187,31 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         agy: StateFlow<T>,
         claude: StateFlow<T>,
         hermes: StateFlow<T>,
-        openCode: StateFlow<T>
-    ): StateFlow<T> =
-        combine(
-            store.currentConversation, agy, claude, hermes, openCode
-        ) { conv, a, c, h, o ->
-            when (conv?.agent) {
-                AgentKind.CLAUDE -> c
-                AgentKind.HERMES -> h
-                AgentKind.OPENCODE -> o
-                else -> a
+        openCode: StateFlow<T>,
+        dsh: StateFlow<T> = agy
+    ): StateFlow<T> {
+        @Suppress("UNCHECKED_CAST")
+        val flows = listOf<kotlinx.coroutines.flow.Flow<Any?>>(
+            store.currentConversation as kotlinx.coroutines.flow.Flow<Any?>,
+            agy as kotlinx.coroutines.flow.Flow<Any?>,
+            claude as kotlinx.coroutines.flow.Flow<Any?>,
+            hermes as kotlinx.coroutines.flow.Flow<Any?>,
+            openCode as kotlinx.coroutines.flow.Flow<Any?>,
+            dsh as kotlinx.coroutines.flow.Flow<Any?>,
+        )
+        return combine(flows) { values ->
+            val conversation = values[0] as Conversation?
+            val index = when (conversation?.agent) {
+                AgentKind.CLAUDE -> 2
+                AgentKind.HERMES -> 3
+                AgentKind.OPENCODE -> 4
+                AgentKind.DEEPSEEK_HARNESS -> 5
+                else -> 1
             }
+            @Suppress("UNCHECKED_CAST")
+            values[index] as T
         }.stateIn(viewModelScope, SharingStarted.Eagerly, agy.value)
+    }
 
     private fun isoUtc(epochSeconds: Long): String =
         java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
@@ -225,12 +248,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val isConversationsLoading = agyBackend.isConversationsLoading
     val artifacts = agyBackend.artifacts
     val pendingApprovals = agyBackend.pendingApprovals
-    val isStreaming = byAgent(agyBackend.isStreaming, claudeBackend.isStreaming, hermesBackend.isStreaming, openCodeBackend.isStreaming)
-    val availableModels = byAgent(agyBackend.availableModels, claudeBackend.availableModels, agyBackend.availableModels, openCodeBackend.availableModels)
+    val isStreaming = byAgent(agyBackend.isStreaming, claudeBackend.isStreaming, hermesBackend.isStreaming, openCodeBackend.isStreaming, dshBackend.isStreaming)
+    val availableModels = byAgent(agyBackend.availableModels, claudeBackend.availableModels, agyBackend.availableModels, openCodeBackend.availableModels, dshBackend.availableModels)
     val enabledModelIds = agyBackend.enabledModelIds
-    val enabledModels = byAgent(agyBackend.enabledModels, claudeBackend.availableModels, agyBackend.enabledModels, openCodeBackend.availableModels)
-    val isRefreshingModels = byAgent(agyBackend.isRefreshingModels, claudeBackend.isRefreshingModels, agyBackend.isRefreshingModels, openCodeBackend.isRefreshingModels)
-    val selectedModelId = byAgent(agyBackend.selectedModelId, claudeBackend.selectedModelId, agyBackend.selectedModelId, openCodeBackend.selectedModelId)
+    val enabledModels = byAgent(agyBackend.enabledModels, claudeBackend.availableModels, agyBackend.enabledModels, openCodeBackend.availableModels, dshBackend.availableModels)
+    val isRefreshingModels = byAgent(agyBackend.isRefreshingModels, claudeBackend.isRefreshingModels, agyBackend.isRefreshingModels, openCodeBackend.isRefreshingModels, alwaysFalse)
+    val selectedModelId = byAgent(agyBackend.selectedModelId, claudeBackend.selectedModelId, agyBackend.selectedModelId, openCodeBackend.selectedModelId, dshBackend.selectedModelId)
     val preferredModelName = agyBackend.preferredModelName
     /** Claude's plan windows as the model pill's quota (remaining share of the 5-hour and weekly limits). */
     private val claudeQuotas: StateFlow<List<ModelQuota>> =
@@ -252,9 +275,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-    val quotas = byAgent(agyBackend.quotas, claudeQuotas, agyBackend.quotas, noQuotas)
+    val quotas = byAgent(agyBackend.quotas, claudeQuotas, agyBackend.quotas, noQuotas, noQuotas)
     val quotaSummary = agyBackend.quotaSummary
-    val isLoadingConversation = byAgent(agyBackend.isLoadingConversation, claudeBackend.isLoadingConversation, hermesBackend.isLoadingConversation, openCodeBackend.isLoadingConversation)
+    val isLoadingConversation = byAgent(agyBackend.isLoadingConversation, claudeBackend.isLoadingConversation, hermesBackend.isLoadingConversation, openCodeBackend.isLoadingConversation, dshBackend.isLoadingConversation)
     fun setModelEnabled(modelId: String, isEnabled: Boolean) = agyBackend.setModelEnabled(modelId, isEnabled)
     fun enableAllModels() = agyBackend.enableAllModels()
     val bridgeStatusMessage = agyBackend.bridgeStatusMessage
@@ -284,8 +307,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun saveCurrentAgyAccount() = agyBackend.saveCurrentAgyAccount()
     val activeInstances = agyBackend.activeInstances
     val isAnyGenerationOrTaskActive = agyBackend.isAnyGenerationOrTaskActive
-    val isCurrentChatActivelyRunning = byAgent(agyBackend.isCurrentChatActivelyRunning, claudeBackend.isCurrentChatActivelyRunning, agyBackend.isCurrentChatActivelyRunning, openCodeBackend.isCurrentChatActivelyRunning)
-    val isCurrentChatBackgroundActive = byAgent(agyBackend.isCurrentChatBackgroundActive, alwaysFalse, alwaysFalse, alwaysFalse)
+    val isCurrentChatActivelyRunning = byAgent(agyBackend.isCurrentChatActivelyRunning, claudeBackend.isCurrentChatActivelyRunning, agyBackend.isCurrentChatActivelyRunning, openCodeBackend.isCurrentChatActivelyRunning, dshBackend.isCurrentChatActivelyRunning)
+    val isCurrentChatBackgroundActive = byAgent(agyBackend.isCurrentChatBackgroundActive, alwaysFalse, alwaysFalse, alwaysFalse, alwaysFalse)
     val connectionState = agyBackend.connectionState
     fun refreshActiveInstances() = agyBackend.refreshActiveInstances()
     fun terminateInstance(conversationId: String) = agyBackend.terminateInstance(conversationId)
@@ -295,6 +318,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (isClaudeActive) claudeBackend.retryConnections()
         if (isHermesActive) hermesBackend.retryConnections()
         if (isOpenCodeEnabled) openCodeBackend.retryConnections()
+        if (isDshEnabled) dshBackend.retryConnections()
     }
     fun onAppForegrounded() {
         agyBackend.onAppForegrounded()
@@ -305,6 +329,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (AgentKind.HERMES in enabledAgents.value) hermesBackend.onAppForegrounded()
         if (isOpenCodeEnabled) openCodeBackend.onAppForegrounded()
+        if (isDshEnabled) dshBackend.onAppForegrounded()
     }
     fun onProjectChanged(projectPath: String) = agyBackend.onProjectChanged(projectPath)
     fun onUserStartedTyping() = agyBackend.onUserStartedTyping()
@@ -317,6 +342,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             else if (AgentKind.CLAUDE in enabledAgents.value) AgentKind.CLAUDE
             else if (AgentKind.HERMES in enabledAgents.value) AgentKind.HERMES
             else if (AgentKind.OPENCODE in enabledAgents.value) AgentKind.OPENCODE
+            else if (AgentKind.DEEPSEEK_HARNESS in enabledAgents.value) AgentKind.DEEPSEEK_HARNESS
             else AgentKind.AGY
 
     /**
@@ -329,6 +355,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         claudeBackend.detach()
         hermesBackend.detach()
         openCodeBackend.detach()
+        dshBackend.detach()
         store.currentConversation.value = null
         store.messages.value = emptyList()
     }
@@ -352,12 +379,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 agyBackend.detach()
                 claudeBackend.detach()
                 hermesBackend.detach()
+                dshBackend.detach()
                 openCodeBackend.startNewChat()
+            }
+            AgentKind.DEEPSEEK_HARNESS -> {
+                agyBackend.detach()
+                claudeBackend.detach()
+                hermesBackend.detach()
+                openCodeBackend.detach()
+                dshBackend.startNewChat()
             }
             else -> {
                 claudeBackend.detach()
                 hermesBackend.detach()
                 openCodeBackend.detach()
+                dshBackend.detach()
                 agyBackend.startNewChat()
             }
         }
@@ -380,12 +416,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 agyBackend.detach()
                 claudeBackend.detach()
                 hermesBackend.detach()
+                dshBackend.detach()
                 openCodeBackend.selectConversation(id)
+            }
+            AgentKind.DEEPSEEK_HARNESS -> {
+                agyBackend.detach()
+                claudeBackend.detach()
+                hermesBackend.detach()
+                openCodeBackend.detach()
+                dshBackend.selectConversation(id)
             }
             else -> {
                 claudeBackend.detach()
                 hermesBackend.detach()
                 openCodeBackend.detach()
+                dshBackend.detach()
                 agyBackend.selectConversation(id)
             }
         }
@@ -395,6 +440,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         AgentKind.CLAUDE -> claudeBackend.deleteConversation(id)
         AgentKind.HERMES -> hermesBackend.deleteConversation(id)
         AgentKind.OPENCODE -> openCodeBackend.deleteConversation(id)
+        AgentKind.DEEPSEEK_HARNESS -> dshBackend.deleteConversation(id)
         else -> agyBackend.deleteConversation(id)
     }
     fun forkConversation(id: String) {
@@ -415,10 +461,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 agyBackend.detach()
                 claudeBackend.detach()
                 hermesBackend.detach()
+                dshBackend.detach()
                 openCodeBackend.forkConversation(id)
+            }
+            AgentKind.DEEPSEEK_HARNESS -> {
+                agyBackend.detach()
+                claudeBackend.detach()
+                hermesBackend.detach()
+                openCodeBackend.detach()
+                dshBackend.forkConversation(id)
             }
             else -> {
                 openCodeBackend.detach()
+                dshBackend.detach()
                 agyBackend.forkConversation(id)
             }
         }
@@ -426,6 +481,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun selectModel(modelId: String) = when {
         isOpenCodeActive -> openCodeBackend.selectModel(modelId)
         isClaudeActive -> claudeBackend.selectModel(modelId)
+        isDshActive -> dshBackend.selectModel(modelId)
         else -> agyBackend.selectModel(modelId)
     }
     /** Texts typed on the start screen before its chat exists (Hermes opens one in its own coroutine). */
@@ -474,6 +530,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             AgentKind.HERMES -> hermesBackend.sendMessage(text)
             AgentKind.CLAUDE -> claudeBackend.sendMessage(text)
             AgentKind.OPENCODE -> openCodeBackend.sendMessage(text)
+            AgentKind.DEEPSEEK_HARNESS -> dshBackend.sendMessage(text)
             else -> agyBackend.sendMessage(text)
         }
     }
@@ -518,6 +575,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             AgentKind.CLAUDE -> claudeBackend.loadMessages(conversationId)
             AgentKind.OPENCODE -> openCodeBackend.loadMessages(conversationId)
             AgentKind.HERMES -> hermesBackend.loadMessages(conversationId)
+            AgentKind.DEEPSEEK_HARNESS -> dshBackend.loadMessages(conversationId)
             else -> {
                 val steps = agyHubClient.getCascadeTrajectorySteps(conversationId).getOrElse {
                     throw IllegalStateException(it.message ?: "the hub did not return the chat")
@@ -610,11 +668,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // AGY titles live in the hub's annotations and are set through the chat itself; this fork's AGY backend has no rename call
         if (agentOf(id) == AgentKind.CLAUDE) claudeBackend.renameConversation(id, title)
         else if (agentOf(id) == AgentKind.OPENCODE) openCodeBackend.renameConversation(id, title)
+        else if (agentOf(id) == AgentKind.DEEPSEEK_HARNESS) dshBackend.renameConversation(id, title)
     }
     fun stopStreaming() = when {
         isHermesActive -> hermesBackend.stopStreaming()
         isClaudeActive -> claudeBackend.stopStreaming()
         isOpenCodeActive -> openCodeBackend.stopStreaming()
+        isDshActive -> dshBackend.stopStreaming()
         else -> agyBackend.stopStreaming()
     }
     fun applyQuotaSummary(summary: com.example.gemini.domain.model.QuotaSummaryResponse) = agyBackend.applyQuotaSummary(summary)
@@ -718,17 +778,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     private val _conversations = store.conversations
-    /** Sidebar list: Antigravity, Claude Code, Hermes and OpenCode conversations together, newest first. */
+    /** Sidebar list: Antigravity, Claude Code, Hermes, OpenCode and DeepSeek Harness conversations together, newest first. */
     val conversations: StateFlow<List<Conversation>> = combine(
-        _conversations, claudeBackend.conversations, hermesBackend.conversations, openCodeBackend.conversations,
+        combine(
+            _conversations,
+            claudeBackend.conversations,
+            hermesBackend.conversations,
+            openCodeBackend.conversations,
+            dshBackend.conversations,
+        ) { agy, claude, hermes, openCode, dsh -> agy + claude + hermes + openCode + dsh },
         enabledAgents
-    ) { agy, claude, hermes, openCode, enabled ->
+    ) { all, enabled ->
         // a disabled agent's chats stay on disk but are not listed
-        ((if (AgentKind.AGY in enabled) agy else emptyList()) +
-         (if (AgentKind.CLAUDE in enabled) claude else emptyList()) +
-         (if (AgentKind.HERMES in enabled) hermes else emptyList()) +
-         (if (AgentKind.OPENCODE in enabled) openCode else emptyList()))
-            .sortedByDescending { it.updatedAt }
+        all.filter { it.agent in enabled }.sortedByDescending { it.updatedAt }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _currentConversation = store.currentConversation
@@ -756,7 +818,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /** Antigravity's chat state (shared store); Claude Code keeps its own, see [messages]. */
     private val _messages = store.messages
     /** Messages of the chat on screen, from the agent that owns it. */
-    val messages: StateFlow<List<ChatMessage>> = byAgent(_messages, claudeBackend.messages, hermesBackend.messages, openCodeBackend.messages)
+    val messages: StateFlow<List<ChatMessage>> = byAgent(_messages, claudeBackend.messages, hermesBackend.messages, openCodeBackend.messages, dshBackend.messages)
 
     private val _thinkingPreference = MutableStateFlow(com.example.gemini.domain.model.ThinkingPreference())
     val thinkingPreference: StateFlow<com.example.gemini.domain.model.ThinkingPreference> = _thinkingPreference.asStateFlow()

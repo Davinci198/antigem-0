@@ -1,0 +1,46 @@
+/* ============================================================
+   dsh-mobile styles — dsh 0.2.x (data-sidebar-* drawer)
+
+   The 0.2.x web UI is responsive on its own: measured at 443px wide, the frame grid is
+   `0px / minmax(0,1fr) / 0px`, the sidebar collapses into an overlay drawer and the mask is
+   its own [data-sidebar-mask]. So there is no reason to invent another sidebar interaction —
+   the old mobile.css approach (turning _sidebarCol into a fixed drawer and painting a mask)
+   only hurts on the new DOM: it decided the sidebar state from the _collapsed class, which
+   0.2.x never emits, so it always read "expanded", the mask stayed over the whole screen and
+   no tap got through.
+
+   Only a few fallbacks that do not depend on the new DOM class names are kept here.
+   ============================================================ */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  touch-action: manipulation;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Decorative elements and images must not drag outside the viewport and cause horizontal scrolling */
+img, video, canvas, svg {
+  max-width: 100vw;
+}
+
+/* The frame fills at least one screen, so the composer bar does not float at some heights */
+[data-sidebar-drawer] {
+  min-height: 100dvh;
+}
+
+/* Elements we injected for the old DOM (only it had them) must not show up in the new one;
+   this also pins them down if an old cached script ever replays them */
+#dsh-mobile-drawer-mask,
+#dsh-mobile-railbtn {
+  display: none !important;
+}

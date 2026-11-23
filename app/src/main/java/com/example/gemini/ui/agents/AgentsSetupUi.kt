@@ -69,7 +69,8 @@ private val AGENT_INFO = listOf(
     AgentInfo(AgentKind.AGY, "Antigravity", "Google's coding agent through the agy hub: Gemini and Claude models on your Google plan."),
     AgentInfo(AgentKind.CLAUDE, "Claude Code", "Anthropic's Claude Code CLI on this device: your Claude subscription or Anthropic Console account."),
     AgentInfo(AgentKind.HERMES, "Hermes Agent", "Nous Research's autonomous agent with local toolset, skills, and persistent memory."),
-    AgentInfo(AgentKind.OPENCODE, "OpenCode", "Open-source coding agent: 200+ providers with your own keys, any OpenAI-compatible API, and free models.")
+    AgentInfo(AgentKind.OPENCODE, "OpenCode", "Open-source coding agent: 200+ providers with your own keys, any OpenAI-compatible API, and free models."),
+    AgentInfo(AgentKind.DEEPSEEK_HARNESS, "DeepSeek Harness", "DeepSeek's own coding harness: a session SDK with tool calls, plans and approvals, installed as an npm payload in the container.")
 )
 
 /** One independent on/off switch per agent; at least one agent always stays on. */
