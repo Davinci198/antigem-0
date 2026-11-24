@@ -67,6 +67,9 @@ private object DshWebRetained {
     /** URL plus reload counter: a changed counter means the token has to be re-read. */
     private var webKey: String? = null
 
+    /** The retained page, so the screen can pause it while it is out of sight. */
+    fun page(): WebView? = webView
+
     fun attach(context: Context, url: String, key: String, onAuthPage: () -> Unit): WebView {
         val existing = webView
         if (existing != null && webKey == key) {
@@ -160,7 +163,7 @@ fun DshWebScreen(
     // chat runs its timers and animations forever and eats the phone alive (the chat stopped
     // answering because of it), so pausing costs nothing and restoring is still instant.
     DisposableEffect(isVisible) {
-        val page = DshWebRetained.webView
+        val page = DshWebRetained.page()
         if (isVisible) {
             page?.onResume()
             page?.resumeTimers()
