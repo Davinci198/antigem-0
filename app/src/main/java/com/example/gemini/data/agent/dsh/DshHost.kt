@@ -327,8 +327,15 @@ internal class ProcessDshSession(
     }
 
     override suspend fun send(line: String) = withContext(Dispatchers.IO) {
+        // The frame type is enough to follow a turn end to end in logcat; the payload can
+        // carry the prompt and a key, so it never reaches the log.
+        val method = runCatching {
+            org.json.JSONObject(line).optString("method", "")
+        }.getOrDefault("")
+        val start = System.currentTimeMillis()
         process.outputStream.write((line + "\n").toByteArray(Charsets.UTF_8))
         process.outputStream.flush()
+        Log.i(TAG, "sent $method in ${System.currentTimeMillis() - start} ms (alive=${process.isAlive})")
     }
 
     override suspend fun close() = withContext(Dispatchers.IO) {

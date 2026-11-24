@@ -156,9 +156,24 @@ fun DshWebScreen(
 
     // Leaving the screen keeps the process and the page alive on purpose: the view state is
     // kept by [DshWebRetained], so switching to the chat and back does not boot the GUI again.
+    // The page itself is paused while it is out of sight: a harness GUI left rendering behind the
+    // chat runs its timers and animations forever and eats the phone alive (the chat stopped
+    // answering because of it), so pausing costs nothing and restoring is still instant.
     DisposableEffect(isVisible) {
+        val page = DshWebRetained.webView
+        if (isVisible) {
+            page?.onResume()
+            page?.resumeTimers()
+        } else {
+            page?.onPause()
+            page?.pauseTimers()
+        }
         onDispose {
             startFailed = false
+            if (!isVisible) {
+                page?.onPause()
+                page?.pauseTimers()
+            }
         }
     }
 

@@ -9,7 +9,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
@@ -453,12 +452,10 @@ class MainActivity : ComponentActivity() {
                                         color = MaterialTheme.colorScheme.secondaryContainer,
                                         shadowElevation = 6.dp,
                                         modifier = Modifier
-                                            // Edge handle, not a floating pill over the composer: the
-                                            // chat input sits at the bottom right and the pill landed on
-                                            // top of it. Half off-screen keeps it out of the way of the
-                                            // message list too.
-                                            .align(Alignment.CenterEnd)
-                                            .offset(x = 6.dp)
+                                            // Back at the bottom where he expects it. Kept clear of the
+                                            // composer by sitting above the input row instead of on it.
+                                            .align(Alignment.BottomEnd)
+                                            .padding(end = 12.dp, bottom = 132.dp)
                                     ) {
                                         Row(
                                             modifier = Modifier.padding(start = 10.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
