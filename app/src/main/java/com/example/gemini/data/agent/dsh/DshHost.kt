@@ -152,9 +152,18 @@ class ProotDshHost(
             environment[keyEnv] = request.route.apiKey.ifBlank { KEYLESS_PLACEHOLDER }
         }
 
+        // One SDK process at a time. A turn that dies without closing its session (a
+        // timeout, a cancelled turn, a route change) leaves a node process that keeps
+        // burning CPU and memory next to the new one; two of them make the phone slow
+        // enough that answers take minutes. The spawn reaps every leftover first, which
+        // is safe because a warm session that still matters is reused instead of spawned.
         val process = LocalEnvironmentManager.startGuestProcess(
             context = context,
-            guestArgv = listOf(DshGuestPaths.DSH_BIN, "--profile", "sdk"),
+            guestArgv = listOf(
+                "/bin/sh",
+                "-c",
+                "pkill -f 'dsh --profile sdk' >/dev/null 2>&1; exec ${DshGuestPaths.DSH_BIN} --profile sdk",
+            ),
             guestCwd = request.workspace,
             environment = environment,
         )
