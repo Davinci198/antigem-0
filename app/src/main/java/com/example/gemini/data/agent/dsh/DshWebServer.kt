@@ -15,7 +15,6 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
-import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 
@@ -132,48 +131,6 @@ object DshWebServer {
     /** True while a web profile is alive, so the screen can show its state. */
     fun isRunning(): Boolean = synchronized(lock) { current?.isAlive == true }
 
-    /**
-     * Mints the session cookie the harness' GUI needs, from this process.
-     *
-     * The harness answers `GET /?token=<launch token>` with a 303 to `./` and the
-     * signed browser-session cookie; anything else gets the minimal 401 page. The
-     * cookie cannot be handed to Chrome directly — it is `SameSite=Strict`, and
-     * Chromium refuses to store such a cookie when the navigation starts in another
-     * app — so it is returned here and used by [HarnessBrowserProxy] instead.
-     *
-     * @returns the `name=value` cookie pair, or null when [url] is not authenticated.
-     */
-    fun mintBrowserSession(url: String): String? {
-        val connection = try {
-            (URL(url).openConnection() as HttpURLConnection)
-        } catch (e: Exception) {
-            Log.w(TAG, "cannot reach $url: ${e.message}")
-            return null
-        }
-        return try {
-            connection.instanceFollowRedirects = false
-            connection.connectTimeout = 5_000
-            connection.readTimeout = 5_000
-            connection.requestMethod = "GET"
-            val status = connection.responseCode
-            val setCookie = connection.headerFields["Set-Cookie"]?.firstOrNull()
-            val pair = setCookie?.substringBefore(';')?.trim()
-            if (status != 303 || pair.isNullOrBlank()) {
-                Log.w(TAG, "launch URL answered $status without a session cookie")
-                null
-            } else {
-                pair
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "minting a session for $url failed: ${e.message}")
-            null
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    /** Port of an advertised harness URL, or 0 when it cannot be read. */
-    fun portOf(url: String): Int = runCatching { URI(url).port }.getOrDefault(0)
 
     private fun startLocked(context: Context, log: (String) -> Unit): DshWebServerInstance? {
         if (!available(context)) {

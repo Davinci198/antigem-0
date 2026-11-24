@@ -7,13 +7,11 @@ import android.os.Message
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.*
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,12 +28,10 @@ import com.example.gemini.R
 import com.example.gemini.data.agent.dsh.DshUiInjector
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
-import com.example.gemini.data.agent.dsh.HarnessBrowserProxy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val TAG = "DshWebScreen"
@@ -118,10 +114,6 @@ fun DshWebScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    // A harness that is already serving is attached to immediately, not after another trip
-    // through the start effect: a cold boot takes up to a minute and that wait belongs to the
-    // first visit only.
     var instance by remember { mutableStateOf(DshWebRetained.instance?.takeIf { it.isAlive }) }
     var startFailed by remember { mutableStateOf(false) }
     var restartRequested by remember { mutableIntStateOf(0) }
@@ -254,55 +246,6 @@ fun DshWebScreen(
                         .weight(1f)
                         .padding(start = 12.dp)
                 )
-                IconButton(onClick = {
-                    // Same page, opened in the phone's browser. The launch URL is checked
-                    // from this process first: Chrome shows the harness 401 page as if it
-                    // were the harness, so a URL that no longer mints a session cookie must
-                    // not be opened at all.
-                    val target = url
-                    if (target == null) {
-                        Log.w(TAG, "no harness URL yet; not opening the browser")
-                        Toast.makeText(
-                            context,
-                            R.string.dsh_web_not_ready,
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    } else {
-                        scope.launch {
-                            val cookie = withContext(Dispatchers.IO) {
-                                DshWebServer.mintBrowserSession(target)
-                            }
-                            val guestPort = DshWebServer.portOf(target)
-                            val proxyPort = if (cookie != null && guestPort > 0) {
-                                withContext(Dispatchers.IO) {
-                                    HarnessBrowserProxy.ensure(guestPort, cookie)
-                                }
-                            } else 0
-                            if (proxyPort == 0) {
-                                Log.w(TAG, "the advertised URL does not authenticate; asking for a new one")
-                                restartRequested++
-                                return@launch
-                            }
-                            // The browser gets a clean URL with no token: the proxy adds the
-                            // session cookie, which Chrome would refuse to store itself.
-                            val browserUrl = "http://127.0.0.1:$proxyPort/"
-                            Log.i(TAG, "opening $browserUrl in the phone's browser")
-                            val opened = runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(browserUrl))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
-                            }.isSuccess
-                            if (!opened) Log.w(TAG, "no browser to open $browserUrl")
-                        }
-                    }
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.OpenInNew,
-                        contentDescription = stringResource(R.string.dsh_web_open_browser),
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                }
                 IconButton(onClick = onMinimize) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
