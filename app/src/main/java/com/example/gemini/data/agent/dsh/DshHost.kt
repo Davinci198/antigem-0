@@ -125,6 +125,9 @@ class ProotDshHost(
 
     override val kind = DshHostKind.PROOT
 
+    /** Sessions this host still has open. The chat keeps one at a time. */
+    private val open = java.util.Collections.synchronizedList(mutableListOf<DshSession>())
+
     override suspend fun available(): Boolean = withContext(Dispatchers.IO) {
         val rootfs = LocalEnvironmentManager.getUbuntuRootDir(context)
         File(rootfs, DshGuestPaths.DSH_PAYLOAD).let { it.isFile || it.canExecute() } &&
@@ -152,23 +155,26 @@ class ProotDshHost(
             environment[keyEnv] = request.route.apiKey.ifBlank { KEYLESS_PLACEHOLDER }
         }
 
-        // One SDK process at a time. A turn that dies without closing its session (a
-        // timeout, a cancelled turn, a route change) leaves a node process that keeps
-        // burning CPU and memory next to the new one; two of them make the phone slow
-        // enough that answers take minutes. The spawn reaps every leftover first, which
-        // is safe because a warm session that still matters is reused instead of spawned.
+        // One chat session at a time. A turn that dies without closing its session (a timeout, a
+        // cancelled turn, a route change) leaves a process behind, and every later spawn added
+        // another: three of them drove the load average past 4 and a turn that used to take 6 s
+        // took minutes. Reaping here, by identity, keeps the harness web GUI's own children safe,
+        // which a `pkill -f 'dsh --profile sdk'` inside the guest would not.
+        val reaped = synchronized(open) {
+            val stale = open.toList()
+            open.clear()
+            stale
+        }
+        reaped.forEach { runCatching { it.close() } }
+        if (reaped.isNotEmpty()) Log.i(TAG, "reaped ${reaped.size} leftover sdk session(s) before spawning")
         val process = LocalEnvironmentManager.startGuestProcess(
             context = context,
-            guestArgv = listOf(
-                "/bin/sh",
-                "-c",
-                "pkill -f 'dsh --profile sdk' >/dev/null 2>&1; exec ${DshGuestPaths.DSH_BIN} --profile sdk",
-            ),
+            guestArgv = listOf(DshGuestPaths.DSH_BIN, "--profile", "sdk"),
             guestCwd = request.workspace,
             environment = environment,
         )
         Log.i(TAG, "dsh sdk spawned for ${request.workspace}")
-        ProcessDshSession(process, scope)
+        ProcessDshSession(process, scope).also { synchronized(open) { open.add(it) } }
     }
 
     /**
