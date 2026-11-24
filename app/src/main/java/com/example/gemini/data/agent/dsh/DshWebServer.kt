@@ -133,20 +133,22 @@ object DshWebServer {
     fun isRunning(): Boolean = synchronized(lock) { current?.isAlive == true }
 
     /**
-     * Checks whether [url] still authenticates, from this process, before it is handed to
-     * another app.
+     * Mints the session cookie the harness' GUI needs, from this process.
      *
-     * The harness answers a `GET /?token=<launch token>` with a 303 to `./` and the signed
-     * session cookie; a token from a harness that has since restarted (or any URL rebuilt by
-     * hand) gets the minimal 401 page instead. Chrome cannot tell the two apart before the
-     * user sees the page, so the app asks first and only opens a URL that minted a cookie.
+     * The harness answers `GET /?token=<launch token>` with a 303 to `./` and the
+     * signed browser-session cookie; anything else gets the minimal 401 page. The
+     * cookie cannot be handed to Chrome directly — it is `SameSite=Strict`, and
+     * Chromium refuses to store such a cookie when the navigation starts in another
+     * app — so it is returned here and used by [HarnessBrowserProxy] instead.
+     *
+     * @returns the `name=value` cookie pair, or null when [url] is not authenticated.
      */
-    fun probeLaunchUrl(url: String): Boolean {
+    fun mintBrowserSession(url: String): String? {
         val connection = try {
             (URL(url).openConnection() as HttpURLConnection)
         } catch (e: Exception) {
-            Log.w(TAG, "cannot probe $url: ${e.message}")
-            return false
+            Log.w(TAG, "cannot reach $url: ${e.message}")
+            return null
         }
         return try {
             connection.instanceFollowRedirects = false
@@ -154,17 +156,24 @@ object DshWebServer {
             connection.readTimeout = 5_000
             connection.requestMethod = "GET"
             val status = connection.responseCode
-            val cookie = connection.headerFields["Set-Cookie"]?.firstOrNull()
-            val accepted = status == 303 && !cookie.isNullOrBlank()
-            if (!accepted) Log.w(TAG, "launch URL answered $status without a session cookie")
-            accepted
+            val setCookie = connection.headerFields["Set-Cookie"]?.firstOrNull()
+            val pair = setCookie?.substringBefore(';')?.trim()
+            if (status != 303 || pair.isNullOrBlank()) {
+                Log.w(TAG, "launch URL answered $status without a session cookie")
+                null
+            } else {
+                pair
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "probe of $url failed: ${e.message}")
-            false
+            Log.w(TAG, "minting a session for $url failed: ${e.message}")
+            null
         } finally {
             connection.disconnect()
         }
     }
+
+    /** Port of an advertised harness URL, or 0 when it cannot be read. */
+    fun portOf(url: String): Int = runCatching { URI(url).port }.getOrDefault(0)
 
     private fun startLocked(context: Context, log: (String) -> Unit): DshWebServerInstance? {
         if (!available(context)) {

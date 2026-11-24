@@ -30,6 +30,7 @@ import com.example.gemini.R
 import com.example.gemini.data.agent.dsh.DshUiInjector
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
+import com.example.gemini.data.agent.dsh.HarnessBrowserProxy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -268,21 +269,31 @@ fun DshWebScreen(
                         ).show()
                     } else {
                         scope.launch {
-                            val usable = withContext(Dispatchers.IO) {
-                                DshWebServer.probeLaunchUrl(target)
+                            val cookie = withContext(Dispatchers.IO) {
+                                DshWebServer.mintBrowserSession(target)
                             }
-                            if (!usable) {
+                            val guestPort = DshWebServer.portOf(target)
+                            val proxyPort = if (cookie != null && guestPort > 0) {
+                                withContext(Dispatchers.IO) {
+                                    HarnessBrowserProxy.ensure(guestPort, cookie)
+                                }
+                            } else 0
+                            if (proxyPort == 0) {
                                 Log.w(TAG, "the advertised URL does not authenticate; asking for a new one")
                                 restartRequested++
                                 return@launch
                             }
+                            // The browser gets a clean URL with no token: the proxy adds the
+                            // session cookie, which Chrome would refuse to store itself.
+                            val browserUrl = "http://127.0.0.1:$proxyPort/"
+                            Log.i(TAG, "opening $browserUrl in the phone's browser")
                             val opened = runCatching {
                                 context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target))
+                                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(browserUrl))
                                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 )
                             }.isSuccess
-                            if (!opened) Log.w(TAG, "no browser to open $target")
+                            if (!opened) Log.w(TAG, "no browser to open $browserUrl")
                         }
                     }
                 }) {
