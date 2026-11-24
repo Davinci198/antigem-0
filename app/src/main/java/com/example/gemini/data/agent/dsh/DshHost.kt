@@ -361,6 +361,9 @@ internal class ProcessDshSession(
     }
 
     override suspend fun close() = withContext(Dispatchers.IO) {
+        // Who closed the session, with the stack that did it: a turn that sends its prompt and is
+        // closed milliseconds later looks identical to a harness that never answers.
+        Log.i("ProcessDshSession", "closing the session", Throwable("session closed here"))
         runCatching { process.outputStream.close() }
         runCatching { process.destroy() }
         if (process.isAlive) runCatching { process.destroyForcibly() }
