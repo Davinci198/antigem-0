@@ -17,11 +17,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.onStart
-import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -347,44 +344,24 @@ class DshChatBackend(
             activeSession = opened
             val parser = DshSdkParser(conversation.sessionId)
 
-            if (kept == null) {
-                opened.send(
-                    DshProtocol.initializeFrame(
-                        cwd = WORKSPACE,
-                        provider = route.provider,
-                        model = route.model,
-                        id = nextRequestId(),
-                    ),
-                )
-            }
+            // Every turn initialises its own session, warm process or not. A harness that answered
+            // one turn and was then reused for the next one accepted the prompt and sent nothing
+            // back at all (`sent session/prompt` and then silence until the timeout), which is what
+            // "the chat does not answer" looked like. A warm process still saves the multi-second
+            // boot; it just does not get to keep the session it booted for.
+            opened.send(
+                DshProtocol.initializeFrame(
+                    cwd = WORKSPACE,
+                    provider = route.provider,
+                    model = route.model,
+                    id = nextRequestId(),
+                ),
+            )
 
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
-                // A reused process already booted this conversation, so it is initialized and
-                // waits for the next prompt. The prompt goes out exactly when the collector is
-                // attached: the event stream keeps no replay, so a prompt sent any earlier would
-                // be answered into the void and the turn would sit until the timeout.
                 var prompted = false
-                val warmPrompt: suspend () -> Unit = {
-                    prompted = true
-                    opened.send(
-                        DshProtocol.promptFrame(
-                            sessionId = conversation.sessionId,
-                            text = prompt,
-                            id = nextRequestId(),
-                        ),
-                    )
-                }
-                val stream = if (kept == null) {
-                    opened.lines
-                } else {
-                    // A process host shares one hot flow, so `onSubscription` gives the only real
-                    // guarantee; the bridge hands out a cold flow per collect and gets `onStart`.
-                    (opened.lines as? SharedFlow<String>)
-                        ?.onSubscription { warmPrompt() }
-                        ?: opened.lines.onStart { warmPrompt() }
-                }
                 try {
-                    stream.collect { line ->
+                    opened.lines.collect { line ->
                         when (val event = parser.parse(line)) {
                             DshEvent.Initialized -> {
                                 if (!prompted) {
