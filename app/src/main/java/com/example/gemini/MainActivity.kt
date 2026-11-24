@@ -452,10 +452,10 @@ class MainActivity : ComponentActivity() {
                                         color = MaterialTheme.colorScheme.secondaryContainer,
                                         shadowElevation = 6.dp,
                                         modifier = Modifier
-                                            // Back at the bottom where he expects it. Kept clear of the
-                                            // composer by sitting above the input row instead of on it.
+                                            // Exactly where he had it the first time: low, over the
+                                            // strip just above the composer.
                                             .align(Alignment.BottomEnd)
-                                            .padding(end = 12.dp, bottom = 132.dp)
+                                            .padding(end = 16.dp, bottom = 96.dp)
                                     ) {
                                         Row(
                                             modifier = Modifier.padding(start = 10.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),

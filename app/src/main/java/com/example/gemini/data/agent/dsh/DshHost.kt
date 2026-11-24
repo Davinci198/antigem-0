@@ -290,11 +290,26 @@ internal class ProcessDshSession(
 
     init {
         readerScope.launch {
+            // Frames are logged once per kind: enough to see where a turn stops (initialize answered,
+            // prompt accepted, events flowing) without one line per token.
+            val announced = mutableSetOf<String>()
             try {
                 BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { reader ->
                     while (true) {
                         val line = reader.readLine() ?: break
-                        if (line.isNotBlank()) flow.tryEmit(line)
+                        if (line.isNotBlank()) {
+                            val kind = runCatching {
+                                val json = org.json.JSONObject(line)
+                                val method = json.optString("method", "result")
+                                val type = json.optJSONObject("params")
+                                    ?.optJSONObject("event")?.optString("type").orEmpty()
+                                if (type.isEmpty()) method else "$method/$type"
+                            }.getOrDefault("")
+                            if (kind.isNotEmpty() && announced.add(kind)) {
+                                Log.i("ProcessDshSession", "recv $kind")
+                            }
+                            flow.tryEmit(line)
+                        }
                     }
                 }
             } catch (e: IOException) {
