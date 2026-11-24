@@ -294,6 +294,7 @@ class DshChatBackend(
     }
 
     override fun stopStreaming() {
+        Log.i(TAG, "stopStreaming: cancelling the turn and closing its session")
         activeTurn?.cancel()
         activeTurn = null
         val session = activeSession
@@ -310,6 +311,7 @@ class DshChatBackend(
     /** Shuts the kept process down, e.g. when the conversation is closed or the app stops. */
     private fun dropWarm() {
         val kept = warm ?: return
+        Log.i(TAG, "dropWarm: closing the kept session")
         warm = null
         backendScope.launch { runCatching { kept.session.close() } }
     }
@@ -423,6 +425,7 @@ class DshChatBackend(
                 // Keep it: the next turn in this conversation starts answering straight away.
                 warm = WarmSession(conversation.id, route, finished)
             } else {
+                Log.i(TAG, "turn ended without promoting: closing its session (promote=$promote)")
                 runCatching { finished?.close() }
             }
             if (activeSession === session) activeSession = null
