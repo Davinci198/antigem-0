@@ -326,14 +326,13 @@ class DshChatBackend(
                 failTurn("DeepSeek Harness is not installed in the container yet. Open Settings → Agents to install it.")
                 return
             }
-            // A kept process is reused only for the conversation and route that booted
-            // it; anything else gets a cold start so a route change cannot answer with
-            // the previous provider's model.
-            val kept = warm?.takeIf {
-                it.conversationId == conversation.id && it.route == route && it.session.isAlive
-            }
-            if (kept == null) dropWarm()
-            val opened = kept?.session ?: host.open(
+            // The harness answers exactly one turn per process. A second `initialize` on the
+            // process that answered the previous turn is accepted and answered with nothing at all
+            // (no result, no prompt, no turn/start), so a reused session is a turn that hangs until
+            // the timeout. Every turn therefore gets its own process, and the process is closed when
+            // the turn ends.
+            dropWarm()
+            val opened = host.open(
                 DshSessionRequest(
                     setupId = conversation.sessionId,
                     workspace = WORKSPACE,
@@ -346,11 +345,8 @@ class DshChatBackend(
             activeSession = opened
             val parser = DshSdkParser(conversation.sessionId)
 
-            // Every turn initialises its own session, warm process or not. A harness that answered
-            // one turn and was then reused for the next one accepted the prompt and sent nothing
-            // back at all (`sent session/prompt` and then silence until the timeout), which is what
-            // "the chat does not answer" looked like. A warm process still saves the multi-second
-            // boot; it just does not get to keep the session it booted for.
+            // Every turn initialises its own session, on its own process: see the note above where
+            // the session is opened.
             opened.send(
                 DshProtocol.initializeFrame(
                     cwd = WORKSPACE,
@@ -421,13 +417,11 @@ class DshChatBackend(
             failTurn(error.message ?: "DeepSeek Harness could not start.")
         } finally {
             val finished = session
-            if (promote && finished != null && finished.isAlive) {
-                // Keep it: the next turn in this conversation starts answering straight away.
-                warm = WarmSession(conversation.id, route, finished)
-            } else {
-                Log.i(TAG, "turn ended without promoting: closing its session (promote=$promote)")
-                runCatching { finished?.close() }
-            }
+            // Never kept: see the note where the session is opened. One turn, one process. The
+            // harness is asked to shut down before the pipe is closed, so the guest exits on its
+            // own terms instead of being killed under proot.
+            runCatching { finished?.send(DshProtocol.shutdownFrame()) }
+            runCatching { finished?.close() }
             if (activeSession === session) activeSession = null
             finishStreaming()
         }
