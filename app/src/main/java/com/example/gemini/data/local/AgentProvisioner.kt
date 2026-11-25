@@ -191,7 +191,6 @@ object AgentProvisioner {
 
             ensureGuestPath(appContext, log)
             ensureMtop(appContext, log)
-            ensurePkg(appContext, log)
 
             results.forEach { result ->
                 if (result.installed) {
@@ -855,31 +854,6 @@ PYEOF
      * reports anything real here. The version marker only skips the copy when the bundled script is
      * unchanged, so the command heals an existing container without reinstalling anything.
      */
-    /**
-     * Puts `pkg` in the container, the way Termux spells package management.
-     *
-     * Debian has no `pkg`: inside the container it is apt. Agents, the GitHub screen and the user's own fingers
-     * type `pkg install gh`, because that is the command Termux teaches, so the container answers to the same
-     * word. The script is a thin mapping onto apt-get, kept in assets so it is readable without escaping.
-     */
-    fun ensurePkg(context: Context, log: (String) -> Unit = {}) {
-        val root = LocalEnvironmentManager.getUbuntuRootDir(context)
-        if (!root.isDirectory) return
-        val target = File(root, "usr/local/bin/pkg")
-        if (target.isFile && target.length() > 200) return
-        try {
-            target.parentFile?.ensureDirectory()
-            context.assets.open("pkg-shim.sh").use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            }
-            Os.chmod(target.absolutePath, 0b111101101)
-            log("[agents] pkg installed in the container (usr/local/bin/pkg)")
-        } catch (e: Exception) {
-            // A convenience command is never worth failing a provision over.
-            log("[agents] pkg install failed: ${e.message}")
-        }
-    }
-
     fun ensureMtop(context: Context, log: (String) -> Unit = {}) {
         val root = LocalEnvironmentManager.getUbuntuRootDir(context)
         if (!root.isDirectory) return
