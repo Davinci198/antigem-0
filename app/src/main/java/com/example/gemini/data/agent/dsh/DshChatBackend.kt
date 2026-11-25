@@ -419,6 +419,15 @@ class DshChatBackend(
             failTurn(error.message ?: "DeepSeek Harness could not start.")
         } finally {
             val finished = session
+            // Remember the session the harness actually answered under: a resumed harness keeps its
+            // own id, and the next turn has to prompt that one to stay in the same conversation.
+            val adoptedId = parser.sessionIdInUse
+            if (adoptedId.isNotBlank() && adoptedId != conversation.sessionId) {
+                _conversations.value = _conversations.value.map {
+                    if (it.id == conversation.id) it.copy(sessionId = adoptedId) else it
+                }
+                persistConversations()
+            }
             // Never kept: see the note where the session is opened. One turn, one process. The
             // harness is asked to shut down before the pipe is closed, so the guest exits on its
             // own terms instead of being killed under proot.

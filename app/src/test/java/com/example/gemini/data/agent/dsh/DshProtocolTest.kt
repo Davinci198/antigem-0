@@ -150,14 +150,22 @@ class DshProtocolTest {
     }
 
     @Test
-    fun `events for another session are ignored`() {
-        val event = parser.parse(
+    fun `an unknown session is adopted once, then a stranger is ignored`() {
+        // A resumed harness answers under its own id. Ignoring it dropped every event,
+        // turn/end included: the first turn worked and the rest sat mute.
+        val adopted = parser.parse(
             """{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"other",
+               "event":{"type":"assistant/chunk","data":{"turn":0,"step":0,
+               "chunk":{"type":"text-delta","index":0,"text":"mine"}}}}}""",
+        )
+        assertEquals(DshEvent.Text("mine"), adopted)
+
+        val stranger = parser.parse(
+            """{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"third",
                "event":{"type":"assistant/chunk","data":{"turn":0,"step":0,
                "chunk":{"type":"text-delta","index":0,"text":"nope"}}}}}""",
         )
-
-        assertEquals(DshEvent.Ignored, event)
+        assertEquals(DshEvent.Ignored, stranger)
     }
 
     @Test

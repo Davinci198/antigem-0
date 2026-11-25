@@ -120,6 +120,9 @@ class DshSdkParser(sessionId: String) {
     /** Only one adoption per process: the id the harness announces is trusted once. */
     private var adopted = false
 
+    /** The session the harness is actually answering under, once it announced one. */
+    val sessionIdInUse: String get() = expectedSessionId
+
     private val streamedText = StringBuilder()
     private val toolNames = mutableMapOf<String, String>()
 
