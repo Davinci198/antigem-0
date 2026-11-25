@@ -147,7 +147,7 @@ class DshSdkParser(sessionId: String) {
                 DshProtocol.INITIALIZE_ID -> {
                     // `initialize` creates the session and answers with its id; prompting the setup id
                     // afterwards fails with 'session "…" already exists'. So the id in the result wins.
-                    val created = (frame["result"] as? JsonObject)?.string("sessionId")
+                    val created = (frame["result"] as? JsonObject)?.string("sessionId").orEmpty()
                     if (created.isNotBlank()) {
                         expectedSessionId = created
                         adopted = true
