@@ -317,6 +317,8 @@ class DshChatBackend(
         val route = resolvedRoute(prefs.route.value)
         val host = host()
         var session: DshSession? = null
+        // Read in `finally`, where a local from the `try` block is out of scope.
+        var adoptedSessionId: String? = null
         var promote = false
         try {
             if (!host.available()) {
@@ -407,6 +409,7 @@ class DshChatBackend(
                 }
             }
             Log.i(TAG, "turn verdict: ended=$ended")
+            adoptedSessionId = parser.sessionIdInUse
             if (ended == null) {
                 failTurn("DeepSeek Harness did not answer in time.")
             } else if (ended) {
@@ -421,7 +424,7 @@ class DshChatBackend(
             val finished = session
             // Remember the session the harness actually answered under: a resumed harness keeps its
             // own id, and the next turn has to prompt that one to stay in the same conversation.
-            val adoptedId = parser.sessionIdInUse
+            val adoptedId = adoptedSessionId.orEmpty()
             if (adoptedId.isNotBlank() && adoptedId != conversation.sessionId) {
                 _conversations.value = _conversations.value.map {
                     if (it.id == conversation.id) it.copy(sessionId = adoptedId) else it
