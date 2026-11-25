@@ -91,14 +91,14 @@ fun AndroidDevScreen(
             return@Column
         }
         if (!state.termuxBuild) {
-            DevInfoCard("Needs a com.termux build", cardBg, BorderStroke(1.dp, Amber.copy(alpha = 0.5f))) {
-                Hint("The build tools run in a proot-distro Ubuntu container installed with Termux packages, which only work in AntiGem's com.termux builds. Install one of those builds from AntiGem's releases to build apps on the phone.")
+            DevInfoCard("Needs the Ubuntu container", cardBg, BorderStroke(1.dp, Amber.copy(alpha = 0.5f))) {
+                Hint("The build tools install into the Ubuntu container this app runs its agents in. Set the container up first (Settings → Agents), then come back here.")
             }
             return@Column
         }
         if (!state.bootstrapInstalled) {
-            DevInfoCard("Install the terminal first", cardBg, cardBorder) {
-                Hint("The tools install into AntiGem's terminal. Install it in Settings → Terminal & Shell, then come back here.")
+            DevInfoCard("Install the container first", cardBg, cardBorder) {
+                Hint("The tools install into the Ubuntu container. Set it up in Settings → Agents, then come back here.")
             }
             return@Column
         }

@@ -28,14 +28,14 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Settings → Android Development: sets up what agents (and the user) need to build Android apps on the phone:
- * Kotlin / Java / Jetpack Compose with Gradle, Flutter and React Native, in the proot-distro Ubuntu container of the
- * terminal (com.termux builds only). It is the same container REA uses, so Java 21 and Node.js are shared.
+ * Kotlin / Java / Jetpack Compose with Gradle, Flutter and React Native, inside this app's own Ubuntu container
+ * (entered with proot). It is the same container the DeepSeek Harness runs in, so Java 21 and Node.js are shared.
  *
  * Nothing ships in the APK: the setup scripts live in the antigem_plugins repository
- * (android-dev/skills/android-dev/scripts) and are downloaded into $PREFIX/share/antigem-android when needed. Every
- * install step runs `android-setup.sh <step>`, the same script the Android Development skill tells agents to run.
- * Agents build with the `adev` command (a command in the container with the tools on PATH) and create projects
- * with `adev-new`.
+ * (android-dev/skills/android-dev/scripts) and are downloaded into /opt/antigem/share/antigem-android inside the
+ * container when needed. Every install step runs `android-setup.sh <step>` with ANTIGEM_RUNTIME=chroot, the same
+ * script the Android Development skill tells agents to run. Agents build with the `adev` command and create
+ * projects with `adev-new`.
  */
 object AndroidDevManager {
     private const val TAG = "AndroidDevManager"
@@ -50,7 +50,8 @@ object AndroidDevManager {
     const val PROJECTS_DIR = "AndroidProjects"
 
     private const val JAVA_HOME = "usr/lib/jvm/java-21-openjdk-arm64"
-    private const val SDK = "root/android-sdk"
+    private const val SDK = "opt/antigem/android-sdk"
+    private const val TOOLS = "opt/antigem/tools"
     private const val PLATFORM = "android-36"
 
     /** What the user wants to build; each needs some [Component]s. */
@@ -65,7 +66,7 @@ object AndroidDevManager {
      * [size] is the approximate disk use.
      */
     enum class Component(val step: String, val label: String, val description: String, val size: String) {
-        CONTAINER("container", "Ubuntu container", "proot-distro and an Ubuntu 24.04 container the tools run in (the same one REA uses).", "≈150 MB"),
+        CONTAINER("container", "Ubuntu container", "The Ubuntu this app already runs, entered with proot. The tools go inside it, next to the harness and the agent CLIs.", "≈150 MB"),
         BASE("base", "Base tools", "curl, git, zip, unzip, xz, Python and binutils in Ubuntu. Flutter, the SDK download and stripping .so files need them.", "≈70 MB"),
         JAVA("java", "Java 21", "OpenJDK 21, headless. Gradle and the Android SDK tools run on it (shared with REA).", "≈290 MB"),
         SDK("sdk", "Android SDK", "Command-line tools, the Android 16 (API 36) platform and build-tools 36, Termux's arm64 aapt2 (Google's is x86_64 only) and Gradle settings that suit the phone.", "≈500 MB"),
@@ -148,10 +149,14 @@ object AndroidDevManager {
     // ---------------- paths ----------------
 
     private val prefix get() = LocalEnvironmentManager.getPrefixDir(appContext)
-    private val home get() = LocalEnvironmentManager.getHomeDir(appContext)
-    private val shareDir get() = File(prefix, "share/antigem-android")
+    private val ubuntu get() = LocalEnvironmentManager.getUbuntuRootDir(appContext)
+    private val home get() = File(ubuntu, "root")
+    private val binDir get() = File(ubuntu, "usr/local/bin")
+    private val shareDir get() = File(ubuntu, "opt/antigem/share/antigem-android")
     private val pidFile get() = File(shareDir, ".task.pid")
-    private fun rootfs() = File(prefix, "var/lib/proot-distro/containers/$CONTAINER/rootfs")
+    // The setup script's chroot mode lays the tools out under /opt/antigem in the Ubuntu itself, which is
+    // exactly what this app already has: one container, entered with proot, no Termux and no proot-distro.
+    private fun rootfs() = ubuntu
     val setupScriptPath: String get() = File(shareDir, "android-setup.sh").absolutePath
     val projectsPath: String get() = File(home, PROJECTS_DIR).absolutePath
 
@@ -173,7 +178,7 @@ object AndroidDevManager {
     private fun refreshNow() {
         val ctx = appContext
         val root = rootfs()
-        val bin = File(prefix, "bin")
+        val bin = binDir
         val sdk = File(root, SDK)
         val installed = buildSet {
             if (File(root, "usr/bin/apt-get").exists()) add(Component.CONTAINER)
@@ -182,17 +187,17 @@ object AndroidDevManager {
             if (File(sdk, "cmdline-tools/latest/lib/sdkmanager-classpath.jar").exists() && File(sdk, "platforms/$PLATFORM").isDirectory &&
                 File(bin, "aapt2").exists()) add(Component.SDK)
             if (File(bin, "adev").exists() && File(shareDir, "adev-new").exists()) add(Component.LAUNCHER)
-            if (File(root, "root/tools/flutter/bin/cache/dart-sdk/bin/dart").exists()) add(Component.FLUTTER)
-            if (File(root, "root/tools/flutter/bin/cache/artifacts/engine/android-arm64-release/linux-arm64/gen_snapshot").exists() &&
+            if (File(root, "$TOOLS/flutter/bin/cache/dart-sdk/bin/dart").exists()) add(Component.FLUTTER)
+            if (File(root, "$TOOLS/flutter/bin/cache/artifacts/engine/android-arm64-release/linux-arm64/gen_snapshot").exists() &&
                 File(bin, "qemu-x86_64").exists()) add(Component.FLUTTER_RELEASE)
-            if (File(root, "root/tools/node/bin/node").exists()) add(Component.NODE)
+            if (File(root, "$TOOLS/node/bin/node").exists()) add(Component.NODE)
             if (File(sdk, "ndk-arm64.txt").exists() && File(root, "usr/bin/cmake").exists()) add(Component.NDK)
             if (File(bin, "adb").exists()) add(Component.ADB)
         }
         val flutterVersion = runCatching {
-            JSONObject(File(root, "root/tools/flutter/bin/cache/flutter.version.json").readText()).optString("frameworkVersion").ifBlank { null }
+            JSONObject(File(root, "$TOOLS/flutter/bin/cache/flutter.version.json").readText()).optString("frameworkVersion").ifBlank { null }
         }.getOrNull()
-        val nodeVersion = runCatching { File(root, "root/tools/node").canonicalFile.name }.getOrNull()?.takeIf { it.startsWith("v") }
+        val nodeVersion = runCatching { File(root, "$TOOLS/node").canonicalFile.name }.getOrNull()?.takeIf { it.startsWith("v") }
         val filesVersion = runCatching { JSONObject(File(shareDir, "files.json").readText()).optString("version").ifBlank { null } }
             .getOrNull()?.takeIf { File(shareDir, "android-setup.sh").exists() }
         val testApks = Framework.entries.mapNotNull { f -> testApk(f)?.takeIf { File(it).exists() }?.let { f.key to it } }.toMap()
@@ -200,8 +205,8 @@ object AndroidDevManager {
         _state.update {
             it.copy(
                 ready = true,
-                termuxBuild = LocalEnvironmentManager.isTermuxPackage(ctx),
-                bootstrapInstalled = LocalEnvironmentManager.isInstalled(ctx),
+                termuxBuild = LocalEnvironmentManager.isUbuntuInstalled(ctx),
+                bootstrapInstalled = LocalEnvironmentManager.isUbuntuInstalled(ctx),
                 filesVersion = filesVersion,
                 filesUpdate = it.filesUpdate?.takeIf { v -> v != filesVersion },
                 installed = installed,
@@ -439,7 +444,13 @@ object AndroidDevManager {
         val command = "echo \$\$ > '${pidFile.absolutePath}'; exec bash '${script.absolutePath}' $step < /dev/null"
         val result = LocalEnvironmentManager.executeCommand(
             command, appContext, timeoutSeconds = timeoutSeconds,
-            customEnv = mapOf("DEBIAN_FRONTEND" to "noninteractive"),
+            customEnv = mapOf(
+                "DEBIAN_FRONTEND" to "noninteractive",
+                // The script's chroot mode: tools under /opt/antigem, commands in /usr/local/bin, projects in
+                // /root — the layout of the container this app already runs, not Termux's prefix.
+                "ANTIGEM_RUNTIME" to "chroot",
+                "ANTIGEM_USER" to "root"
+            ),
             onOutputLine = { line -> if (line.isNotBlank()) appendLog(line.trimEnd()) }
         )
         if (result.exitCode != 0) {
