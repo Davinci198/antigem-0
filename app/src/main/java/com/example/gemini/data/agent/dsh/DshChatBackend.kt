@@ -16,9 +16,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -361,24 +363,6 @@ class DshChatBackend(
 
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
                 var prompted = false
-                // Sent on subscription, not before it: the process answers in a couple of
-                // milliseconds and a SharedFlow drops values nobody is listening for yet.
-                // The ids are the ones the parser recognises: anything else lands on
-                // 'else -> Ignored', the answer is dropped and the turn hangs until the timeout.
-                val incoming = opened.lines.onSubscription {
-                    if (kept == null) {
-                        opened.send(
-                            DshProtocol.initializeFrame(
-                                cwd = WORKSPACE,
-                                provider = route.provider,
-                                model = route.model,
-                            ),
-                        )
-                    } else {
-                        // Already initialised: go straight to loading the stored session.
-                        opened.send(DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse))
-                    }
-                }
                 // Both a loaded session and a missing one end the same way: prompt, once. A missing
                 // one is created by the prompt itself, while a loaded one would reject the prompt.
                 // A lambda, not a local `fun`: `send` suspends and a plain local function cannot call it.
@@ -391,7 +375,28 @@ class DshChatBackend(
                     }
                 }
                 try {
-                    incoming.collect { line ->
+                    // The frames go out only once someone is listening. A SharedFlow without replay
+                    // drops what nobody collected, and a warm process answers in a millisecond, so a
+                    // frame sent before the collector exists would be lost and the turn would hang.
+                    // The ids are the ones the parser recognises: anything else lands on
+                    // 'else -> Ignored'.
+                    coroutineScope {
+                        launch {
+                            opened.lines.subscriptionCount.first { it > 0 }
+                            if (kept == null) {
+                                opened.send(
+                                    DshProtocol.initializeFrame(
+                                        cwd = WORKSPACE,
+                                        provider = route.provider,
+                                        model = route.model,
+                                    ),
+                                )
+                            } else {
+                                // Already initialised: go straight to loading the stored session.
+                                opened.send(DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse))
+                            }
+                        }
+                        opened.lines.collect { line ->
                         when (val event = parser.parse(line)) {
                             DshEvent.Initialized -> {
                                 // The runtime answers with serverInfo only: it holds no session, so the
@@ -423,6 +428,7 @@ class DshChatBackend(
                                 Log.i(TAG, "ignored a session.event (session id mismatch?)")
                             }
                         }
+                    }
                     }
                     // The stream closed without a verdict: the process died.
                     throw TurnFailed(describeDeath(opened))
