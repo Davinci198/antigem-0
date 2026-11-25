@@ -178,8 +178,9 @@ class ProotDshHost(
         // Session folders are named after the directory the harness runs in, and proot refuses to
         // start with a working directory that does not exist inside the rootfs.
         runCatching {
-            File(LocalEnvironmentManager.getUbuntuRootDir(context), request.workspace.trimStart('/'))
-                .mkdirs()
+            val folder = File(LocalEnvironmentManager.getUbuntuRootDir(context), request.workspace.trimStart('/'))
+            folder.mkdirs()
+            writeWorkspaceInstructions(folder)
         }
         val process = LocalEnvironmentManager.startGuestProcess(
             context = context,
@@ -189,6 +190,23 @@ class ProotDshHost(
         )
         Log.i(TAG, "dsh sdk spawned for ${request.workspace}")
         ProcessDshSession(process, scope).also { synchronized(open) { open.add(it) } }
+    }
+
+    /**
+     * Writes the workspace instructions the harness reads on every session.
+     *
+     * The container has no sandbox around the tools — `unshare` fails under proot — and a model that
+     * reads an empty `ls -a` as a refusal starts apologising for a restriction that does not exist and
+     * answers from a guess instead of the command's real output. Rewritten each start so an edit inside
+     * the rootfs cannot lose it.
+     */
+    private fun writeWorkspaceInstructions(folder: File) {
+        runCatching {
+            val file = File(folder, "AGENTS.md")
+            if (file.isFile && file.readText() == WORKSPACE_INSTRUCTIONS) return
+            file.writeText(WORKSPACE_INSTRUCTIONS)
+            Log.i(TAG, "wrote the workspace instructions into ${folder.name}")
+        }
     }
 
     /**
@@ -542,3 +560,22 @@ object DshGuestPaths {
     /** `node` is on the guest PATH, unlike the versioned path above. */
     const val NODE_BIN_ADDRESSED = "node"
 }
+
+/**
+ * What every harness session in this container is told about its tools. Written as `AGENTS.md` into the
+ * workspace, which is where the harness looks for standing instructions.
+ */
+private const val WORKSPACE_INSTRUCTIONS = """# Environment
+
+You run inside a container with no sandbox around your tools. There is no bubblewrap, no user-namespace
+isolation and no private `/tmp`: `unshare` fails here by design and nothing wraps your commands.
+
+So a shell tool that finishes has finished. Empty output is a real result, not a refusal: `ls -a` in an
+empty directory prints `.` and `..`. Never say a command "was blocked by sandbox restrictions" or "could
+not be executed because of the sandbox" unless the tool result itself contains an error, and quote that
+error when it does. Do not replace a failed command with a guess about the directory; run it, read what
+came back, and say what it returned.
+
+Your working directory is the project you were opened in, and it is the only place file changes belong
+unless the user asks for something else.
+"""
