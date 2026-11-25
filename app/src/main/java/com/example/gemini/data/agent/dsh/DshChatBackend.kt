@@ -406,7 +406,7 @@ class DshChatBackend(
                     false
                 }
             }
-            Log.i(TAG, "turn verdict: ended=$ended prompted=$prompted")
+            Log.i(TAG, "turn verdict: ended=$ended")
             if (ended == null) {
                 failTurn("DeepSeek Harness did not answer in time.")
             } else if (ended) {
