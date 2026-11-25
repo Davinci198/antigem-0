@@ -7,7 +7,6 @@ import android.system.OsConstants
 import android.util.Log
 import com.example.gemini.BuildConfig
 import com.example.gemini.data.local.LocalEnvironmentManager
-import com.example.gemini.data.rea.ReaManager
 import com.example.gemini.ui.browser.BrowserExtensionManager
 import com.example.gemini.ui.browser.PluginRepositories
 import kotlinx.coroutines.CoroutineScope
@@ -43,10 +42,10 @@ object AndroidDevManager {
     private const val PREFS = "android_dev_settings"
 
     /** Where the setup files and the skill plugin come from (owner/repo@branch). */
-    const val DEFAULT_SOURCE = ReaManager.DEFAULT_SOURCE
+    const val DEFAULT_SOURCE = "Santoshkurmi/antigem_plugins@main"
     private const val SCRIPTS_PATH = "android-dev/skills/android-dev/scripts"
     const val PLUGIN_ID = "android-dev"
-    const val CONTAINER = ReaManager.CONTAINER
+    const val CONTAINER = "ubuntu"
     /** Where the test builds (and, by default, agents' new projects) go, under the Termux home. */
     const val PROJECTS_DIR = "AndroidProjects"
 
@@ -402,9 +401,9 @@ object AndroidDevManager {
             report("Something is already running. Wait for it, or tap Stop.", isError = true)
             return
         }
-        // REA installs into the same container: two apt runs at once would wait on each other's lock
-        if (ReaManager.state.value.busy) {
-            report("REA's setup is running in the same container. Wait for it to finish.", isError = true)
+        // One apt at a time in this container: two installs at once would wait on each other's lock.
+        if (_state.value.busy) {
+            report("A setup is already running in the same container. Wait for it to finish.", isError = true)
             return
         }
         job = scope.launch {

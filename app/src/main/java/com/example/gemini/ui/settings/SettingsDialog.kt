@@ -102,8 +102,6 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     GLOBAL_CONTEXT("Global context", "What every chat is told about this app, and your own instructions"),
     AGENT_MEMORY("Agent memory", "The files each agent reads between chats"),
     GITHUB("GitHub", "Sign in with the GitHub CLI, your repositories and git credentials"),
-    REA("REA · Reverse Engineering", "Let agents analyze APKs, Flutter, React Native and native code"),
-    REA_GROUPS("REA Tool Groups", "Which REA tools each REA MCP server shows"),
     ANDROID_DEV("Android Development", "Build Kotlin / Compose, Flutter and React Native apps on this phone"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
@@ -115,7 +113,6 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     val parent: SettingsSection
         get() = when (this) {
             ADB_CONNECT, ANDROID_AUTOMATION, GLOBAL_CONTEXT, AGENT_MEMORY -> AGENTS
-            REA_GROUPS -> REA
             else -> MAIN
         }
 }
@@ -581,18 +578,6 @@ fun SettingsDialog(
                         cardBg = cardBg,
                         cardBorder = cardBorder
                     )
-                    SettingsSection.REA -> ReaScreen(
-                        cardBg = cardBg,
-                        cardBorder = cardBorder,
-                        onOpenGroups = { currentSection = SettingsSection.REA_GROUPS },
-                        onOpenAdbConnect = { currentSection = SettingsSection.ADB_CONNECT },
-                        onOpenPlugins = { currentSection = SettingsSection.SKILLS_PLUGINS }
-                    )
-                    SettingsSection.REA_GROUPS -> ReaGroupsScreen(
-                        cardBg = cardBg,
-                        cardBorder = cardBorder,
-                        onOpenRea = { currentSection = SettingsSection.REA }
-                    )
                     SettingsSection.ANDROID_DEV -> AndroidDevScreen(
                         cardBg = cardBg,
                         cardBorder = cardBorder,
@@ -917,15 +902,6 @@ private fun MainSettingsMenu(
             cardBg = cardBg,
             cardBorder = cardBorder,
             onClick = { onNavigate(SettingsSection.GITHUB) }
-        )
-        SettingsCategoryCard(
-            icon = Icons.Outlined.BugReport,
-            iconTint = Color(0xFFEC4899),
-            title = SettingsSection.REA.title,
-            subtitle = SettingsSection.REA.subtitle,
-            cardBg = cardBg,
-            cardBorder = cardBorder,
-            onClick = { onNavigate(SettingsSection.REA) }
         )
         SettingsCategoryCard(
             icon = Icons.Outlined.Android,
