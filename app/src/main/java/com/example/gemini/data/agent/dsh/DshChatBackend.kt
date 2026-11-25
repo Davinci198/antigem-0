@@ -127,8 +127,11 @@ class DshChatBackend(
             // A folder with neither a title nor a finished turn is an empty shell from dsh itself.
             val usable = disk.filter { it.title != null || it.turns > 0 }
             val known = _conversations.value.map { it.sessionId }.toSet()
-            val imported = usable.filter { it.id !in known }.map { session ->
+            val deleted = forgotten()
+            val imported = usable.filter { it.id !in known && it.id !in deleted }.map { session ->
                 Conversation(
+                    // Without this the chat is saved as an AGY conversation and disappears on restore.
+                    agent = AgentKind.DEEPSEEK_HARNESS,
                     id = session.id,
                     title = session.title ?: "DeepSeek Harness chat",
                     modelId = session.model.orEmpty(),
@@ -230,14 +233,34 @@ class DshChatBackend(
     }
 
     override fun deleteConversation(id: String) {
+        val conversation = _conversations.value.firstOrNull { it.id == id }
         _conversations.value = _conversations.value.filterNot { it.id == id }
         File(storage, "$id.json").delete()
+        // A chat that also lives in the container would otherwise come back on the next start.
+        conversation?.let { forget(it.sessionId) }
         if (store.currentConversation.value?.id == id) {
             store.currentConversation.value = null
             _messages.value = emptyList()
         }
         persistConversations()
     }
+
+    /**
+     * Remembers a chat the user deleted so the import does not bring it back every time the app starts.
+     * The session stays in DeepSeek Harness itself; deleting it there is the harness' own business.
+     */
+    private fun forget(sessionId: String) {
+        val hidden = forgotten() + sessionId
+        runCatching {
+            storage.mkdirs()
+            File(storage, FORGOTTEN_FILE).writeText(hidden.joinToString("\n"))
+        }
+    }
+
+    private fun forgotten(): Set<String> = runCatching {
+        val file = File(storage, FORGOTTEN_FILE)
+        if (!file.isFile) emptySet() else file.readLines().filter { it.isNotBlank() }.toSet()
+    }.getOrDefault(emptySet())
 
     fun renameConversation(id: String, title: String) {
         _conversations.value = _conversations.value.map {
@@ -759,6 +782,10 @@ class DshChatBackend(
         const val NEW_CHAT_TITLE = "New Chat"
         const val WORKSPACE = "/root/workspace"
         const val TURN_TIMEOUT_MS = 30 * 60 * 1000L
+
+        /** Session ids the user deleted, so the container import stops offering them again. */
+        const val FORGOTTEN_FILE = "deleted-sessions.txt"
+
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     }
 }
