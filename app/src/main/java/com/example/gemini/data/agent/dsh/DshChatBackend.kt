@@ -359,13 +359,15 @@ class DshChatBackend(
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
                 var prompted = false
                 // Both a loaded session and a missing one end the same way: prompt, once. A missing
-                // one is created by the prompt itself; a loaded one would reject the prompt.
-                fun promptOnce() {
-                    if (prompted) return
-                    prompted = true
-                    opened.send(
-                        DshProtocol.promptFrame(sessionId = parser.sessionIdInUse, text = prompt),
-                    )
+                // one is created by the prompt itself, while a loaded one would reject the prompt.
+                // A lambda, not a local `fun`: `send` suspends and a plain local function cannot call it.
+                val promptOnce: suspend () -> Unit = {
+                    if (!prompted) {
+                        prompted = true
+                        opened.send(
+                            DshProtocol.promptFrame(sessionId = parser.sessionIdInUse, text = prompt),
+                        )
+                    }
                 }
                 try {
                     opened.lines.collect { line ->
