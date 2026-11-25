@@ -375,60 +375,61 @@ class DshChatBackend(
                     }
                 }
                 try {
-                    // The frames go out only once someone is listening. A SharedFlow without replay
-                    // drops what nobody collected, and a warm process answers in a millisecond, so a
-                    // frame sent before the collector exists would be lost and the turn would hang.
-                    // The ids are the ones the parser recognises: anything else lands on
-                    // 'else -> Ignored'.
+                    // The collector must exist before the first frame leaves: a SharedFlow keeps no
+                    // replay, so an answer to a frame sent too early is dropped and the turn hangs
+                    // until the timeout. The ids are the ones the parser recognises: anything else
+                    // lands on 'else -> Ignored'.
                     coroutineScope {
-                        launch {
-                            opened.lines.subscriptionCount.first { it > 0 }
-                            if (kept == null) {
-                                opened.send(
-                                    DshProtocol.initializeFrame(
-                                        cwd = WORKSPACE,
-                                        provider = route.provider,
-                                        model = route.model,
-                                    ),
-                                )
-                            } else {
-                                // Already initialised: go straight to loading the stored session.
-                                opened.send(DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse))
+                        val listener = launch {
+                            opened.lines.collect { line ->
+                                when (val event = parser.parse(line)) {
+                                    DshEvent.Initialized -> {
+                                        // The runtime answers with serverInfo only: it holds no session,
+                                        // so a stored session has to be loaded before it can be prompted.
+                                        opened.send(
+                                            DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),
+                                        )
+                                    }
+                                    DshEvent.Resumed -> {
+                                        Log.i(TAG, "session resumed")
+                                        promptOnce()
+                                    }
+                                    DshEvent.ResumeMissed -> {
+                                        Log.i(TAG, "no persisted session: the prompt creates it")
+                                        promptOnce()
+                                    }
+                                    DshEvent.PromptAccepted -> promptOnce()
+                                    is DshEvent.Text -> appendText(assistantId, event.delta)
+                                    is DshEvent.Reasoning -> appendThought(assistantId, event.delta)
+                                    is DshEvent.ToolStarted ->
+                                        addTool(assistantId, event.callId, event.name, event.detail.orEmpty())
+                                    is DshEvent.ToolCompleted ->
+                                        completeTool(assistantId, event.callId, event.name, event.summary)
+                                    DshEvent.TurnCompleted -> throw TurnFinished()
+                                    is DshEvent.Failed -> throw TurnFailed(event.message)
+                                    // A session.event the parser drops usually means the harness is
+                                    // answering under a session id the app does not expect.
+                                    else -> if (line.contains("\"session.event\"")) {
+                                        Log.i(TAG, "ignored a session.event (session id mismatch?)")
+                                    }
+                                }
                             }
                         }
-                        opened.lines.collect { line ->
-                        when (val event = parser.parse(line)) {
-                            DshEvent.Initialized -> {
-                                // The runtime answers with serverInfo only: it holds no session, so the
-                                // session must be loaded before it can be prompted again.
-                                opened.send(
-                                    DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),
-                                )
-                            }
-                            DshEvent.Resumed -> {
-                                Log.i(TAG, "session resumed")
-                                promptOnce()
-                            }
-                            DshEvent.ResumeMissed -> {
-                                Log.i(TAG, "no persisted session: the prompt creates it")
-                                promptOnce()
-                            }
-                            DshEvent.PromptAccepted -> promptOnce()
-                            is DshEvent.Text -> appendText(assistantId, event.delta)
-                            is DshEvent.Reasoning -> appendThought(assistantId, event.delta)
-                            is DshEvent.ToolStarted ->
-                                addTool(assistantId, event.callId, event.name, event.detail.orEmpty())
-                            is DshEvent.ToolCompleted ->
-                                completeTool(assistantId, event.callId, event.name, event.summary)
-                            DshEvent.TurnCompleted -> throw TurnFinished()
-                            is DshEvent.Failed -> throw TurnFailed(event.message)
-                            // A session.event that the parser drops usually means the harness is
-                            // answering under a session id the app does not expect.
-                            else -> if (line.contains("\"session.event\"")) {
-                                Log.i(TAG, "ignored a session.event (session id mismatch?)")
-                            }
+                        // Subscribed now, so the answer cannot land in the void.
+                        opened.awaitListener()
+                        if (kept == null) {
+                            opened.send(
+                                DshProtocol.initializeFrame(
+                                    cwd = WORKSPACE,
+                                    provider = route.provider,
+                                    model = route.model,
+                                ),
+                            )
+                        } else {
+                            // Already initialised: go straight to loading the stored session.
+                            opened.send(DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse))
                         }
-                    }
+                        listener.join()
                     }
                     // The stream closed without a verdict: the process died.
                     throw TurnFailed(describeDeath(opened))

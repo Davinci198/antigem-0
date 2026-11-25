@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -75,6 +76,13 @@ data class DshSessionRequest(
 interface DshSession {
     /** Lines as they arrive from DSH. Ends when the process or stream dies. */
     val lines: Flow<String>
+
+    /**
+     * Returns once [lines] has a collector. A SharedFlow keeps no replay, so a request written before
+     * anything is listening can be answered into the void — and on a warm process that answer comes in
+     * a millisecond. Defaults to returning at once for channels whose stream is hot by itself.
+     */
+    suspend fun awaitListener() = Unit
 
     suspend fun send(line: String)
 
@@ -277,6 +285,10 @@ internal class ProcessDshSession(
     private val flow = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 512)
 
     override val lines: Flow<String> = flow.asSharedFlow()
+
+    override suspend fun awaitListener() {
+        flow.subscriptionCount.first { it > 0 }
+    }
 
     override val isAlive: Boolean get() = process.isAlive
 
