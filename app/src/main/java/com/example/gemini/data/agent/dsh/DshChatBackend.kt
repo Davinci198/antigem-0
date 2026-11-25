@@ -89,9 +89,6 @@ class DshChatBackend(
      */
     private var warm: WarmSession? = null
 
-    /** Request ids must keep rising: a reused process has already seen 1 and 2 once. */
-    private var requestSeq = 1
-
     private class WarmSession(
         val conversationId: String,
         val route: DshModelRoute,
@@ -345,14 +342,15 @@ class DshChatBackend(
             activeSession = opened
             val parser = DshSdkParser(conversation.sessionId)
 
-            // Every turn initialises its own session, on its own process: see the note above where
-            // the session is opened.
+            // The ids are the ones the parser recognises (INITIALIZE_ID, PROMPT_ID, SHUTDOWN_ID):
+            // a fresh id per turn lands on 'else -> Ignored', the harness answer is dropped, no
+            // prompt is ever sent and the turn hangs until the timeout. That is exactly how the
+            // first message worked and every later one did not.
             opened.send(
                 DshProtocol.initializeFrame(
                     cwd = WORKSPACE,
                     provider = route.provider,
                     model = route.model,
-                    id = nextRequestId(),
                 ),
             )
 
@@ -368,7 +366,6 @@ class DshChatBackend(
                                         DshProtocol.promptFrame(
                                             sessionId = conversation.sessionId,
                                             text = prompt,
-                                            id = nextRequestId(),
                                         ),
                                     )
                                 }
@@ -380,7 +377,6 @@ class DshChatBackend(
                                         DshProtocol.promptFrame(
                                             sessionId = conversation.sessionId,
                                             text = prompt,
-                                            id = nextRequestId(),
                                         ),
                                     )
                                 }
@@ -426,8 +422,6 @@ class DshChatBackend(
             finishStreaming()
         }
     }
-
-    private fun nextRequestId(): Int = ++requestSeq
 
     /**
      * Why a session that promised an answer stopped without one.
