@@ -493,7 +493,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val text = PromptExpansion.expand(content)
         val conv = store.currentConversation.value
         if (conv != null) {
-            dispatchMessage(conv.agent, text)
+            dispatchMessage(conv.agent, contextFor(conv, text))
             return
         }
         // Nothing is open: the start screen picked an agent, so open its chat and deliver the
@@ -517,11 +517,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     return@launch
                 }
-                queued.forEach { dispatchMessage(opened.agent, it) }
+                queued.forEach { dispatchMessage(opened.agent, contextFor(opened, it)) }
             } finally {
                 openingChatForFirstMessage = false
             }
         }
+    }
+
+    /**
+     * The message with Settings → Agents → Global context hidden in front of it. The first-message part goes
+     * once per chat and again only when it changed, so a long chat does not pay for it on every turn.
+     */
+    private fun contextFor(conversation: Conversation, text: String): String {
+        val earlier = runCatching { store.messages.value.isNotEmpty() }.getOrDefault(false)
+        return runCatching {
+            com.example.gemini.data.context.GlobalContext.wrap(conversation.id, earlier, text).first
+        }.getOrDefault(text)
     }
 
     /** Sends [text] to the backend that owns [agent]'s chat. */

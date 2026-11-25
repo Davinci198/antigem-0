@@ -173,7 +173,9 @@ fun AgentsSettingsPage(
     enabled: Set<AgentKind>,
     isApplying: Boolean,
     onApply: (Set<AgentKind>) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenGlobalContext: (() -> Unit)? = null,
+    onOpenAgentMemory: (() -> Unit)? = null,
 ) {
     var selected by remember(enabled) { mutableStateOf(enabled) }
     var confirm by remember { mutableStateOf(false) }
@@ -224,6 +226,14 @@ fun AgentsSettingsPage(
             }
         }
         Spacer(Modifier.height(18.dp))
+        if (onOpenGlobalContext != null) {
+            com.example.gemini.ui.settings.GlobalContextEntryRow(onClick = onOpenGlobalContext)
+            Spacer(Modifier.height(10.dp))
+        }
+        if (onOpenAgentMemory != null) {
+            com.example.gemini.ui.settings.AgentMemoryEntryRow(onClick = onOpenAgentMemory)
+            Spacer(Modifier.height(10.dp))
+        }
         Button(
             onClick = { confirm = true },
             enabled = selected != enabled && !isApplying,

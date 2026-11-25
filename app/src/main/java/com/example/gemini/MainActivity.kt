@@ -94,6 +94,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         instanceRef = java.lang.ref.WeakReference(this)
+        // Settings → Agents → Global context: read the saved entries before the first chat is opened.
+        com.example.gemini.data.context.GlobalContext.init(this)
         com.example.gemini.data.diagnostics.MainThreadWatchdog.start()
         com.example.gemini.data.remote.inspector.NetworkInspectorManager.isEnabled =
             chatViewModel.authPreferences.getNetworkInspectorEnabledSync()

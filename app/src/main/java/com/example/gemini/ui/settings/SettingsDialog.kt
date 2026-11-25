@@ -99,6 +99,8 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     OPENCODE("OpenCode", "Server, providers, custom OpenAI-compatible endpoints & approvals"),
     HERMES("Hermes Agent", "Binary path, account, model & custom providers"),
     AGENTS("Agents", "Run Antigravity, Claude Code, Hermes or OpenCode"),
+    GLOBAL_CONTEXT("Global context", "What every chat is told about this app, and your own instructions"),
+    AGENT_MEMORY("Agent memory", "The files each agent reads between chats"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
     ADB_CONNECT("ADB Connect", "Connect the terminal's adb to this phone over Wireless debugging"),
@@ -106,7 +108,11 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     ABOUT("About & Info", "App version, package details, and bridge export");
 
     /** Where Back goes from this section. */
-    val parent: SettingsSection get() = if (this == ADB_CONNECT || this == ANDROID_AUTOMATION) UTILITIES else MAIN
+    val parent: SettingsSection
+        get() = when (this) {
+            ADB_CONNECT, ANDROID_AUTOMATION, GLOBAL_CONTEXT, AGENT_MEMORY -> AGENTS
+            else -> MAIN
+        }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -560,8 +566,12 @@ fun SettingsDialog(
                     SettingsSection.AGENTS -> com.example.gemini.ui.agents.AgentsSettingsPage(
                         enabled = enabledAgents,
                         isApplying = isApplyingAgents,
-                        onApply = onApplyAgents
+                        onApply = onApplyAgents,
+                        onOpenGlobalContext = { currentSection = SettingsSection.GLOBAL_CONTEXT },
+                        onOpenAgentMemory = { currentSection = SettingsSection.AGENT_MEMORY }
                     )
+                    SettingsSection.GLOBAL_CONTEXT -> GlobalContextScreen()
+                    SettingsSection.AGENT_MEMORY -> AgentMemoryScreen()
                     SettingsSection.CLAUDE -> if (claude != null) {
                         com.example.gemini.ui.claude.ClaudeSettingsScreen(claude, claudePage) { currentSection = SettingsSection.MAIN }
                     }
