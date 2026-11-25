@@ -101,6 +101,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     AGENTS("Agents", "Run Antigravity, Claude Code, Hermes or OpenCode"),
     GLOBAL_CONTEXT("Global context", "What every chat is told about this app, and your own instructions"),
     AGENT_MEMORY("Agent memory", "The files each agent reads between chats"),
+    GITHUB("GitHub", "Sign in with the GitHub CLI, your repositories and git credentials"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
     ADB_CONNECT("ADB Connect", "Connect the terminal's adb to this phone over Wireless debugging"),
@@ -572,6 +573,10 @@ fun SettingsDialog(
                     )
                     SettingsSection.GLOBAL_CONTEXT -> GlobalContextScreen()
                     SettingsSection.AGENT_MEMORY -> AgentMemoryScreen()
+                    SettingsSection.GITHUB -> GitHubScreen(
+                        cardBg = cardBg,
+                        cardBorder = cardBorder
+                    )
                     SettingsSection.CLAUDE -> if (claude != null) {
                         com.example.gemini.ui.claude.ClaudeSettingsScreen(claude, claudePage) { currentSection = SettingsSection.MAIN }
                     }
@@ -879,6 +884,17 @@ private fun MainSettingsMenu(
             cardBg = cardBg,
             cardBorder = cardBorder,
             onClick = { onNavigate(SettingsSection.UTILITIES) }
+        )
+
+        SettingsGroupHeader("Developer tools", Color(0xFF8B5CF6), "GitHub and the projects on this phone")
+        SettingsCategoryCard(
+            icon = Icons.Outlined.AccountTree,
+            iconTint = Color(0xFFF59E0B),
+            title = SettingsSection.GITHUB.title,
+            subtitle = SettingsSection.GITHUB.subtitle,
+            cardBg = cardBg,
+            cardBorder = cardBorder,
+            onClick = { onNavigate(SettingsSection.GITHUB) }
         )
 
         // Section 7: About & Info
