@@ -532,4 +532,7 @@ object DshGuestPaths {
     const val DSH_PAYLOAD = "usr/local/lib/dsh/node_modules/.bin/dsh"
     const val DSH_HOME = "/root/.dsh"
     const val NODE_BIN = "usr/local/lib/nodejs/bin/node"
+
+    /** `node` is on the guest PATH, unlike the versioned path above. */
+    const val NODE_BIN_ADDRESSED = "node"
 }

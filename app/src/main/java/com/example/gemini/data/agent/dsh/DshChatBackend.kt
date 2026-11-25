@@ -109,6 +109,55 @@ class DshChatBackend(
         restore()
         refreshInstallState()
         refreshModels()
+        importSessionsFromDisk()
+    }
+
+    /**
+     * Adds the chats DeepSeek Harness already has on disk, so a conversation the app never wrote — one
+     * started in the harness web page, or from before a reinstall — is listed and can be continued.
+     */
+    private fun importSessionsFromDisk() {
+        backendScope.launch {
+            val disk = runCatching { DshDiskSessions.list(application) }.getOrDefault(emptyList())
+            if (disk.isEmpty()) return@launch
+            val known = _conversations.value.map { it.sessionId }.toSet()
+            val imported = disk.filter { it.id !in known }.map { session ->
+                Conversation(
+                    id = session.id,
+                    title = session.title ?: "DeepSeek Harness chat",
+                    modelId = session.model.orEmpty(),
+                    sessionId = session.id,
+                    createdAt = session.updatedAt,
+                    updatedAt = session.updatedAt,
+                    hasActivity = session.turns > 0,
+                    stepCount = session.turns,
+                )
+            }
+            if (imported.isEmpty()) return@launch
+            _conversations.value = (_conversations.value + imported).sortedByDescending { it.updatedAt }
+            persistConversations()
+            Log.i(TAG, "imported ${imported.size} dsh session(s) from the container")
+        }
+    }
+
+    /** Reads a stored transcript into the chat that has no local messages yet. */
+    private fun hydrateFromDisk(conversation: Conversation) {
+        backendScope.launch {
+            val stored = DshDiskSessions.transcript(application, conversation.sessionId)
+            if (stored.isEmpty()) return@launch
+            if (store.currentConversation.value?.id != conversation.id) return@launch
+            if (_messages.value.isNotEmpty()) return@launch
+            val messages = stored.map { message ->
+                ChatMessage(
+                    conversationId = conversation.id,
+                    role = if (message.role == "assistant") MessageRole.ASSISTANT else MessageRole.USER,
+                    content = message.text,
+                )
+            }
+            writeMessages(conversation.id, messages)
+            _messages.value = messages
+            Log.i(TAG, "hydrated ${messages.size} message(s) from the container")
+        }
     }
 
     fun stop() {
@@ -166,6 +215,7 @@ class DshChatBackend(
         _messages.value = readMessages(id)
         _conversationError.value = null
         _isLoadingConversation.value = false
+        if (_messages.value.isEmpty() && conversation.stepCount > 0) hydrateFromDisk(conversation)
     }
 
     /** Messages of a chat that is not open, for export and share. */
