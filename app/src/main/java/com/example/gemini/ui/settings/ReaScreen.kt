@@ -641,7 +641,8 @@ internal fun ReaServerDialog(
                     Text("REA is not installed yet. Set it up first, then add the server.", fontSize = 12.5.sp, color = Amber)
                     if (onOpenRea != null) OutlinedButton(onClick = onOpenRea) { Text("Open REA setup") }
                 }
-                if (com.example.gemini.data.preferences.AuthPreferences.currentRemoteMode) {
+                // This build has no server mode, so agents always run on this phone where REA is installed.
+                if (false) {
                     Text(
                         "Server mode is on: agents start MCP servers on the server, where this phone's REA is not installed. REA works when the agent runs on this phone (Settings → Servers & Connectivity).",
                         fontSize = 12.5.sp, color = Amber
