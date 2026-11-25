@@ -26,6 +26,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.File
 import java.util.UUID
 
@@ -401,6 +403,31 @@ class DshChatBackend(
                                         promptOnce()
                                     }
                                     DshEvent.PromptAccepted -> promptOnce()
+                                    is DshEvent.ServerRequest -> opened.send(
+                                        when (event.method) {
+                                            // The harness may ask before running something it was
+                                            // allowed to run anyway; refusing here would just stall.
+                                            "approval/request" -> {
+                                                Log.i(TAG, "approving a harness request")
+                                                DshProtocol.serverReply(
+                                                    event.id,
+                                                    buildJsonObject { put("outcome", "allowed-once") },
+                                                )
+                                            }
+                                            // A question needs a human; the chat has no card for it yet.
+                                            "user-question/ask" -> {
+                                                Log.i(TAG, "declining a harness question")
+                                                DshProtocol.serverReply(
+                                                    event.id,
+                                                    buildJsonObject { put("cancelled", true) },
+                                                )
+                                            }
+                                            else -> {
+                                                Log.w(TAG, "refusing ${event.method}")
+                                                DshProtocol.serverRefusal(event.id, event.method)
+                                            }
+                                        },
+                                    )
                                     is DshEvent.Text -> appendText(assistantId, event.delta)
                                     is DshEvent.Reasoning -> appendThought(assistantId, event.delta)
                                     is DshEvent.ToolStarted ->

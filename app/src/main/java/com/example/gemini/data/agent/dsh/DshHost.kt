@@ -276,6 +276,12 @@ class ProotDshHost(
     }
 }
 
+/**
+ * Event kinds the app never reads: `request/context` repeats the whole prompt and `request/header` the
+ * system prompt, on every model step. Letting them through only fills the session's frame buffer.
+ */
+private val NOISE = listOf("request/context", "request/header", "decision/message")
+
 /** A PRoot child process spoken to over stdin/stdout. */
 internal class ProcessDshSession(
     private val process: Process,
@@ -326,7 +332,9 @@ internal class ProcessDshSession(
                             if (kind.isNotEmpty() && announced.add(kind)) {
                                 Log.i("ProcessDshSession", "recv $kind")
                             }
-                            flow.tryEmit(line)
+                            // Noise that costs buffer slots and no information: the whole prompt is
+                            // re-sent in request/context, and the system prompt in request/header.
+                            if (NOISE.none { kind.endsWith(it) }) flow.tryEmit(line)
                         }
                     }
                 }

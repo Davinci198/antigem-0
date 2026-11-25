@@ -1,5 +1,8 @@
 package com.example.gemini.data.agent.dsh
 
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -233,6 +236,23 @@ class DshProtocolTest {
         assertTrue(frame.contains("\"id\":4"))
         assertTrue(frame.contains("\"method\":\"session/resume\""))
         assertTrue(frame.contains("\"sessionId\":\"$sessionId\""))
+    }
+
+    @Test
+    fun `a request from the harness is answered, not ignored`() {
+        // Ignoring one blocks the turn until the timeout: the harness waits for an answer.
+        val request = parser.parse(
+            """{"jsonrpc":"2.0","id":"req-7","method":"approval/request","params":{"sessionId":"$sessionId"}}""",
+        )
+        assertEquals(DshEvent.ServerRequest(JsonPrimitive("req-7"), "approval/request"), request)
+
+        // The answer must carry the very id the harness sent, or it waits forever.
+        val reply = DshProtocol.serverReply(
+            JsonPrimitive("req-7"),
+            kotlinx.serialization.json.buildJsonObject { put("outcome", "allowed-once") },
+        )
+        assertTrue(reply.contains("\"id\":\"req-7\""))
+        assertTrue(reply.contains("allowed-once"))
     }
 
     private fun parseTurnEnd(reason: String): DshEvent = parser.parse(

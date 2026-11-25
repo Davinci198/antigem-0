@@ -77,6 +77,26 @@ object DshProtocol {
             put("sessionId", sessionId)
         })
 
+    /** Answers a request the harness asked: the id must be the very one it sent. */
+    fun serverReply(id: JsonElement, result: JsonObject): String = buildJsonObject {
+        put("jsonrpc", "2.0")
+        put("id", id)
+        put("result", result)
+    }.toString()
+
+    /** Refuses a request the app does not implement, so the harness stops waiting for it. */
+    fun serverRefusal(id: JsonElement, method: String): String = buildJsonObject {
+        put("jsonrpc", "2.0")
+        put("id", id)
+        put(
+            "error",
+            buildJsonObject {
+                put("code", -32601)
+                put("message", "not supported: $method")
+            },
+        )
+    }.toString()
+
     fun shutdownFrame(id: Int = SHUTDOWN_ID): String = frame(id, "shutdown", null)
 
     private fun frame(id: Int, method: String, params: JsonObject?): String = buildJsonObject {
@@ -100,6 +120,12 @@ sealed interface DshEvent {
 
     /** `session/resume` failed: nothing is persisted yet, so the prompt creates the session. */
     data object ResumeMissed : DshEvent
+
+    /**
+     * A request the harness is waiting on, e.g. an approval or a question it wants asked. Ignoring it
+     * leaves the turn blocked until the timeout, so every one is answered.
+     */
+    data class ServerRequest(val id: JsonElement, val method: String) : DshEvent
 
     data object ShutdownAcknowledged : DshEvent
 
@@ -156,6 +182,15 @@ class DshSdkParser(sessionId: String) {
             ?: return diagnostic(trimmed)
 
         val frame = element as? JsonObject ?: return DshEvent.Ignored
+
+        // A request from the harness carries a method and an id but no result: it is waiting for an
+        // answer, and a request nobody answers blocks the turn.
+        frame["method"]?.jsonPrimitive?.contentOrNull?.let { method ->
+            val id = frame["id"]
+            if (id != null && frame["result"] == null && frame["error"] == null) {
+                return DshEvent.ServerRequest(id, method)
+            }
+        }
 
         frame["id"]?.jsonPrimitive?.intOrNull?.let { id ->
             (frame["error"] as? JsonObject)?.let { error ->
