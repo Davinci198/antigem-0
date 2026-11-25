@@ -202,6 +202,39 @@ class DshProtocolTest {
         assertEquals(DshEvent.Ignored, stranger)
     }
 
+    @Test
+    fun `resume is answered whether a session is persisted or not`() {
+        // The SDK runtime holds no session after `initialize`, and a prompt for a session that is
+        // already on disk fails with 'session "…" already exists'. So the resume answer decides
+        // whether the prompt creates the session or continues it.
+        assertEquals(DshEvent.Resumed, DshSdkParser(sessionId).parse("""{"jsonrpc":"2.0","id":4,"result":{}}"""))
+        assertEquals(
+            DshEvent.ResumeMissed,
+            DshSdkParser(sessionId).parse(
+                """{"jsonrpc":"2.0","id":4,"error":{"code":-32603,"message":"unknown session"}}""",
+            ),
+        )
+    }
+
+    @Test
+    fun `initialize result carries no session id`() {
+        // Recorded from the runtime: the answer is serverInfo alone, so a client that waits for a
+        // session id here never prompts.
+        assertEquals(
+            DshEvent.Initialized,
+            parser.parse("""{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"x","version":"0"}}}"""),
+        )
+    }
+
+    @Test
+    fun `resume frame names the session and its own id`() {
+        val frame = DshProtocol.resumeFrame(sessionId)
+
+        assertTrue(frame.contains("\"id\":4"))
+        assertTrue(frame.contains("\"method\":\"session/resume\""))
+        assertTrue(frame.contains("\"sessionId\":\"$sessionId\""))
+    }
+
     private fun parseTurnEnd(reason: String): DshEvent = parser.parse(
         """{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"$sessionId",
            "event":{"type":"turn/end","data":{"reason":$reason}}}}""",

@@ -24,7 +24,9 @@ import kotlinx.serialization.json.put
  *
  * ```
  * -> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"cwd":..,"provider":..,"model":..}}
- * <- {"jsonrpc":"2.0","id":1,"result":{..}}
+ * <- {"jsonrpc":"2.0","id":1,"result":{"serverInfo":{..}}}   // no session id: the runtime holds none
+ * -> {"jsonrpc":"2.0","id":4,"method":"session/resume","params":{"sessionId":..}}
+ * <- {"jsonrpc":"2.0","id":4,"result":{}}                    // or an error when nothing is persisted yet
  * -> {"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":..,"contentBlocks":[..]}}
  * <- {"jsonrpc":"2.0","method":"session.event","params":{"sessionId":..,"event":{"type":..,"data":{..}}}}
  * -> {"jsonrpc":"2.0","id":3,"method":"shutdown"}
@@ -42,6 +44,14 @@ object DshProtocol {
     const val INITIALIZE_ID = 1
     const val PROMPT_ID = 2
     const val SHUTDOWN_ID = 3
+
+    /**
+     * Not part of the SDK's numbering: the client picks it. `session/prompt` for an id that is
+     * already on disk fails with 'session "…" already exists', so an existing session has to be
+     * loaded by `session/resume` first. That call answers `{}` on success and an error when nothing
+     * is persisted, which is exactly the first-turn case.
+     */
+    const val RESUME_ID = 4
 
     fun initializeFrame(cwd: String, provider: String, model: String, id: Int = INITIALIZE_ID): String =
         frame(id, "initialize", buildJsonObject {
@@ -61,6 +71,12 @@ object DshProtocol {
             })
         })
 
+    /** Loads a session that is already persisted. Answers `{}`, or an error when there is none. */
+    fun resumeFrame(sessionId: String, id: Int = RESUME_ID): String =
+        frame(id, "session/resume", buildJsonObject {
+            put("sessionId", sessionId)
+        })
+
     fun shutdownFrame(id: Int = SHUTDOWN_ID): String = frame(id, "shutdown", null)
 
     private fun frame(id: Int, method: String, params: JsonObject?): String = buildJsonObject {
@@ -78,6 +94,12 @@ sealed interface DshEvent {
 
     /** `session/prompt` was accepted; work is now streaming. */
     data object PromptAccepted : DshEvent
+
+    /** `session/resume` succeeded: the session is loaded and can be prompted. */
+    data object Resumed : DshEvent
+
+    /** `session/resume` failed: nothing is persisted yet, so the prompt creates the session. */
+    data object ResumeMissed : DshEvent
 
     data object ShutdownAcknowledged : DshEvent
 
@@ -137,6 +159,8 @@ class DshSdkParser(sessionId: String) {
 
         frame["id"]?.jsonPrimitive?.intOrNull?.let { id ->
             (frame["error"] as? JsonObject)?.let { error ->
+                // A missing session is the normal first-turn answer, not a broken turn.
+                if (id == DshProtocol.RESUME_ID) return DshEvent.ResumeMissed
                 return DshEvent.Failed(
                     error["message"]?.jsonPrimitive?.contentOrNull
                         ?.ifBlank { null }
@@ -144,16 +168,8 @@ class DshSdkParser(sessionId: String) {
                 )
             }
             return when (id) {
-                DshProtocol.INITIALIZE_ID -> {
-                    // `initialize` creates the session and answers with its id; prompting the setup id
-                    // afterwards fails with 'session "…" already exists'. So the id in the result wins.
-                    val created = (frame["result"] as? JsonObject)?.string("sessionId").orEmpty()
-                    if (created.isNotBlank()) {
-                        expectedSessionId = created
-                        adopted = true
-                    }
-                    DshEvent.Initialized
-                }
+                DshProtocol.INITIALIZE_ID -> DshEvent.Initialized
+                DshProtocol.RESUME_ID -> DshEvent.Resumed
                 DshProtocol.PROMPT_ID -> DshEvent.PromptAccepted
                 DshProtocol.SHUTDOWN_ID -> DshEvent.ShutdownAcknowledged
                 else -> DshEvent.Ignored

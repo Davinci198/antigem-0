@@ -358,37 +358,34 @@ class DshChatBackend(
 
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
                 var prompted = false
+                // Both a loaded session and a missing one end the same way: prompt, once. A missing
+                // one is created by the prompt itself; a loaded one would reject the prompt.
+                fun promptOnce() {
+                    if (prompted) return
+                    prompted = true
+                    opened.send(
+                        DshProtocol.promptFrame(sessionId = parser.sessionIdInUse, text = prompt),
+                    )
+                }
                 try {
                     opened.lines.collect { line ->
                         when (val event = parser.parse(line)) {
                             DshEvent.Initialized -> {
-                                // The shape of this answer decides which id the prompt uses.
-                                Log.i(TAG, "initialize answered: ${line.take(300)}")
-                                if (!prompted) {
-                                    prompted = true
-                                    opened.send(
-                                        DshProtocol.promptFrame(
-                                            // The id `initialize` just created, not the setup id:
-                                            // prompting the setup id fails with 'already exists'.
-                                            sessionId = parser.sessionIdInUse,
-                                            text = prompt,
-                                        ),
-                                    )
-                                }
+                                // The runtime answers with serverInfo only: it holds no session, so the
+                                // session must be loaded before it can be prompted again.
+                                opened.send(
+                                    DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),
+                                )
                             }
-                            DshEvent.PromptAccepted -> {
-                                if (!prompted) {
-                                    prompted = true
-                                    opened.send(
-                                        DshProtocol.promptFrame(
-                                            // The id `initialize` just created, not the setup id:
-                                            // prompting the setup id fails with 'already exists'.
-                                            sessionId = parser.sessionIdInUse,
-                                            text = prompt,
-                                        ),
-                                    )
-                                }
+                            DshEvent.Resumed -> {
+                                Log.i(TAG, "session resumed")
+                                promptOnce()
                             }
+                            DshEvent.ResumeMissed -> {
+                                Log.i(TAG, "no persisted session: the prompt creates it")
+                                promptOnce()
+                            }
+                            DshEvent.PromptAccepted -> promptOnce()
                             is DshEvent.Text -> appendText(assistantId, event.delta)
                             is DshEvent.Reasoning -> appendThought(assistantId, event.delta)
                             is DshEvent.ToolStarted ->
