@@ -107,7 +107,18 @@ sealed interface DshEvent {
  * assistant text already delivered by a compacted stream from being delivered
  * twice when the completed message repeats it.
  */
-class DshSdkParser(private val expectedSessionId: String) {
+class DshSdkParser(sessionId: String) {
+
+    /**
+     * The session id the harness is answering under. It is not necessarily the one the app asked
+     * for: a fresh workspace adopts the prompt's id, but a resumed one keeps its own, and then every
+     * event (turn/end included) is filtered out and the turn looks mute. One process serves one turn
+     * here, so adopting the first id that arrives is safe and it is what makes later turns work.
+     */
+    private var expectedSessionId = sessionId
+
+    /** Only one adoption per process: the id the harness announces is trusted once. */
+    private var adopted = false
 
     private val streamedText = StringBuilder()
     private val toolNames = mutableMapOf<String, String>()
@@ -140,12 +151,27 @@ class DshSdkParser(private val expectedSessionId: String) {
         val params = frame["params"] as? JsonObject ?: return DshEvent.Ignored
         return when (frame["method"]?.jsonPrimitive?.contentOrNull) {
             "session.status" -> {
-                if (params.string("sessionId") != expectedSessionId) DshEvent.Ignored
-                else DshEvent.Status(params.string("status") == "running")
+                if (adopt(params.string("sessionId"))) DshEvent.Status(params.string("status") == "running")
+                else DshEvent.Ignored
             }
             "session.event" -> parseSessionEvent(params)
             else -> DshEvent.Ignored
         }
+    }
+
+    /**
+     * True when [sessionId] is the session this parser follows, adopting the first unknown id it
+     * sees. A resumed harness answers under its own id and everything else would be dropped.
+     */
+    private fun adopt(sessionId: String): Boolean {
+        if (sessionId == expectedSessionId) return true
+        if (sessionId.isBlank()) return false
+        if (!adopted) {
+            adopted = true
+            expectedSessionId = sessionId
+            return true
+        }
+        return sessionId == expectedSessionId
     }
 
     private fun diagnostic(line: String): DshEvent {
@@ -156,7 +182,7 @@ class DshSdkParser(private val expectedSessionId: String) {
     }
 
     private fun parseSessionEvent(params: JsonObject): DshEvent {
-        if (params.string("sessionId") != expectedSessionId) return DshEvent.Ignored
+        if (!adopt(params.string("sessionId"))) return DshEvent.Ignored
         val event = params["event"] as? JsonObject ?: return DshEvent.Ignored
         val data = event["data"] as? JsonObject ?: return DshEvent.Ignored
         return when (event.string("type")) {

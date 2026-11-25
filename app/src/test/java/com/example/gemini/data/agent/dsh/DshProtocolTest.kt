@@ -176,6 +176,24 @@ class DshProtocolTest {
         )
     }
 
+    @Test
+    fun `the session id the harness answers under is adopted once`() {
+        // A resumed harness keeps its own session id. Filtering it out dropped every event,
+        // turn/end included, and the turn looked mute: first message answered, the rest hung.
+        val adopted = parser.parse(
+            """{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"harness-own",
+               "event":{"type":"turn/end","data":{"reason":null}}}}""",
+        )
+        assertEquals(DshEvent.TurnCompleted, adopted)
+
+        // Only one adoption: a third session cannot steal the turn mid-stream.
+        val stranger = parser.parse(
+            """{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"someone-else",
+               "event":{"type":"turn/end","data":{"reason":null}}}}""",
+        )
+        assertEquals(DshEvent.Ignored, stranger)
+    }
+
     private fun parseTurnEnd(reason: String): DshEvent = parser.parse(
         """{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"$sessionId",
            "event":{"type":"turn/end","data":{"reason":$reason}}}}""",
