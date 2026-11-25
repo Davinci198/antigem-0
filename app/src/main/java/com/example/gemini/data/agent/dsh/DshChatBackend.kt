@@ -313,51 +313,72 @@ class DshChatBackend(
         backendScope.launch { runCatching { kept.session.close() } }
     }
 
+    /**
+     * Shuts down the process of a turn that must not be kept: a dead one, or one that belongs to a
+     * conversation this backend no longer serves. The harness is asked to shut down before the pipe
+     * closes, so the guest exits on its own terms instead of being killed under proot.
+     */
+    private fun dropWarmIfOurs(session: DshSession?) {
+        if (session == null) return
+        if (warm?.session === session) warm = null
+        backendScope.launch {
+            runCatching { session.send(DshProtocol.shutdownFrame()) }
+            runCatching { session.close() }
+        }
+    }
+
     private suspend fun runTurn(conversation: Conversation, prompt: String, assistantId: String) {
         val route = resolvedRoute(prefs.route.value)
         val host = host()
         var session: DshSession? = null
         // Read in `finally`, where a local from the `try` block is out of scope.
         var adoptedSessionId: String? = null
+        // A process is only worth keeping while it answered; a dead one would hang the next turn.
+        var endedCleanly: Boolean? = null
         var promote = false
         try {
             if (!host.available()) {
                 failTurn("DeepSeek Harness is not installed in the container yet. Open Settings → Agents to install it.")
                 return
             }
-            // The harness answers exactly one turn per process. A second `initialize` on the
-            // process that answered the previous turn is accepted and answered with nothing at all
-            // (no result, no prompt, no turn/start), so a reused session is a turn that hangs until
-            // the timeout. Every turn therefore gets its own process, and the process is closed when
-            // the turn ends.
-            dropWarm()
-            val opened = host.open(
+            // A live process answers immediately; booting one under PRoot costs ~25 s of plugin load
+            // and a model probe, and that price was paid on every message. The SDK accepts repeated
+            // initialize/prompt frames on one process, so an existing one is kept and reused.
+            val kept = warm?.takeIf { it.conversationId == conversation.id && it.route == route }
+            val opened = kept?.session ?: host.open(
                 DshSessionRequest(
                     setupId = conversation.sessionId,
                     workspace = WORKSPACE,
                     route = route,
                 ),
-            )
+            ).also { warm = WarmSession(conversation.id, route, it) }
             // Held in a `val`: the turn's lambdas capture it, so a `var` would stop
             // smart-casting and leave every `opened.send` nullable.
             session = opened
             activeSession = opened
             val parser = DshSdkParser(conversation.sessionId)
-
-            // The ids are the ones the parser recognises (INITIALIZE_ID, PROMPT_ID, SHUTDOWN_ID):
-            // a fresh id per turn lands on 'else -> Ignored', the harness answer is dropped, no
-            // prompt is ever sent and the turn hangs until the timeout. That is exactly how the
-            // first message worked and every later one did not.
-            opened.send(
-                DshProtocol.initializeFrame(
-                    cwd = WORKSPACE,
-                    provider = route.provider,
-                    model = route.model,
-                ),
-            )
+            if (kept != null) Log.i(TAG, "reusing the live harness process")
 
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
                 var prompted = false
+                // Sent on subscription, not before it: the process answers in a couple of
+                // milliseconds and a SharedFlow drops values nobody is listening for yet.
+                // The ids are the ones the parser recognises: anything else lands on
+                // 'else -> Ignored', the answer is dropped and the turn hangs until the timeout.
+                val incoming = opened.lines.onSubscription {
+                    if (kept == null) {
+                        opened.send(
+                            DshProtocol.initializeFrame(
+                                cwd = WORKSPACE,
+                                provider = route.provider,
+                                model = route.model,
+                            ),
+                        )
+                    } else {
+                        // Already initialised: go straight to loading the stored session.
+                        opened.send(DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse))
+                    }
+                }
                 // Both a loaded session and a missing one end the same way: prompt, once. A missing
                 // one is created by the prompt itself, while a loaded one would reject the prompt.
                 // A lambda, not a local `fun`: `send` suspends and a plain local function cannot call it.
@@ -370,7 +391,7 @@ class DshChatBackend(
                     }
                 }
                 try {
-                    opened.lines.collect { line ->
+                    incoming.collect { line ->
                         when (val event = parser.parse(line)) {
                             DshEvent.Initialized -> {
                                 // The runtime answers with serverInfo only: it holds no session, so the
@@ -414,6 +435,7 @@ class DshChatBackend(
                 }
             }
             Log.i(TAG, "turn verdict: ended=$ended")
+            endedCleanly = ended
             adoptedSessionId = parser.sessionIdInUse
             if (ended == null) {
                 failTurn("DeepSeek Harness did not answer in time.")
@@ -436,11 +458,11 @@ class DshChatBackend(
                 }
                 persistConversations()
             }
-            // Never kept: see the note where the session is opened. One turn, one process. The
-            // harness is asked to shut down before the pipe is closed, so the guest exits on its
-            // own terms instead of being killed under proot.
-            runCatching { finished?.send(DshProtocol.shutdownFrame()) }
-            runCatching { finished?.close() }
+            // A process that is kept is not shut down: the next message in this conversation answers
+            // without paying the boot again. It is closed by dropWarm (new chat, restart, stop), and
+            // the harness is always asked to shut down before the pipe closes so the guest exits on
+            // its own terms instead of being killed under proot.
+            if (warm?.session !== finished || endedCleanly != true) dropWarmIfOurs(finished)
             if (activeSession === session) activeSession = null
             finishStreaming()
         }
