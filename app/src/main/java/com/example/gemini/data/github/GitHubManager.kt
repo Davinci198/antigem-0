@@ -567,11 +567,10 @@ object GitHubManager {
             if (line.startsWith("ANTIGEM_CLONED_PATH=")) path = line.removePrefix("ANTIGEM_CLONED_PATH=").trim()
             else if (line.isNotBlank() && !line.contains('%')) log += line
         }
-        val exit = if (remote) {
-            com.example.gemini.data.remote.AgyBridgeService.instance.cloneRepository(url, folder.orEmpty(), onLine = sink)
-        } else {
-            LocalEnvironmentManager.executeScriptLive(context, "git_clone", listOfNotNull(url, folder?.takeIf { it.isNotBlank() }), sink).exitCode
-        }
+        // This build has no server mode: the clone always runs on the phone, in the container.
+        val exit = LocalEnvironmentManager.executeScriptLive(
+            context, "git_clone", listOfNotNull(url, folder?.takeIf { it.isNotBlank() }), sink
+        ).exitCode
         val p = path
         return if (exit == 0 && p != null) Result.success(p)
         else Result.failure(IllegalStateException(log.filter { !it.startsWith("=") }.takeLast(4).joinToString("\n").ifBlank { "git clone failed (exit $exit)" }))
