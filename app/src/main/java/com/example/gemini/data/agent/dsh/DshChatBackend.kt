@@ -395,7 +395,9 @@ class DshChatBackend(
                                         promptOnce()
                                     }
                                     DshEvent.ResumeMissed -> {
-                                        Log.i(TAG, "no persisted session: the prompt creates it")
+                                        // Normal on a warm process: the session is active, not
+                                        // persisted-and-idle, so the prompt continues it in place.
+                                        Log.i(TAG, "resume refused: the prompt decides")
                                         promptOnce()
                                     }
                                     DshEvent.PromptAccepted -> promptOnce()
@@ -407,10 +409,13 @@ class DshChatBackend(
                                         completeTool(assistantId, event.callId, event.name, event.summary)
                                     DshEvent.TurnCompleted -> throw TurnFinished()
                                     is DshEvent.Failed -> throw TurnFailed(event.message)
-                                    // A session.event the parser drops usually means the harness is
-                                    // answering under a session id the app does not expect.
-                                    else -> if (line.contains("\"session.event\"")) {
-                                        Log.i(TAG, "ignored a session.event (session id mismatch?)")
+                                    // Only a dropped answer is worth reporting: the harness sends
+                                    // plenty of notices the parser does not model.
+                                    else -> if (
+                                        line.contains("assistant/message") ||
+                                        line.contains("turn/end")
+                                    ) {
+                                        Log.w(TAG, "dropped an answer event: session id mismatch?")
                                     }
                                 }
                             }
