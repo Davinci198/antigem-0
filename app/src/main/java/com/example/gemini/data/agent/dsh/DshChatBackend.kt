@@ -122,6 +122,7 @@ class DshChatBackend(
      */
     private fun importSessionsFromDisk() {
         backendScope.launch {
+            adoptWorkspacesFromDisk()
             val disk = runCatching { DshDiskSessions.list(application) }.getOrDefault(emptyList())
             if (disk.isEmpty()) return@launch
             // A folder with neither a title nor a finished turn is an empty shell from dsh itself.
@@ -146,6 +147,27 @@ class DshChatBackend(
             _conversations.value = (_conversations.value + imported).sortedByDescending { it.updatedAt }
             persistConversations()
             Log.i(TAG, "imported ${imported.size} dsh session(s) from the container")
+        }
+    }
+
+    /**
+     * Gives every chat that predates per-chat workspaces the directory the harness filed it under, so a
+     * chat created in `/root/workspace` does not get looked for in `/root/chat` and declared missing.
+     */
+    private suspend fun adoptWorkspacesFromDisk() {
+        val bySession = runCatching { DshDiskSessions.list(application) }.getOrDefault(emptyList())
+            .associateBy { it.id }
+        if (bySession.isEmpty()) return
+        var changed = false
+        _conversations.value = _conversations.value.map { conversation ->
+            if (conversation.workspaceUri.isNotBlank()) return@map conversation
+            val found = bySession[conversation.sessionId]?.workspace ?: return@map conversation
+            changed = true
+            conversation.copy(workspaceUri = found)
+        }
+        if (changed) {
+            persistConversations()
+            Log.i(TAG, "adopted the workspace of ${bySession.size} stored session(s)")
         }
     }
 
