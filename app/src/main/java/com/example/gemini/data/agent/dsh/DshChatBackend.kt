@@ -389,18 +389,24 @@ class DshChatBackend(
                                 completeTool(assistantId, event.callId, event.name, event.summary)
                             DshEvent.TurnCompleted -> throw TurnFinished()
                             is DshEvent.Failed -> throw TurnFailed(event.message)
-                            else -> Unit
+                            // A session.event that the parser drops usually means the harness is
+                            // answering under a session id the app does not expect.
+                            else -> if (line.contains("\"session.event\"")) {
+                                Log.i(TAG, "ignored a session.event (session id mismatch?)")
+                            }
                         }
                     }
                     // The stream closed without a verdict: the process died.
                     throw TurnFailed(describeDeath(opened))
                 } catch (_: TurnFinished) {
+                    Log.i(TAG, "turn finished: turn/end received")
                     true
                 } catch (failed: TurnFailed) {
                     failTurn(failed.message ?: "DeepSeek Harness failed.")
                     false
                 }
             }
+            Log.i(TAG, "turn verdict: ended=$ended prompted=$prompted")
             if (ended == null) {
                 failTurn("DeepSeek Harness did not answer in time.")
             } else if (ended) {
@@ -447,6 +453,7 @@ class DshChatBackend(
     }
 
     private fun failTurn(message: String) {
+        Log.i(TAG, "failTurn: $message")
         _conversationError.value = message
         setMessages(_messages.value.map { if (it.isStreaming) it.copy(isStreaming = false) else it })
         saveMessages()
