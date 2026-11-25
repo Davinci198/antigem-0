@@ -110,7 +110,9 @@ object DshDiskSessions {
             Log.w(TAG, "could not start the session reader: ${it.message}")
             return "[]"
         }
-        return process.use { proc ->
+        // `Process` is not Closeable, so it is torn down by hand whatever happens.
+        val proc = process
+        return try {
             val output = StringBuilder()
             val reader = Thread {
                 runCatching {
@@ -132,6 +134,8 @@ object DshDiskSessions {
             errorReader.join(500)
             if (errors.isNotEmpty()) Log.i(TAG, "session reader said: ${errors.toString().trim().take(200)}")
             output.toString().trim().ifBlank { "[]" }
+        } finally {
+            proc.destroy()
         }
     }
 
