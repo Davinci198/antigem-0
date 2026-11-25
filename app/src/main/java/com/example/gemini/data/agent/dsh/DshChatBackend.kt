@@ -29,6 +29,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
+import java.util.Collections
 import java.util.UUID
 
 /**
@@ -93,6 +94,9 @@ class DshChatBackend(
      */
     private var warm: WarmSession? = null
 
+    /** Sessions this process already holds open, so no turn pays for a resume the harness refuses. */
+    private val loaded = Collections.synchronizedSet(mutableSetOf<String>())
+
     private class WarmSession(
         val conversationId: String,
         val route: DshModelRoute,
@@ -120,8 +124,10 @@ class DshChatBackend(
         backendScope.launch {
             val disk = runCatching { DshDiskSessions.list(application) }.getOrDefault(emptyList())
             if (disk.isEmpty()) return@launch
+            // A folder with neither a title nor a finished turn is an empty shell from dsh itself.
+            val usable = disk.filter { it.title != null || it.turns > 0 }
             val known = _conversations.value.map { it.sessionId }.toSet()
-            val imported = disk.filter { it.id !in known }.map { session ->
+            val imported = usable.filter { it.id !in known }.map { session ->
                 Conversation(
                     id = session.id,
                     title = session.title ?: "DeepSeek Harness chat",
@@ -364,6 +370,7 @@ class DshChatBackend(
         val kept = warm ?: return
         Log.i(TAG, "dropWarm: closing the kept session")
         warm = null
+        loaded.clear()
         backendScope.launch { runCatching { kept.session.close() } }
     }
 
@@ -374,7 +381,10 @@ class DshChatBackend(
      */
     private fun dropWarmIfOurs(session: DshSession?) {
         if (session == null) return
-        if (warm?.session === session) warm = null
+        if (warm?.session === session) {
+            warm = null
+            loaded.clear()
+        }
         backendScope.launch {
             runCatching { session.send(DshProtocol.shutdownFrame()) }
             runCatching { session.close() }
@@ -444,13 +454,26 @@ class DshChatBackend(
                                     }
                                     DshEvent.Resumed -> {
                                         Log.i(TAG, "session resumed")
+                                        loaded.add(conversation.sessionId)
                                         promptOnce()
                                     }
-                                    DshEvent.ResumeMissed -> {
+                                    DshEvent.ResumeMissed -> when {
                                         // Normal on a warm process: the session is active, not
                                         // persisted-and-idle, so the prompt continues it in place.
-                                        Log.i(TAG, "resume refused: the prompt decides")
-                                        promptOnce()
+                                        kept != null -> {
+                                            Log.i(TAG, "resume refused: the prompt continues it")
+                                            loaded.add(conversation.sessionId)
+                                            promptOnce()
+                                        }
+                                        // A chat this device knows about but the harness no longer
+                                        // has: prompting would silently start an empty one.
+                                        conversation.stepCount > 0 -> throw TurnFailed(
+                                            "This chat no longer exists in DeepSeek Harness.",
+                                        )
+                                        else -> {
+                                            Log.i(TAG, "no stored session yet: the prompt creates it")
+                                            promptOnce()
+                                        }
                                     }
                                     DshEvent.PromptAccepted -> promptOnce()
                                     is DshEvent.ServerRequest -> opened.send(
@@ -507,6 +530,10 @@ class DshChatBackend(
                                     model = route.model,
                                 ),
                             )
+                        } else if (conversation.sessionId in loaded) {
+                            // Already active in this process: the prompt continues it as is, and the
+                            // harness would refuse the resume anyway.
+                            promptOnce()
                         } else {
                             // Already initialised: go straight to loading the stored session.
                             opened.send(DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse))
