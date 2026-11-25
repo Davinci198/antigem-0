@@ -96,10 +96,6 @@ class MainActivity : ComponentActivity() {
         instanceRef = java.lang.ref.WeakReference(this)
         // Settings → Agents → Global context: read the saved entries before the first chat is opened.
         com.example.gemini.data.context.GlobalContext.init(this)
-        // `pkg` in the container, the word every screen and agent uses. Cheap, idempotent, off the main thread.
-        lifecycleScope.launch(Dispatchers.IO) {
-            runCatching { com.example.gemini.data.local.AgentProvisioner.ensurePkg(applicationContext) }
-        }
         com.example.gemini.data.diagnostics.MainThreadWatchdog.start()
         com.example.gemini.data.remote.inspector.NetworkInspectorManager.isEnabled =
             chatViewModel.authPreferences.getNetworkInspectorEnabledSync()
