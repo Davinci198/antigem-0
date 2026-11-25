@@ -175,6 +175,12 @@ class ProotDshHost(
         }
         reaped.forEach { runCatching { it.close() } }
         if (reaped.isNotEmpty()) Log.i(TAG, "reaped ${reaped.size} leftover sdk session(s) before spawning")
+        // Session folders are named after the directory the harness runs in, and proot refuses to
+        // start with a working directory that does not exist inside the rootfs.
+        runCatching {
+            File(LocalEnvironmentManager.getUbuntuRootDir(context), request.workspace.trimStart('/'))
+                .mkdirs()
+        }
         val process = LocalEnvironmentManager.startGuestProcess(
             context = context,
             guestArgv = listOf(DshGuestPaths.DSH_BIN, "--profile", "sdk"),

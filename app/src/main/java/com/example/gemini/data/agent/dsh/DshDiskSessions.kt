@@ -40,6 +40,8 @@ object DshDiskSessions {
         val turns: Int,
         val provider: String?,
         val model: String?,
+        /** The guest directory the harness ran that chat in, e.g. `/root/chat`. */
+        val workspace: String?,
     )
 
     /** One readable message of a stored transcript. */
@@ -62,8 +64,21 @@ object DshDiskSessions {
                 turns = row["turns"]?.jsonPrimitive?.intOrNull ?: 0,
                 provider = row.string("provider")?.takeIf { it.isNotBlank() },
                 model = row.string("model")?.takeIf { it.isNotBlank() },
+                workspace = guestPathOf(row.string("workspace")),
             )
         }.sortedByDescending { it.updatedAt }
+    }
+
+    /**
+     * The harness names a workspace folder after its path: `/root/chat` becomes `--root-chat--`, a space
+     * becomes `~0020~`, and `/root` itself is `--root--`. This turns such a name back into a path.
+     */
+    private fun guestPathOf(folder: String?): String? {
+        if (folder.isNullOrBlank()) return null
+        var path = folder.removePrefix("--").removeSuffix("--").replace("~0020~", " ")
+        if (path.isEmpty()) return null
+        if (!path.startsWith("/")) path = "/$path"
+        return path
     }
 
     suspend fun transcript(context: Context, sessionId: String): List<DiskMessage> = withContext(Dispatchers.IO) {

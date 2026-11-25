@@ -100,6 +100,7 @@ class DshChatBackend(
     private class WarmSession(
         val conversationId: String,
         val route: DshModelRoute,
+        val workspace: String,
         val session: DshSession,
     )
 
@@ -141,6 +142,9 @@ class DshChatBackend(
                     updatedAt = session.updatedAt,
                     hasActivity = session.turns > 0,
                     stepCount = session.turns,
+                    // Kept from the harness: a chat started in /root/workspace does not exist in
+                    // /root/chat, and prompting the wrong directory starts a new empty session.
+                    workspaceUri = session.workspace.orEmpty(),
                 )
             }
             if (imported.isEmpty()) return@launch
@@ -232,6 +236,8 @@ class DshChatBackend(
             sessionId = UUID.randomUUID().toString(),
             agent = AgentKind.DEEPSEEK_HARNESS,
             modelId = prefs.route.value.model,
+            // New chats live in the dedicated directory, not in the harness' own root.
+            workspaceUri = WORKSPACE,
         )
         _conversations.value = _conversations.value + conversation
         store.currentConversation.value = conversation
@@ -453,14 +459,19 @@ class DshChatBackend(
             // A live process answers immediately; booting one under PRoot costs ~25 s of plugin load
             // and a model probe, and that price was paid on every message. The SDK accepts repeated
             // initialize/prompt frames on one process, so an existing one is kept and reused.
-            val kept = warm?.takeIf { it.conversationId == conversation.id && it.route == route }
+            // A chat carries the directory the harness ran it in: sessions are filed per workspace, so
+            // an imported chat only resumes under the directory it was created in.
+            val workspace = conversation.workspaceUri.takeIf { it.startsWith("/") } ?: WORKSPACE
+            val kept = warm?.takeIf {
+                it.conversationId == conversation.id && it.route == route && it.workspace == workspace
+            }
             val opened = kept?.session ?: host.open(
                 DshSessionRequest(
                     setupId = conversation.sessionId,
-                    workspace = WORKSPACE,
+                    workspace = workspace,
                     route = route,
                 ),
-            ).also { warm = WarmSession(conversation.id, route, it) }
+            ).also { warm = WarmSession(conversation.id, route, workspace, it) }
             // Held in a `val`: the turn's lambdas capture it, so a `var` would stop
             // smart-casting and leave every `opened.send` nullable.
             session = opened
@@ -570,7 +581,7 @@ class DshChatBackend(
                         if (kept == null) {
                             opened.send(
                                 DshProtocol.initializeFrame(
-                                    cwd = WORKSPACE,
+                                    cwd = workspace,
                                     provider = route.provider,
                                     model = route.model,
                                 ),
@@ -802,7 +813,7 @@ class DshChatBackend(
     private companion object {
         const val TAG = "DshChatBackend"
         const val NEW_CHAT_TITLE = "New Chat"
-        const val WORKSPACE = "/root/workspace"
+        const val WORKSPACE = "/root/chat"
         const val TURN_TIMEOUT_MS = 30 * 60 * 1000L
 
         /** Session ids the user deleted, so the container import stops offering them again. */
