@@ -144,7 +144,16 @@ class DshSdkParser(sessionId: String) {
                 )
             }
             return when (id) {
-                DshProtocol.INITIALIZE_ID -> DshEvent.Initialized
+                DshProtocol.INITIALIZE_ID -> {
+                    // `initialize` creates the session and answers with its id; prompting the setup id
+                    // afterwards fails with 'session "…" already exists'. So the id in the result wins.
+                    val created = (frame["result"] as? JsonObject)?.string("sessionId")
+                    if (created.isNotBlank()) {
+                        expectedSessionId = created
+                        adopted = true
+                    }
+                    DshEvent.Initialized
+                }
                 DshProtocol.PROMPT_ID -> DshEvent.PromptAccepted
                 DshProtocol.SHUTDOWN_ID -> DshEvent.ShutdownAcknowledged
                 else -> DshEvent.Ignored

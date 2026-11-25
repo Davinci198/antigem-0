@@ -362,11 +362,15 @@ class DshChatBackend(
                     opened.lines.collect { line ->
                         when (val event = parser.parse(line)) {
                             DshEvent.Initialized -> {
+                                // The shape of this answer decides which id the prompt uses.
+                                Log.i(TAG, "initialize answered: ${line.take(300)}")
                                 if (!prompted) {
                                     prompted = true
                                     opened.send(
                                         DshProtocol.promptFrame(
-                                            sessionId = conversation.sessionId,
+                                            // The id `initialize` just created, not the setup id:
+                                            // prompting the setup id fails with 'already exists'.
+                                            sessionId = parser.sessionIdInUse,
                                             text = prompt,
                                         ),
                                     )
@@ -377,7 +381,9 @@ class DshChatBackend(
                                     prompted = true
                                     opened.send(
                                         DshProtocol.promptFrame(
-                                            sessionId = conversation.sessionId,
+                                            // The id `initialize` just created, not the setup id:
+                                            // prompting the setup id fails with 'already exists'.
+                                            sessionId = parser.sessionIdInUse,
                                             text = prompt,
                                         ),
                                     )
