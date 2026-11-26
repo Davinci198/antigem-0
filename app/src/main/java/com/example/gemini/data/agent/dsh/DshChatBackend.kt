@@ -136,7 +136,7 @@ class DshChatBackend(
                     // Without this the chat is saved as an AGY conversation and disappears on restore.
                     agent = AgentKind.DEEPSEEK_HARNESS,
                     id = session.id,
-                    title = session.title ?: "DeepSeek Harness chat",
+                    title = cleanTitle(session.title).ifBlank { "DeepSeek Harness chat" },
                     modelId = session.model.orEmpty(),
                     sessionId = session.id,
                     createdAt = session.updatedAt,
@@ -192,6 +192,7 @@ class DshChatBackend(
             }
             writeMessages(conversation.id, messages)
             _messages.value = messages
+            fillMissingTitle(conversation.id, messages)
             Log.i(TAG, "hydrated ${messages.size} message(s) from the container")
         }
     }
@@ -253,7 +254,21 @@ class DshChatBackend(
         _messages.value = readMessages(id)
         _conversationError.value = null
         _isLoadingConversation.value = false
+        fillMissingTitle(id, _messages.value)
         if (_messages.value.isEmpty() && conversation.stepCount > 0) hydrateFromDisk(conversation)
+    }
+
+    /**
+     * Replaces the title of a chat whose title says nothing — one saved from the wrapped prompt, or lost
+     * with it — with its first question. Chats that were damaged by the old title read 'New Chat' here.
+     */
+    private fun fillMissingTitle(conversationId: String, messages: List<ChatMessage>) {
+        val conversation = _conversations.value.firstOrNull { it.id == conversationId } ?: return
+        if (conversation.title != NEW_CHAT_TITLE && conversation.title.isNotBlank()) return
+        val first = messages.firstOrNull { it.role == MessageRole.USER }?.content ?: return
+        val title = titleFrom(first)
+        if (title == NEW_CHAT_TITLE) return
+        renameConversation(conversationId, title)
     }
 
     /** Messages of a chat that is not open, for export and share. */
@@ -803,6 +818,8 @@ class DshChatBackend(
             if (!file.isFile) return@runCatching emptyList()
             json.decodeFromString<List<Conversation>>(file.readText())
                 .filter { it.agent == AgentKind.DEEPSEEK_HARNESS }
+                // Titles written before the prompt was stripped carry the app's hidden context block.
+                .map { it.copy(title = cleanTitle(it.title).ifBlank { NEW_CHAT_TITLE }) }
         }.onFailure { Log.w(TAG, "dsh chats could not be read: ${it.message}") }
             .getOrDefault(emptyList())
         Log.i(TAG, "dsh chats restored: ${_conversations.value.size}")
@@ -838,7 +855,15 @@ class DshChatBackend(
     }
 
     private fun titleFrom(content: String): String =
-        content.trim().replace(Regex("\\s+"), " ").take(48).ifBlank { NEW_CHAT_TITLE }
+        // The prompt carries the app's hidden context block; a title made from it read
+        // '<antigem-expansion …' in every chat.
+        cleanTitle(content).trim().replace(Regex("\\s+"), " ").take(48).ifBlank { NEW_CHAT_TITLE }
+
+    /** A stored title without the hidden blocks, shortened the way [titleFrom] does it. */
+    private fun cleanTitle(title: String?): String {
+        val cleaned = com.example.gemini.data.remote.PromptExpansion.cleanTitle(title.orEmpty())
+        return cleaned.replace(Regex("\\s+"), " ").take(48).trim()
+    }
 
     /** The saved route as a picker entry, shown until the DSH catalogue has loaded. */
     private fun routeModel(provider: String, model: String): AiModel = AiModel(
