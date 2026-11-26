@@ -1053,6 +1053,7 @@ fun ChatScreen(
                     viewModel.startNewChat()
                     scope.launch { drawerState.close() }
                 },
+                onRenameConversation = { id, title -> viewModel.renameConversation(id, title) },
                 onDeleteConversation = { id ->
                     ConversationScrollCache.clear(id)
                     conversationBackStack.removeAll { it.equals(id, ignoreCase = true) }

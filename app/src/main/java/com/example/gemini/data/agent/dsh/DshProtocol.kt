@@ -107,6 +107,27 @@ object DshProtocol {
     }.toString()
 }
 
+/**
+ * Token accounting the harness reports on `assistant/message` (one record per step); absent when
+ * the adapter reported none. The caller sums the steps of a turn.
+ */
+data class DshUsage(
+    val inputTokens: Int = 0,
+    val outputTokens: Int = 0,
+    val cacheReadTokens: Int = 0,
+    val cacheWriteTokens: Int = 0,
+    val reasoningTokens: Int = 0,
+) {
+    val total: Int get() = inputTokens + outputTokens
+    fun plus(other: DshUsage) = DshUsage(
+        inputTokens = inputTokens + other.inputTokens,
+        outputTokens = outputTokens + other.outputTokens,
+        cacheReadTokens = cacheReadTokens + other.cacheReadTokens,
+        cacheWriteTokens = cacheWriteTokens + other.cacheWriteTokens,
+        reasoningTokens = reasoningTokens + other.reasoningTokens,
+    )
+}
+
 /** One decoded line from the SDK stream. */
 sealed interface DshEvent {
     /** The `initialize` request was answered; the session can be prompted. */
@@ -173,6 +194,12 @@ class DshSdkParser(sessionId: String) {
 
     private val streamedText = StringBuilder()
     private val toolNames = mutableMapOf<String, String>()
+
+    /** Usage reported since the last [takeUsage] call. */
+    private var pendingUsage: DshUsage? = null
+
+    /** The token accounting that arrived since the previous call, or null when none did. */
+    fun takeUsage(): DshUsage? = pendingUsage.also { pendingUsage = null }
 
     fun parse(line: String): DshEvent {
         val trimmed = line.trim()
@@ -297,6 +324,17 @@ class DshSdkParser(sessionId: String) {
      * only repeats what was already delivered.
      */
     private fun parseCompletedMessage(data: JsonObject): DshEvent {
+        // Each step reports its own accounting, so the steps of a turn add up.
+        (data["usage"] as? JsonObject)?.let { usage ->
+            val step = DshUsage(
+                inputTokens = usage.int("inputTokens"),
+                outputTokens = usage.int("outputTokens"),
+                cacheReadTokens = usage.int("cacheReadTokens"),
+                cacheWriteTokens = usage.int("cacheWriteTokens"),
+                reasoningTokens = usage.int("reasoningTokens"),
+            )
+            if (step.total > 0) pendingUsage = (pendingUsage ?: DshUsage()).plus(step)
+        }
         val (replayed, reasoning) = replayStream(data["stream"] as? JsonArray)
         if (replayed.isNotEmpty()) {
             streamedText.setLength(0)
@@ -389,6 +427,9 @@ class DshSdkParser(sessionId: String) {
 
 private fun JsonObject.string(key: String): String =
     (this[key] as? JsonPrimitive)?.contentOrNull.orEmpty()
+
+private fun JsonObject.int(key: String): Int =
+    (this[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toInt() ?: 0
 
 private fun JsonElement.primitiveText(): String? = when (this) {
     is JsonPrimitive -> if (this is JsonNull) null else contentOrNull

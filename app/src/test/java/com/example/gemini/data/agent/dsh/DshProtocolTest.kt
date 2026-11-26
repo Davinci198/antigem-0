@@ -5,6 +5,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -253,6 +254,24 @@ class DshProtocolTest {
         )
         assertTrue(reply.contains("\"id\":\"req-7\""))
         assertTrue(reply.contains("allowed-once"))
+    }
+
+    @Test
+    fun `token accounting on an assistant message is handed to the caller`() {
+        // The stats pill in the chat needs the step's usage; the harness sends it on assistant/message.
+        parser.parse(
+            """{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"$sessionId",
+               "event":{"type":"assistant/message","data":{"message":{"content":
+               [{"type":"text","text":"done"}]},
+               "usage":{"inputTokens":1200,"outputTokens":80,"cacheReadTokens":900}}}}}""",
+        )
+        val usage = parser.takeUsage()
+        assertEquals(1200, usage?.inputTokens)
+        assertEquals(80, usage?.outputTokens)
+        assertEquals(900, usage?.cacheReadTokens)
+        assertEquals(1280, usage?.total)
+        // Taken once: a second call must not report the same step again.
+        assertNull(parser.takeUsage())
     }
 
     private fun parseTurnEnd(reason: String): DshEvent = parser.parse(

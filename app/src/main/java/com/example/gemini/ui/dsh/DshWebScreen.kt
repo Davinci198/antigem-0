@@ -327,13 +327,23 @@ fun DshWebScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = stringResource(R.string.dsh_web_stopped_message),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 24.dp)
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = stringResource(R.string.dsh_web_stopped_message),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        // A dead harness is otherwise only revivable from the top bar, which is easy to miss.
+                        OutlinedButton(
+                            onClick = {
+                                autoRestartUsed = false
+                                restartRequested++
+                            }
+                        ) { Text(stringResource(R.string.dsh_web_retry)) }
+                    }
                 }
             }
             else -> {

@@ -10,6 +10,7 @@ import com.example.gemini.domain.model.AiModel
 import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.Conversation
 import com.example.gemini.domain.model.MessageRole
+import com.example.gemini.domain.model.TokenUsage
 import com.example.gemini.domain.model.ToolCall
 import com.example.gemini.domain.model.ToolType
 import kotlinx.coroutines.CancellationException
@@ -135,7 +136,7 @@ class DshChatBackend(
                     // Without this the chat is saved as an AGY conversation and disappears on restore.
                     agent = AgentKind.DEEPSEEK_HARNESS,
                     id = session.id,
-                    title = session.title ?: "DeepSeek Harness chat",
+                    title = cleanTitle(session.title).ifBlank { "DeepSeek Harness chat" },
                     modelId = session.model.orEmpty(),
                     sessionId = session.id,
                     createdAt = session.updatedAt,
@@ -191,6 +192,7 @@ class DshChatBackend(
             }
             writeMessages(conversation.id, messages)
             _messages.value = messages
+            fillMissingTitle(conversation.id, messages)
             Log.i(TAG, "hydrated ${messages.size} message(s) from the container")
         }
     }
@@ -252,7 +254,21 @@ class DshChatBackend(
         _messages.value = readMessages(id)
         _conversationError.value = null
         _isLoadingConversation.value = false
+        fillMissingTitle(id, _messages.value)
         if (_messages.value.isEmpty() && conversation.stepCount > 0) hydrateFromDisk(conversation)
+    }
+
+    /**
+     * Replaces the title of a chat whose title says nothing — one saved from the wrapped prompt, or lost
+     * with it — with its first question. Chats that were damaged by the old title read 'New Chat' here.
+     */
+    private fun fillMissingTitle(conversationId: String, messages: List<ChatMessage>) {
+        val conversation = _conversations.value.firstOrNull { it.id == conversationId } ?: return
+        if (conversation.title != NEW_CHAT_TITLE && conversation.title.isNotBlank()) return
+        val first = messages.firstOrNull { it.role == MessageRole.USER }?.content ?: return
+        val title = titleFrom(first)
+        if (title == NEW_CHAT_TITLE) return
+        renameConversation(conversationId, title)
     }
 
     /** Messages of a chat that is not open, for export and share. */
@@ -315,8 +331,12 @@ class DshChatBackend(
     fun selectModel(modelId: String) {
         val provider = providerOf(modelId)
         val model = modelOf(modelId)
+        val previous = prefs.route.value
         _selectedModelId.value = modelId
-        prefs.setRoute(prefs.route.value.copy(provider = provider, model = model))
+        prefs.setRoute(previous.copy(provider = provider, model = model))
+        // The harness boots with one route: a process kept for the old model would answer as that model (or
+        // not at all), so the next turn has to start a process that was told about the new one.
+        if (previous.provider != provider || previous.model != model) dropWarm()
     }
 
     /**
@@ -443,7 +463,10 @@ class DshChatBackend(
     }
 
     private suspend fun runTurn(conversation: Conversation, prompt: String, assistantId: String) {
+        val turnStartedAt = System.currentTimeMillis()
         val route = resolvedRoute(prefs.route.value)
+        // What the pill shows next to the numbers, the same shape the other agents print: provider/model.
+        val modelLabel = "${route.provider}/${route.model}".trim('/')
         val host = host()
         var session: DshSession? = null
         // Read in `finally`, where a local from the `try` block is out of scope.
@@ -480,13 +503,14 @@ class DshChatBackend(
             if (kept != null) Log.i(TAG, "reusing the live harness process")
 
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
-                var prompted = false
                 // Both a loaded session and a missing one end the same way: prompt, once. A missing
                 // one is created by the prompt itself, while a loaded one would reject the prompt.
                 // A lambda, not a local `fun`: `send` suspends and a plain local function cannot call it.
+                var promptsSent = 0
+                var recoveries = 0
                 val promptOnce: suspend () -> Unit = {
-                    if (!prompted) {
-                        prompted = true
+                    if (promptsSent == 0) {
+                        promptsSent = 1
                         opened.send(
                             DshProtocol.promptFrame(sessionId = parser.sessionIdInUse, text = prompt),
                         )
@@ -500,7 +524,11 @@ class DshChatBackend(
                     coroutineScope {
                         val listener = launch {
                             opened.lines.collect { line ->
-                                when (val event = parser.parse(line)) {
+                                val event = parser.parse(line)
+                                // The token accounting rides on the same frame as the text, so it is
+                                // taken here rather than as an event of its own.
+                                addUsage(assistantId, parser.takeUsage(), turnStartedAt, modelLabel)
+                                when (event) {
                                     DshEvent.Initialized -> {
                                         // The runtime answers with serverInfo only: it holds no session,
                                         // so a stored session has to be loaded before it can be prompted.
@@ -564,7 +592,23 @@ class DshChatBackend(
                                     is DshEvent.ToolCompleted ->
                                         completeTool(assistantId, event.callId, event.name, event.summary)
                                     DshEvent.TurnCompleted -> throw TurnFinished()
-                                    is DshEvent.Failed -> throw TurnFailed(event.message)
+                                    is DshEvent.Failed -> {
+                                        // The harness refuses to create a session whose id it still holds, which
+                                        // happens after a route change: the id came from the chat, and the process
+                                        // that owned it was replaced. Loading it and asking again is the answer, and
+                                        // it is tried twice before the turn is reported as failed.
+                                        if (event.message.contains("already exists", ignoreCase = true) && recoveries < 2) {
+                                            recoveries++
+                                            Log.i(TAG, "the harness still holds the session: resuming it and asking again")
+                                            loaded.add(conversation.sessionId)
+                                            promptsSent = 0
+                                            opened.send(
+                                                DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),
+                                            )
+                                        } else {
+                                            throw TurnFailed(event.message)
+                                        }
+                                    }
                                     // Only a dropped answer is worth reporting: the harness sends
                                     // plenty of notices the parser does not model.
                                     else -> if (
@@ -692,6 +736,27 @@ class DshChatBackend(
         )
     }
 
+    private fun addUsage(messageId: String, usage: DshUsage?, startedAt: Long, modelLabel: String) {
+        if (usage == null) return
+        setMessages(
+            _messages.value.map { message ->
+                if (message.id != messageId) return@map message
+                val previous = message.tokenUsage
+                message.copy(
+                    tokenUsage = TokenUsage(
+                        promptTokens = (previous?.promptTokens ?: 0) + usage.inputTokens,
+                        outputTokens = (previous?.outputTokens ?: 0) + usage.outputTokens,
+                        cachedTokens = (previous?.cachedTokens ?: 0) + usage.cacheReadTokens,
+                        cacheCreationTokens = (previous?.cacheCreationTokens ?: 0) + usage.cacheWriteTokens,
+                        totalTokens = (previous?.totalTokens ?: 0) + usage.total,
+                        durationMs = System.currentTimeMillis() - startedAt,
+                        model = modelLabel,
+                    ),
+                )
+            },
+        )
+    }
+
     private fun addTool(messageId: String, callId: String, name: String, detail: String) {
         setMessages(
             _messages.value.map { message ->
@@ -753,6 +818,8 @@ class DshChatBackend(
             if (!file.isFile) return@runCatching emptyList()
             json.decodeFromString<List<Conversation>>(file.readText())
                 .filter { it.agent == AgentKind.DEEPSEEK_HARNESS }
+                // Titles written before the prompt was stripped carry the app's hidden context block.
+                .map { it.copy(title = cleanTitle(it.title).ifBlank { NEW_CHAT_TITLE }) }
         }.onFailure { Log.w(TAG, "dsh chats could not be read: ${it.message}") }
             .getOrDefault(emptyList())
         Log.i(TAG, "dsh chats restored: ${_conversations.value.size}")
@@ -788,7 +855,15 @@ class DshChatBackend(
     }
 
     private fun titleFrom(content: String): String =
-        content.trim().replace(Regex("\\s+"), " ").take(48).ifBlank { NEW_CHAT_TITLE }
+        // The prompt carries the app's hidden context block; a title made from it read
+        // '<antigem-expansion …' in every chat.
+        cleanTitle(content).trim().replace(Regex("\\s+"), " ").take(48).ifBlank { NEW_CHAT_TITLE }
+
+    /** A stored title without the hidden blocks, shortened the way [titleFrom] does it. */
+    private fun cleanTitle(title: String?): String {
+        val cleaned = com.example.gemini.data.remote.PromptExpansion.cleanTitle(title.orEmpty())
+        return cleaned.replace(Regex("\\s+"), " ").take(48).trim()
+    }
 
     /** The saved route as a picker entry, shown until the DSH catalogue has loaded. */
     private fun routeModel(provider: String, model: String): AiModel = AiModel(

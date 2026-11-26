@@ -9,4 +9,5 @@
     <string name="dsh_web_close">Închide</string>
     <string name="dsh_web_starting">Se pornește DeepSeek Harness…</string>
     <string name="dsh_web_stopped_message">DeepSeek Harness s-a oprit înainte să-și încarce pagina. Dacă se repetă, permite consum nelimitat în fundal pentru această aplicație: Android o suspendă în background, iar harness-ul moare odată cu ea.</string>
+    <string name="dsh_web_retry">Pornește-l din nou</string>
 </resources>
