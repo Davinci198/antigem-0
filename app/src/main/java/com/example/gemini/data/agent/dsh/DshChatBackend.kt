@@ -446,6 +446,8 @@ class DshChatBackend(
     private suspend fun runTurn(conversation: Conversation, prompt: String, assistantId: String) {
         val turnStartedAt = System.currentTimeMillis()
         val route = resolvedRoute(prefs.route.value)
+        // What the pill shows next to the numbers, the same shape the other agents print: provider/model.
+        val modelLabel = "${route.provider}/${route.model}".trim('/')
         val host = host()
         var session: DshSession? = null
         // Read in `finally`, where a local from the `try` block is out of scope.
@@ -505,7 +507,7 @@ class DshChatBackend(
                                 val event = parser.parse(line)
                                 // The token accounting rides on the same frame as the text, so it is
                                 // taken here rather than as an event of its own.
-                                addUsage(assistantId, parser.takeUsage(), turnStartedAt)
+                                addUsage(assistantId, parser.takeUsage(), turnStartedAt, modelLabel)
                                 when (event) {
                                     DshEvent.Initialized -> {
                                         // The runtime answers with serverInfo only: it holds no session,
@@ -698,7 +700,7 @@ class DshChatBackend(
         )
     }
 
-    private fun addUsage(messageId: String, usage: DshUsage?, startedAt: Long) {
+    private fun addUsage(messageId: String, usage: DshUsage?, startedAt: Long, modelLabel: String) {
         if (usage == null) return
         setMessages(
             _messages.value.map { message ->
@@ -712,6 +714,7 @@ class DshChatBackend(
                         cacheCreationTokens = (previous?.cacheCreationTokens ?: 0) + usage.cacheWriteTokens,
                         totalTokens = (previous?.totalTokens ?: 0) + usage.total,
                         durationMs = System.currentTimeMillis() - startedAt,
+                        model = modelLabel,
                     ),
                 )
             },
