@@ -111,6 +111,8 @@ fun ChatHistoryDrawer(
     /** Antigravity runs: its hub start-up and first sync drive the list's loading states. */
     agyEnabled: Boolean = true,
     claudeActions: ClaudeDrawerActions? = null,
+    /** Renames a chat of any agent that stores its own titles. Null hides the menu item. */
+    onRenameConversation: ((String, String) -> Unit)? = null,
     /** Agents the user has turned on; "Continue in another agent" offers these, minus the chat's own. */
     enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = emptySet(),
     /**
@@ -988,6 +990,7 @@ fun ChatHistoryDrawer(
                                         onForkConversation = onForkConversation,
                                         onRequestDelete = { conversationToDelete = it },
                                         claudeActions = claudeActions,
+                                        onRenameConversation = onRenameConversation,
                                         enabledAgents = enabledAgents,
                                         onContinueConversation = onContinueConversation,
                                         onTerminateInstance = { inst, title ->
@@ -1099,6 +1102,7 @@ fun ChatHistoryDrawer(
                                             onForkConversation = onForkConversation,
                                             onRequestDelete = { conversationToDelete = it },
                                             claudeActions = claudeActions,
+                                            onRenameConversation = onRenameConversation,
                                             enabledAgents = enabledAgents,
                                             onContinueConversation = onContinueConversation,
                                             onTerminateInstance = { inst, title ->
@@ -1444,6 +1448,7 @@ private fun ChatHistoryItemRow(
     onRequestDelete: (Conversation) -> Unit,
     onTerminateInstance: (com.example.gemini.data.remote.AgyActiveInstance, String) -> Unit,
     claudeActions: ClaudeDrawerActions? = null,
+    onRenameConversation: ((String, String) -> Unit)? = null,
     enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = emptySet(),
     onContinueConversation: ((Conversation, com.example.gemini.domain.model.AgentKind) -> Unit)? = null
 ) {
@@ -1651,7 +1656,16 @@ private fun ChatHistoryItemRow(
         val scope = rememberCoroutineScope()
         val snackbarHostState = com.example.gemini.ui.components.LocalSnackbarHostState.current
 
-        if (showRename && claudeActions != null) {
+        // A chat is renameable when its agent stores titles of its own: the managed agents ask the
+        // bridge, DeepSeek Harness writes its own file. Antigravity's titles belong to the hub.
+        val renameAction: ((String, String) -> Unit)? = when {
+            conv.agent == com.example.gemini.domain.model.AgentKind.CLAUDE ||
+                conv.agent == com.example.gemini.domain.model.AgentKind.OPENCODE ->
+                claudeActions?.rename ?: onRenameConversation
+            conv.agent == com.example.gemini.domain.model.AgentKind.DEEPSEEK_HARNESS -> onRenameConversation
+            else -> null
+        }
+        if (showRename && renameAction != null) {
             var newTitle by remember { mutableStateOf(conv.title) }
             AlertDialog(
                 onDismissRequest = { showRename = false },
@@ -1661,7 +1675,7 @@ private fun ChatHistoryItemRow(
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        claudeActions.rename(conv.id, newTitle)
+                        renameAction.invoke(conv.id, newTitle)
                         showRename = false
                     }, enabled = newTitle.isNotBlank()) { Text("Save") }
                 },
@@ -1749,7 +1763,7 @@ private fun ChatHistoryItemRow(
                         }
                     )
                 }
-                if (isManagedConv && claudeActions != null) {
+                if (renameAction != null) {
                     DropdownMenuItem(
                         text = { Text("Rename", fontSize = 13.5.sp) },
                         leadingIcon = {
