@@ -102,6 +102,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     GLOBAL_CONTEXT("Global context", "What every chat is told about this app, and your own instructions"),
     AGENT_MEMORY("Agent memory", "The files each agent reads between chats"),
     GITHUB("GitHub", "Sign in with the GitHub CLI, your repositories and git credentials"),
+    ANDROID_DEV("Android Development", "Build Kotlin / Compose, Flutter and React Native apps on this phone"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
     ADB_CONNECT("ADB Connect", "Connect the terminal's adb to this phone over Wireless debugging"),
@@ -577,6 +578,12 @@ fun SettingsDialog(
                         cardBg = cardBg,
                         cardBorder = cardBorder
                     )
+                    SettingsSection.ANDROID_DEV -> AndroidDevScreen(
+                        cardBg = cardBg,
+                        cardBorder = cardBorder,
+                        onOpenAdbConnect = { currentSection = SettingsSection.ADB_CONNECT },
+                        onOpenPlugins = { currentSection = SettingsSection.SKILLS_PLUGINS }
+                    )
                     SettingsSection.CLAUDE -> if (claude != null) {
                         com.example.gemini.ui.claude.ClaudeSettingsScreen(claude, claudePage) { currentSection = SettingsSection.MAIN }
                     }
@@ -895,6 +902,15 @@ private fun MainSettingsMenu(
             cardBg = cardBg,
             cardBorder = cardBorder,
             onClick = { onNavigate(SettingsSection.GITHUB) }
+        )
+        SettingsCategoryCard(
+            icon = Icons.Outlined.Android,
+            iconTint = QuotaGreen,
+            title = SettingsSection.ANDROID_DEV.title,
+            subtitle = SettingsSection.ANDROID_DEV.subtitle,
+            cardBg = cardBg,
+            cardBorder = cardBorder,
+            onClick = { onNavigate(SettingsSection.ANDROID_DEV) }
         )
 
         // Section 7: About & Info
