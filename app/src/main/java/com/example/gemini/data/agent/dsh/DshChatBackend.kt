@@ -698,7 +698,7 @@ class DshChatBackend(
         )
     }
 
-    private fun addUsage(messageId: String, usage: DshEvent.DshUsage?, startedAt: Long) {
+    private fun addUsage(messageId: String, usage: DshUsage?, startedAt: Long) {
         if (usage == null) return
         setMessages(
             _messages.value.map { message ->

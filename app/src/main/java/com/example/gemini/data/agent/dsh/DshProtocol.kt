@@ -107,6 +107,27 @@ object DshProtocol {
     }.toString()
 }
 
+/**
+ * Token accounting the harness reports on `assistant/message` (one record per step); absent when
+ * the adapter reported none. The caller sums the steps of a turn.
+ */
+data class DshUsage(
+    val inputTokens: Int = 0,
+    val outputTokens: Int = 0,
+    val cacheReadTokens: Int = 0,
+    val cacheWriteTokens: Int = 0,
+    val reasoningTokens: Int = 0,
+) {
+    val total: Int get() = inputTokens + outputTokens
+    fun plus(other: DshUsage) = DshUsage(
+        inputTokens = inputTokens + other.inputTokens,
+        outputTokens = outputTokens + other.outputTokens,
+        cacheReadTokens = cacheReadTokens + other.cacheReadTokens,
+        cacheWriteTokens = cacheWriteTokens + other.cacheWriteTokens,
+        reasoningTokens = reasoningTokens + other.reasoningTokens,
+    )
+}
+
 /** One decoded line from the SDK stream. */
 sealed interface DshEvent {
     /** The `initialize` request was answered; the session can be prompted. */
@@ -146,27 +167,6 @@ sealed interface DshEvent {
 
     /** The turn or the process failed; [message] is user-facing. */
     data class Failed(val message: String) : DshEvent
-
-    /**
-     * Token accounting the harness reports on `assistant/message` (one record per step); absent when
-     * the adapter reported none. The caller sums the steps of a turn.
-     */
-    data class DshUsage(
-        val inputTokens: Int = 0,
-        val outputTokens: Int = 0,
-        val cacheReadTokens: Int = 0,
-        val cacheWriteTokens: Int = 0,
-        val reasoningTokens: Int = 0,
-    ) {
-        val total: Int get() = inputTokens + outputTokens
-        fun plus(other: DshUsage) = DshUsage(
-            inputTokens = inputTokens + other.inputTokens,
-            outputTokens = outputTokens + other.outputTokens,
-            cacheReadTokens = cacheReadTokens + other.cacheReadTokens,
-            cacheWriteTokens = cacheWriteTokens + other.cacheWriteTokens,
-            reasoningTokens = reasoningTokens + other.reasoningTokens,
-        )
-    }
 
     data object Ignored : DshEvent
 }
