@@ -17,6 +17,7 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.net.URI
 import java.net.URL
+import java.util.concurrent.TimeUnit
 
 /**
  * Runs the DSH web profile (`dsh web`) inside the Ubuntu container and surfaces
@@ -132,6 +133,29 @@ object DshWebServer {
     fun isRunning(): Boolean = synchronized(lock) { current?.isAlive == true }
 
 
+    /**
+     * Kills a `dsh web` left over from an earlier boot, which would keep its port and confuse the URL
+     * line of the new one.
+     *
+     * It runs as its own guest process on purpose. The pattern `dsh web` also appears in the command
+     * line of the shell that would start the harness (`sh -c "pkill …; exec /usr/local/bin/dsh web"`),
+     * and that shell is pid 1 of the proot: pkill took it down with SIGTERM before it could exec, so
+     * every start after the first died with `proot info: vpid 1: terminated with signal 15`.
+     */
+    private fun killStrayWebProfiles(context: Context, log: (String) -> Unit) {
+        val existing = current?.takeIf { it.isAlive }
+        if (existing != null) return
+        runCatching {
+            val killer = LocalEnvironmentManager.startGuestProcess(
+                context = context,
+                guestArgv = listOf("/bin/sh", "-c", "pkill -f 'dsh web' >/dev/null 2>&1; true"),
+                guestCwd = "/root",
+            )
+            if (!killer.waitFor(8, TimeUnit.SECONDS)) killer.destroyForcibly()
+            log("[dsh-web] cleared leftover web profiles")
+        }.onFailure { Log.w(TAG, "could not clear a leftover dsh web: ${it.message}") }
+    }
+
     private fun startLocked(context: Context, log: (String) -> Unit): DshWebServerInstance? {
         if (!available(context)) {
             log("[dsh-web] DSH payload or Node runtime is missing; web profile not started")
@@ -141,12 +165,13 @@ object DshWebServer {
             log("[dsh-web] rewrote an empty cordis.patch.yml as [] before booting")
         }
         return try {
+            killStrayWebProfiles(context, log)
             val process = LocalEnvironmentManager.startGuestProcess(
                 context = context,
                 guestArgv = listOf(
                     "/bin/sh",
                     "-c",
-                    "pkill -f 'dsh web' >/dev/null 2>&1; exec ${DshGuestPaths.DSH_BIN} web --no-open --port 0",
+                    "exec ${DshGuestPaths.DSH_BIN} web --no-open --port 0",
                 ),
                 guestCwd = "/root",
                 environment = mapOf(
