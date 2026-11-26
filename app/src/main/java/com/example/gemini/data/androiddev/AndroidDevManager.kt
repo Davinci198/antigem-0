@@ -227,18 +227,32 @@ object AndroidDevManager {
     fun stopContainer() {
         val victims = containerProcesses()
         if (victims.isEmpty()) {
+            Log.i(TAG, "stop: nothing runs inside the container")
             report("Nothing is running in the container.")
             _state.update { it.copy(containerProcesses = 0) }
             return
         }
+        // The screens that watch the guest restart it the moment it disappears (the harness web page revives
+        // `dsh web`), which made a stop look like it did nothing. Marking the stop first keeps them down.
+        com.example.gemini.data.local.ContainerHold.markStopped()
+        runCatching { com.example.gemini.data.agent.dsh.DshWebServer.stopNow() }
+        Log.i(TAG, "stop: ${victims.size} guest process(es): ${victims.joinToString()}")
         victims.forEach { pid -> runCatching { android.os.Process.sendSignal(pid, 15) } }
-        // A build ignores SIGTERM while it holds the compiler, so anything left is killed outright.
-        Thread {
-            Thread.sleep(2500)
-            victims.filter { File("/proc/$it").exists() }
-                .forEach { pid -> runCatching { android.os.Process.sendSignal(pid, 9) } }
-            refresh()
-        }.start()
+        scope.launch {
+            // A build or a proot supervisor ignores SIGTERM while it holds its children, so a survivor is killed.
+            delay(2_500)
+            val left = victims.filter { File("/proc/$it").exists() }
+            left.forEach { pid -> runCatching { android.os.Process.sendSignal(pid, 9) } }
+            delay(700)
+            val stillThere = victims.filter { File("/proc/$it").exists() }
+            Log.i(TAG, "stop: killed ${left.size} survivor(s); still present: ${stillThere.joinToString()}")
+            val remaining = containerProcesses()
+            Log.i(TAG, "stop: ${remaining.size} guest process(es) left: ${remaining.joinToString()}")
+            refreshNow()
+            if (remaining.isNotEmpty()) {
+                report("Stopped ${victims.size - remaining.size} of ${victims.size}; ${remaining.size} could not be stopped.", isError = true)
+            }
+        }
         report("Stopped ${victims.size} container process${if (victims.size == 1) "" else "es"}. The files stay; the next command starts it again.")
         _state.update { it.copy(containerProcesses = 0) }
     }

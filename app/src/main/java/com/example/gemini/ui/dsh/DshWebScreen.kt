@@ -136,6 +136,8 @@ fun DshWebScreen(
     // action in the top bar), never a side effect of closing the overlay.
     LaunchedEffect(isVisible, restartRequested) {
         if (!isVisible) return@LaunchedEffect
+        // Opening the page is a decision to run the harness, whatever the last stop said.
+        com.example.gemini.data.local.ContainerHold.release()
         startFailed = false
         // NonCancellable: leaving the screen while the harness boots used to cancel this
         // effect, drop the started instance, and leave a live harness nobody was attached to;
@@ -217,6 +219,12 @@ fun DshWebScreen(
         DshWebServer.stopNow()
         instance = null
         if (running.url.value != null && !autoRestartUsed) {
+            // A stop from Android Development is deliberate: do not undo it seconds later.
+            if (com.example.gemini.data.local.ContainerHold.recentlyStopped()) {
+                Log.i(TAG, "the harness is gone and the container was just stopped on purpose; leaving it down")
+                startFailed = true
+                return@LaunchedEffect
+            }
             Log.w(TAG, "the harness was running and is gone; restarting it once")
             autoRestartUsed = true
             restartRequested++
