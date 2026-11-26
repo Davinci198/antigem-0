@@ -5,6 +5,15 @@ A fix counts as confirmed only when a **later scan stops reporting it**. Never s
 
 ---
 
+## Scan `537c160e` — commit `6bfdd08` (master after the DSH/Android Dev merge)
+fix=1 · rotate=0 · policy=0 · ignore=10 → **implemented**: `github.com/gorilla/websocket` ① moved from v1.5.3
+to the upstream commit that builds the client mask key from `crypto/rand` (`v1.5.4-0.20240701034025-d67f41855da4`);
+no tagged release contains that fix, so the module is pinned to the pseudo-version.
+
+## Scan `537c160e` follow-up `edefa890` — commit `8b761a7`
+fix=1 (from the previous scan) → **implemented**: `golang.org/x/net` v0.26.0 → v0.63.0 (`x/sys` followed),
+`go build ./...` green. Result of this scan: fix=0 · rotate=0 · policy=0 · ignore=10, health **good**.
+
 ## Scan `2ae4daac` — commit `f2bb7ea` (master after PR #50, Kilo Free)
 fix=0 · rotate=1 · policy=0 · ignore=8. The Kilo Free endpoint (builtin routing in
 `pkg/hermes`, one-shot seeds in `pkg/claude`/`pkg/opencode`, the keyless `writeConfig`

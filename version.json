@@ -1,13 +1,14 @@
 {
-  "version_code": 120,
-  "version_name": "1.0.20",
+  "version_code": 121,
+  "version_name": "1.1.0",
   "min_supported_version_code": 1,
   "changelog": [
-    "Added a crash screen: a crash now shows the report with a copy button instead of the app vanishing",
-    "Mermaid diagrams and interactive apps in chat stay alive while the chat is open, and a dead WebView renderer no longer crashes the app",
-    "Rootfs backup is verified before it is saved, so every .zip in the backups folder is complete and restorable",
-    "Added a switch to include SSH keys and sign-ins in the rootfs backup",
-    "The editor now opens files up to 5 MB"
+    "DeepSeek Harness: the reply pill now shows input/output tokens, cache hits, duration and the model that answered",
+    "DeepSeek Harness: switching the model no longer leaves the chat without an answer, and chats can be renamed from the sidebar",
+    "DeepSeek Harness: chat titles use your question instead of the hidden context block",
+    "DeepSeek Harness web page starts again after the container is stopped, and keeps its composer above the keyboard",
+    "Android Development: installed parts are recognised, each one has an Uninstall button, and a Stop the container button frees the battery",
+    "Security: the bridge's WebSocket and networking dependencies were moved to their patched versions"
   ],
   "is_critical": false
 }
