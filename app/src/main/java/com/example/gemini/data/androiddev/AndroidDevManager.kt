@@ -439,8 +439,13 @@ object AndroidDevManager {
 
     /** Runs `android-setup.sh <step>`, streaming its output into the log; false (and an error message) on failure. */
     private suspend fun shellTask(progress: String, step: String, timeoutSeconds: Long): Boolean {
+        // Self-heal: after a container install or a data reset the four small files can be gone. They are
+        // fetched again instead of stopping the step with "the setup files are missing".
+        if (!File(shareDir, "android-setup.sh").exists()) {
+            appendLog("Setup files missing, downloading them again…")
+            fetchSetupFiles()
+        }
         val script = File(guestShare, "android-setup.sh")
-        if (!script.exists()) throw IllegalStateException("The setup files are missing. Tap Get setup files first.")
         // The container install empties files/ubuntu, so the scripts are put back before every step.
         runCatching {
             guestShare.mkdirs()
@@ -450,6 +455,9 @@ object AndroidDevManager {
             }
             File(guestShare, "android-setup.sh").setExecutable(true)
         }
+        if (!script.exists()) throw IllegalStateException(
+            "The setup files could not be put into the container. Check the network, then press Download again."
+        )
         _state.update { it.copy(progress = progress) }
         appendLog("$ bash android-setup.sh $step")
         // $$ is this shell, and exec keeps its PID for the script: Stop kills that process tree
