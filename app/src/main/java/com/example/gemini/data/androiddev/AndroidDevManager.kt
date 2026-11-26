@@ -201,19 +201,27 @@ object AndroidDevManager {
         }
     }
 
-    /** PIDs of the processes living inside the container (they all run under this app's uid). */
+    /**
+     * PIDs of the processes living inside the container, i.e. every process this app started.
+     *
+     * Matching the rootfs path in the command line missed the ones bash re-executes for the setup script and the
+     * turns that kept spinning at a full core each after their work was done: those belong to the app's uid all the
+     * same, so the uid is what decides.
+     */
     private fun containerProcesses(): List<Int> {
-        val root = ubuntu.absolutePath
+        val uid = android.os.Process.myUid()
         val mine = android.os.Process.myPid()
         return runCatching {
             File("/proc").list()?.mapNotNull { it.toIntOrNull() }
                 ?.filter { it != mine }
                 ?.filter { pid ->
                     runCatching {
-                        val cmdline = File("/proc/$pid/cmdline").readBytes().let { b ->
-                            if (b.isEmpty()) "" else String(b, 0, b.size, Charsets.UTF_8)
+                        // /proc/<pid>/status carries the owner of the process; the command line is not readable for
+                        // everything a shell spawns.
+                        File("/proc/$pid/status").useLines { lines ->
+                            lines.firstOrNull { it.startsWith("Uid:") }
+                                ?.removePrefix("Uid:")?.trim()?.substringBefore(' ')?.toIntOrNull() == uid
                         }
-                        cmdline.contains(root)
                     }.getOrDefault(false)
                 }.orEmpty()
         }.getOrDefault(emptyList())
