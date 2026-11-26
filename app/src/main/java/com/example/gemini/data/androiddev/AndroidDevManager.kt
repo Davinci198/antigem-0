@@ -46,6 +46,8 @@ object AndroidDevManager {
     private const val SCRIPTS_PATH = "android-dev/skills/android-dev/scripts"
     const val PLUGIN_ID = "android-dev"
     const val CONTAINER = "ubuntu"
+    /** Where the setup files sit inside the container. */
+    private const val GUEST_SHARE = "/opt/antigem/share/antigem-android"
     /** Where the test builds (and, by default, agents' new projects) go, under the Termux home. */
     const val PROJECTS_DIR = "AndroidProjects"
 
@@ -155,7 +157,7 @@ object AndroidDevManager {
     // The setup files live outside the rootfs: installing or repairing the container empties files/ubuntu,
     // which used to take the scripts with it. Before every step they are copied back in.
     private val shareDir get() = File(appContext.filesDir, "share/antigem-android")
-    private val guestShare get() = File(ubuntu, "opt/antigem/share/antigem-android")
+    private val guestShare get() = File(ubuntu, GUEST_SHARE.removePrefix("/"))
     private val pidFile get() = File(guestShare, ".task.pid")
     // The setup script's chroot mode lays the tools out under /opt/antigem in the Ubuntu itself, which is
     // exactly what this app already has: one container, entered with proot, no Termux and no proot-distro.
@@ -460,8 +462,10 @@ object AndroidDevManager {
         )
         _state.update { it.copy(progress = progress) }
         appendLog("$ bash android-setup.sh $step")
+        // The command runs INSIDE the container, so it must name the guest paths: a host path like
+        // /data/user/0/…/files/ubuntu/opt/… does not exist there and bash reported "No such file or directory".
         // $$ is this shell, and exec keeps its PID for the script: Stop kills that process tree
-        val command = "echo \$\$ > '${pidFile.absolutePath}'; exec bash '${script.absolutePath}' $step < /dev/null"
+        val command = "echo \$\$ > '$GUEST_SHARE/.task.pid'; exec bash '$GUEST_SHARE/android-setup.sh' $step < /dev/null"
         val result = LocalEnvironmentManager.executeCommand(
             command, appContext, timeoutSeconds = timeoutSeconds,
             customEnv = mapOf(
