@@ -169,6 +169,22 @@ fun AndroidDevScreen(
 
         TerminalCard(state, cardBg, cardBorder)
 
+        // Battery: a live harness or a Gradle daemon keeps the container alive long after the work is done.
+        DevInfoCard(
+            "Stop the container", cardBg, cardBorder,
+            pill = when {
+                state.containerProcesses > 0 -> "${state.containerProcesses} running" to Amber
+                else -> "Idle" to QuotaGreen
+            }
+        ) {
+            Hint("Closes everything running inside the Ubuntu (the harness, Gradle daemons, open shells) so it stops using the battery. Nothing is deleted: the next command starts it again.")
+            OutlinedButton(enabled = !busy && state.containerProcesses > 0, onClick = AndroidDevManager::stopContainer) {
+                Icon(Icons.Outlined.PowerSettingsNew, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Stop the container")
+            }
+        }
+
         RemoveCard(state, busy, cardBg, cardBorder) { confirm = it }
     }
 
@@ -356,6 +372,13 @@ private fun PartRow(c: Component, state: AndroidDevManager.State, checked: Boole
                 if (running) {
                     CircularProgressIndicator(Modifier.padding(end = 12.dp).size(18.dp), strokeWidth = 2.dp)
                 } else {
+                    if (installed && AndroidDevManager.removable(c)) {
+                        TextButton(
+                            enabled = !busy,
+                            onClick = { AndroidDevManager.uninstall(c) },
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) { Text("Uninstall", fontSize = 12.5.sp) }
+                    }
                     TextButton(enabled = !busy, onClick = { AndroidDevManager.install(c) }) {
                         Text(if (installed) (if (c == Component.FLUTTER) "Update" else "Reinstall") else "Install", fontSize = 12.5.sp)
                     }

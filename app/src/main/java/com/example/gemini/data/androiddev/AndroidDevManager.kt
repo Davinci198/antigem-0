@@ -126,7 +126,9 @@ object AndroidDevManager {
         /** APKs the test builds made, by framework key. */
         val testApks: Map<String, String> = emptyMap(),
         val pluginInstalled: Boolean = false,
-        val pluginVersion: String? = null
+        val pluginVersion: String? = null,
+        /** Processes running inside the container right now (gradle, the harness, a build). */
+        val containerProcesses: Int = 0
     ) {
         val filesReady: Boolean get() = filesVersion != null
         val busy: Boolean get() = task != null
@@ -154,6 +156,96 @@ object AndroidDevManager {
     private val ubuntu get() = LocalEnvironmentManager.getUbuntuRootDir(appContext)
     private val home get() = File(ubuntu, "root")
     private val binDir get() = File(ubuntu, "usr/local/bin")
+
+    /**
+     * What removing one part does inside the container. The setup script only knows a global uninstall, and
+     * deleting the whole Ubuntu would take the agents down with it, so each part is removed on its own.
+     * Projects are never touched.
+     */
+    private fun removalCommand(c: Component): String? = when (c) {
+        Component.CONTAINER -> null
+        Component.BASE -> "apt-get remove -y -q git zip unzip xz-utils binutils python3 curl; apt-get autoremove -y -q"
+        Component.JAVA -> "apt-get remove -y -q openjdk-21-jdk-headless; apt-get autoremove -y -q"
+        Component.SDK -> "rm -rf /opt/antigem/android-sdk /root/.gradle/caches /root/.gradle/wrapper /root/.gradle/daemon; true"
+        Component.LAUNCHER -> "rm -f /usr/local/bin/adev /usr/local/bin/adev-new /opt/antigem/share/antigem-android/adev-new; true"
+        Component.FLUTTER, Component.FLUTTER_RELEASE ->
+            "rm -rf /opt/antigem/tools/flutter /opt/antigem/tools/adev-bin /root/.pub-cache /root/.flutter /root/.dart-tool /root/.config/flutter; true"
+        Component.NODE -> "rm -rf /opt/antigem/tools/node /opt/antigem/nvm; true"
+        Component.NDK -> "rm -rf /opt/antigem/android-sdk/ndk /opt/antigem/android-sdk/ndk-* /opt/antigem/android-sdk/ndk-arm64.txt; true"
+        Component.ADB -> "apt-get remove -y -q adb; apt-get autoremove -y -q"
+    }
+
+    /** True when this part can be removed on its own (the container itself is the whole Ubuntu). */
+    fun removable(c: Component): Boolean = removalCommand(c) != null
+
+    /** Removes one installed part; the parts it is needed by stay installed but stop working until it returns. */
+    fun uninstall(c: Component) {
+        val command = removalCommand(c) ?: run {
+            report("${c.label} is the container itself: stop or delete it instead of removing it.", isError = true)
+            return
+        }
+        runTask("remove-${c.step}") {
+            appendLog("$ removing ${c.label}")
+            _state.update { it.copy(installing = c, progress = "Removing ${c.label}…") }
+            val result = LocalEnvironmentManager.executeCommand(
+                command, appContext, timeoutSeconds = 900,
+                customEnv = mapOf("DEBIAN_FRONTEND" to "noninteractive"),
+                onOutputLine = { line -> if (line.isNotBlank()) appendLog(line.trimEnd()) },
+            )
+            if (result.exitCode != 0) {
+                report("${c.label} could not be removed (exit ${result.exitCode}). Check the log.", isError = true)
+            } else {
+                report("${c.label} removed. Your projects are untouched.")
+            }
+            refreshNow()
+        }
+    }
+
+    /** PIDs of the processes living inside the container (they all run under this app's uid). */
+    private fun containerProcesses(): List<Int> {
+        val root = ubuntu.absolutePath
+        val mine = android.os.Process.myPid()
+        return runCatching {
+            File("/proc").list()?.mapNotNull { it.toIntOrNull() }
+                ?.filter { it != mine }
+                ?.filter { pid ->
+                    runCatching {
+                        val cmdline = File("/proc/$pid/cmdline").readBytes().let { b ->
+                            if (b.isEmpty()) "" else String(b, 0, b.size, Charsets.UTF_8)
+                        }
+                        cmdline.contains(root)
+                    }.getOrDefault(false)
+                }.orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Stops everything running inside the container: a Gradle build, a live harness process, a shell.
+     * The files stay; the next command starts the container again on its own. This is what keeps the phone
+     * from burning battery on a process nobody is waiting for.
+     */
+    fun stopContainer() {
+        val victims = containerProcesses()
+        if (victims.isEmpty()) {
+            report("Nothing is running in the container.")
+            _state.update { it.copy(containerProcesses = 0) }
+            return
+        }
+        victims.forEach { pid -> runCatching { android.os.Process.sendSignal(pid, 15) } }
+        // A build ignores SIGTERM while it holds the compiler, so anything left is killed outright.
+        Thread {
+            Thread.sleep(2500)
+            victims.filter { File("/proc/$it").exists() }
+                .forEach { pid -> runCatching { android.os.Process.sendSignal(pid, 9) } }
+            refresh()
+        }.start()
+        report("Stopped ${victims.size} container process${if (victims.size == 1) "" else "es"}. The files stay; the next command starts it again.")
+        _state.update { it.copy(containerProcesses = 0) }
+    }
+
+    /** A command of the container: the app's own commands live in /usr/local/bin, Ubuntu's in /usr/bin. */
+    private fun guestBin(name: String): File? =
+        File(ubuntu, "usr/local/bin/$name").takeIf { it.exists() } ?: File(ubuntu, "usr/bin/$name").takeIf { it.exists() }
     // The setup files live outside the rootfs: installing or repairing the container empties files/ubuntu,
     // which used to take the scripts with it. Before every step they are copied back in.
     private val shareDir get() = File(appContext.filesDir, "share/antigem-android")
@@ -183,21 +275,22 @@ object AndroidDevManager {
     private fun refreshNow() {
         val ctx = appContext
         val root = rootfs()
-        val bin = binDir
         val sdk = File(root, SDK)
         val installed = buildSet {
             if (File(root, "usr/bin/apt-get").exists()) add(Component.CONTAINER)
             if (File(root, "usr/bin/git").exists() && File(root, "usr/bin/zip").exists() && File(root, "usr/bin/objcopy").exists()) add(Component.BASE)
             if (File(root, "$JAVA_HOME/bin/javac").exists()) add(Component.JAVA)
+            // Ubuntu keeps the tools in /usr/bin while the setup script puts its own commands in /usr/local/bin:
+            // checking only the second one made an installed SDK, Flutter release build and adb look missing.
             if (File(sdk, "cmdline-tools/latest/lib/sdkmanager-classpath.jar").exists() && File(sdk, "platforms/$PLATFORM").isDirectory &&
-                File(bin, "aapt2").exists()) add(Component.SDK)
-            if (File(bin, "adev").exists() && File(guestShare, "adev-new").exists()) add(Component.LAUNCHER)
+                guestBin("aapt2") != null) add(Component.SDK)
+            if (guestBin("adev") != null && File(guestShare, "adev-new").exists()) add(Component.LAUNCHER)
             if (File(root, "$TOOLS/flutter/bin/cache/dart-sdk/bin/dart").exists()) add(Component.FLUTTER)
             if (File(root, "$TOOLS/flutter/bin/cache/artifacts/engine/android-arm64-release/linux-arm64/gen_snapshot").exists() &&
-                File(bin, "qemu-x86_64").exists()) add(Component.FLUTTER_RELEASE)
+                guestBin("qemu-x86_64") != null) add(Component.FLUTTER_RELEASE)
             if (File(root, "$TOOLS/node/bin/node").exists()) add(Component.NODE)
             if (File(sdk, "ndk-arm64.txt").exists() && File(root, "usr/bin/cmake").exists()) add(Component.NDK)
-            if (File(bin, "adb").exists()) add(Component.ADB)
+            if (guestBin("adb") != null) add(Component.ADB)
         }
         val flutterVersion = runCatching {
             JSONObject(File(root, "$TOOLS/flutter/bin/cache/flutter.version.json").readText()).optString("frameworkVersion").ifBlank { null }
@@ -215,6 +308,7 @@ object AndroidDevManager {
                 filesVersion = filesVersion,
                 filesUpdate = it.filesUpdate?.takeIf { v -> v != filesVersion },
                 installed = installed,
+                containerProcesses = containerProcesses().size,
                 containerName = runCatching {
                     File(root, "etc/os-release").readLines().firstOrNull { l -> l.startsWith("PRETTY_NAME=") }
                         ?.substringAfter('=')?.trim('"')
