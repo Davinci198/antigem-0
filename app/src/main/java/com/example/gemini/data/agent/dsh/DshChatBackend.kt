@@ -316,8 +316,12 @@ class DshChatBackend(
     fun selectModel(modelId: String) {
         val provider = providerOf(modelId)
         val model = modelOf(modelId)
+        val previous = prefs.route.value
         _selectedModelId.value = modelId
-        prefs.setRoute(prefs.route.value.copy(provider = provider, model = model))
+        prefs.setRoute(previous.copy(provider = provider, model = model))
+        // The harness boots with one route: a process kept for the old model would answer as that model (or
+        // not at all), so the next turn has to start a process that was told about the new one.
+        if (previous.provider != provider || previous.model != model) dropWarm()
     }
 
     /**
@@ -484,13 +488,14 @@ class DshChatBackend(
             if (kept != null) Log.i(TAG, "reusing the live harness process")
 
             val ended = withTimeoutOrNull(TURN_TIMEOUT_MS) {
-                var prompted = false
                 // Both a loaded session and a missing one end the same way: prompt, once. A missing
                 // one is created by the prompt itself, while a loaded one would reject the prompt.
                 // A lambda, not a local `fun`: `send` suspends and a plain local function cannot call it.
+                var promptsSent = 0
+                var recoveries = 0
                 val promptOnce: suspend () -> Unit = {
-                    if (!prompted) {
-                        prompted = true
+                    if (promptsSent == 0) {
+                        promptsSent = 1
                         opened.send(
                             DshProtocol.promptFrame(sessionId = parser.sessionIdInUse, text = prompt),
                         )
@@ -572,7 +577,23 @@ class DshChatBackend(
                                     is DshEvent.ToolCompleted ->
                                         completeTool(assistantId, event.callId, event.name, event.summary)
                                     DshEvent.TurnCompleted -> throw TurnFinished()
-                                    is DshEvent.Failed -> throw TurnFailed(event.message)
+                                    is DshEvent.Failed -> {
+                                        // The harness refuses to create a session whose id it still holds, which
+                                        // happens after a route change: the id came from the chat, and the process
+                                        // that owned it was replaced. Loading it and asking again is the answer, and
+                                        // it is tried twice before the turn is reported as failed.
+                                        if (event.message.contains("already exists", ignoreCase = true) && recoveries < 2) {
+                                            recoveries++
+                                            Log.i(TAG, "the harness still holds the session: resuming it and asking again")
+                                            loaded.add(conversation.sessionId)
+                                            promptsSent = 0
+                                            opened.send(
+                                                DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),
+                                            )
+                                        } else {
+                                            throw TurnFailed(event.message)
+                                        }
+                                    }
                                     // Only a dropped answer is worth reporting: the harness sends
                                     // plenty of notices the parser does not model.
                                     else -> if (
