@@ -152,8 +152,11 @@ object AndroidDevManager {
     private val ubuntu get() = LocalEnvironmentManager.getUbuntuRootDir(appContext)
     private val home get() = File(ubuntu, "root")
     private val binDir get() = File(ubuntu, "usr/local/bin")
-    private val shareDir get() = File(ubuntu, "opt/antigem/share/antigem-android")
-    private val pidFile get() = File(shareDir, ".task.pid")
+    // The setup files live outside the rootfs: installing or repairing the container empties files/ubuntu,
+    // which used to take the scripts with it. Before every step they are copied back in.
+    private val shareDir get() = File(appContext.filesDir, "share/antigem-android")
+    private val guestShare get() = File(ubuntu, "opt/antigem/share/antigem-android")
+    private val pidFile get() = File(guestShare, ".task.pid")
     // The setup script's chroot mode lays the tools out under /opt/antigem in the Ubuntu itself, which is
     // exactly what this app already has: one container, entered with proot, no Termux and no proot-distro.
     private fun rootfs() = ubuntu
@@ -186,7 +189,7 @@ object AndroidDevManager {
             if (File(root, "$JAVA_HOME/bin/javac").exists()) add(Component.JAVA)
             if (File(sdk, "cmdline-tools/latest/lib/sdkmanager-classpath.jar").exists() && File(sdk, "platforms/$PLATFORM").isDirectory &&
                 File(bin, "aapt2").exists()) add(Component.SDK)
-            if (File(bin, "adev").exists() && File(shareDir, "adev-new").exists()) add(Component.LAUNCHER)
+            if (File(bin, "adev").exists() && File(guestShare, "adev-new").exists()) add(Component.LAUNCHER)
             if (File(root, "$TOOLS/flutter/bin/cache/dart-sdk/bin/dart").exists()) add(Component.FLUTTER)
             if (File(root, "$TOOLS/flutter/bin/cache/artifacts/engine/android-arm64-release/linux-arm64/gen_snapshot").exists() &&
                 File(bin, "qemu-x86_64").exists()) add(Component.FLUTTER_RELEASE)
@@ -436,8 +439,17 @@ object AndroidDevManager {
 
     /** Runs `android-setup.sh <step>`, streaming its output into the log; false (and an error message) on failure. */
     private suspend fun shellTask(progress: String, step: String, timeoutSeconds: Long): Boolean {
-        val script = File(shareDir, "android-setup.sh")
+        val script = File(guestShare, "android-setup.sh")
         if (!script.exists()) throw IllegalStateException("The setup files are missing. Tap Get setup files first.")
+        // The container install empties files/ubuntu, so the scripts are put back before every step.
+        runCatching {
+            guestShare.mkdirs()
+            shareDir.listFiles()?.filter { it.isFile }?.forEach { f ->
+                val target = File(guestShare, f.name)
+                if (!target.exists() || target.length() != f.length()) f.copyTo(target, overwrite = true)
+            }
+            File(guestShare, "android-setup.sh").setExecutable(true)
+        }
         _state.update { it.copy(progress = progress) }
         appendLog("$ bash android-setup.sh $step")
         // $$ is this shell, and exec keeps its PID for the script: Stop kills that process tree
