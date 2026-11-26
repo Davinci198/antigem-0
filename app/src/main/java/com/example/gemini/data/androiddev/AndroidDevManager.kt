@@ -451,6 +451,9 @@ object AndroidDevManager {
         // The container install empties files/ubuntu, so the scripts are put back before every step.
         runCatching {
             guestShare.mkdirs()
+            // nvm's installer refuses a $NVM_DIR that does not exist already (only ~/.nvm is created for it),
+            // and the script points NVM_DIR at /opt/antigem/nvm: without this, Node.js fails on every phone.
+            File(ubuntu, "opt/antigem/nvm").mkdirs()
             shareDir.listFiles()?.filter { it.isFile }?.forEach { f ->
                 val target = File(guestShare, f.name)
                 if (!target.exists() || target.length() != f.length()) f.copyTo(target, overwrite = true)
