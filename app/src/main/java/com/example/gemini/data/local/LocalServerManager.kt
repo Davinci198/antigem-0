@@ -339,6 +339,8 @@ object LocalServerManager {
         if (hasServerScript(context)) {
             hasInitialAutoStarted = true
         }
+        // A deliberate start ends any hold left by "Stop the container".
+        ContainerHold.release()
         activeJob?.cancel()
         activeJob = managerScope.launch {
             startServerInternal(context, forceRestart)
@@ -449,6 +451,12 @@ object LocalServerManager {
      */
     private fun healIfKilled() {
         if (stopRequested) return
+        // "Stop the container" is a decision, not an accident: reviving the bridge one second later made the
+        // button look broken, and it also filled the log with 'bridge exited on its own' on every stop.
+        if (ContainerHold.recentlyStopped()) {
+            Log.i(TAG, "[ServerManager] the container was just stopped on purpose; not restarting the bridge")
+            return
+        }
         val context = lastContext ?: return
         if (healAttempts >= MAX_HEAL_ATTEMPTS) {
             Log.w(TAG, "[ServerManager] bridge exited $healAttempts times on its own; leaving it stopped")
@@ -462,6 +470,7 @@ object LocalServerManager {
             val session = _serverSession.value
             if (session != null && !session.isExited.value) return@launch
             Log.i(TAG, "[ServerManager] bridge exited on its own; restarting (attempt $attempt)")
+            ContainerHold.release()
             startServerInternal(context, forceRestart = true)
         }
     }
