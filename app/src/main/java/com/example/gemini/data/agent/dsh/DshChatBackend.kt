@@ -10,6 +10,7 @@ import com.example.gemini.domain.model.AiModel
 import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.Conversation
 import com.example.gemini.domain.model.MessageRole
+import com.example.gemini.domain.model.TokenUsage
 import com.example.gemini.domain.model.ToolCall
 import com.example.gemini.domain.model.ToolType
 import kotlinx.coroutines.CancellationException
@@ -443,6 +444,7 @@ class DshChatBackend(
     }
 
     private suspend fun runTurn(conversation: Conversation, prompt: String, assistantId: String) {
+        val turnStartedAt = System.currentTimeMillis()
         val route = resolvedRoute(prefs.route.value)
         val host = host()
         var session: DshSession? = null
@@ -500,7 +502,11 @@ class DshChatBackend(
                     coroutineScope {
                         val listener = launch {
                             opened.lines.collect { line ->
-                                when (val event = parser.parse(line)) {
+                                val event = parser.parse(line)
+                                // The token accounting rides on the same frame as the text, so it is
+                                // taken here rather than as an event of its own.
+                                addUsage(assistantId, parser.takeUsage(), turnStartedAt)
+                                when (event) {
                                     DshEvent.Initialized -> {
                                         // The runtime answers with serverInfo only: it holds no session,
                                         // so a stored session has to be loaded before it can be prompted.
@@ -688,6 +694,26 @@ class DshChatBackend(
         setMessages(
             _messages.value.map {
                 if (it.id == messageId) it.copy(thoughtText = (it.thoughtText.orEmpty() + delta)) else it
+            },
+        )
+    }
+
+    private fun addUsage(messageId: String, usage: DshEvent.DshUsage?, startedAt: Long) {
+        if (usage == null) return
+        setMessages(
+            _messages.value.map { message ->
+                if (message.id != messageId) return@map message
+                val previous = message.tokenUsage
+                message.copy(
+                    tokenUsage = TokenUsage(
+                        promptTokens = (previous?.promptTokens ?: 0) + usage.inputTokens,
+                        outputTokens = (previous?.outputTokens ?: 0) + usage.outputTokens,
+                        cachedTokens = (previous?.cachedTokens ?: 0) + usage.cacheReadTokens,
+                        cacheCreationTokens = (previous?.cacheCreationTokens ?: 0) + usage.cacheWriteTokens,
+                        totalTokens = (previous?.totalTokens ?: 0) + usage.total,
+                        durationMs = System.currentTimeMillis() - startedAt,
+                    ),
+                )
             },
         )
     }
