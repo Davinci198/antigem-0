@@ -9,6 +9,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
@@ -420,6 +421,10 @@ class MainActivity : ComponentActivity() {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
+                                        // The keyboard is drawn over the page: without this the harness's
+                                        // composer sits underneath it and what is typed cannot be seen.
+                                        // adjustResize alone does nothing while the window is edge-to-edge.
+                                        .imePadding()
                                         .graphicsLayer {
                                             val isVisible = currentViewMode == AppViewMode.DSH_WEB
                                             alpha = if (isVisible) 1f else 0f
