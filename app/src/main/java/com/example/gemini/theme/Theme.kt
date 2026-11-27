@@ -113,7 +113,11 @@ fun GeminiTheme(
     darkTheme: Boolean = isSystemInDarkThemeRobust(),
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    // Recomposes on every colour change: the settings screen edits these while the app is running.
+    val version = ThemePrefs.version.value
+    val palette = remember(version) { ThemePrefs.palette() }
+    val colorScheme = palette?.let { if (darkTheme) it.darkColors else it.lightColors }
+        ?: if (darkTheme) DarkColorScheme else LightColorScheme
 
     val view = LocalView.current
     if (!view.isInEditMode) {
