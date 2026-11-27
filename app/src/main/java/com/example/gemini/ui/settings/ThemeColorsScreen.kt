@@ -54,10 +54,11 @@ fun ThemeColorsScreen() {
     var enabled by remember { mutableStateOf(ThemePrefs.enabled) }
     var accent by remember { mutableStateOf(ThemePrefs.accent) }
     var background by remember { mutableStateOf(ThemePrefs.background) }
+    var second by remember { mutableStateOf(ThemePrefs.secondAccent) }
 
     val accentHsv = remember(accent) { accent.toHsv() }
     val backgroundHsv = remember(background) { background.toHsv() }
-    val preview = remember(accent, background) { customPalette(accent, background) }
+    val preview = remember(accent, background, second) { customPalette(accent, background, second) }
 
     Column(
         modifier = Modifier
@@ -80,7 +81,7 @@ fun ThemeColorsScreen() {
                 checked = enabled,
                 onCheckedChange = { on ->
                     enabled = on
-                    if (on) ThemePrefs.setColors(accent, background) else ThemePrefs.reset()
+                    if (on) ThemePrefs.setColors(accent, background, second) else ThemePrefs.reset()
                 }
             )
         }
@@ -106,7 +107,7 @@ fun ThemeColorsScreen() {
                                 accent = preset.accent
                                 background = preset.background
                                 enabled = true
-                                ThemePrefs.setColors(preset.accent, preset.background)
+                                ThemePrefs.setColors(preset.accent, preset.background, second)
                             }
                     )
                     Text(preset.label, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
@@ -121,7 +122,7 @@ fun ThemeColorsScreen() {
             onValueChange = {
                 accent = hsvToColor(it, accentHsv.s.coerceAtLeast(0.55f), accentHsv.v)
                 enabled = true
-                ThemePrefs.setColors(accent, background)
+                ThemePrefs.setColors(accent, background, second)
             },
             valueRange = 0f..360f
         )
@@ -131,7 +132,7 @@ fun ThemeColorsScreen() {
             onValueChange = {
                 accent = hsvToColor(accentHsv.h, accentHsv.s, it.coerceIn(0.35f, 1f))
                 enabled = true
-                ThemePrefs.setColors(accent, background)
+                ThemePrefs.setColors(accent, background, second)
             },
             valueRange = 0.2f..1f
         )
@@ -145,7 +146,7 @@ fun ThemeColorsScreen() {
                 val sat = backgroundHsv.s.coerceAtLeast(0.10f)
                 background = hsvToColor(hue, sat, backgroundHsv.v.coerceAtLeast(0.04f))
                 enabled = true
-                ThemePrefs.setColors(accent, background)
+                ThemePrefs.setColors(accent, background, second)
             },
             valueRange = 0f..360f
         )
@@ -156,7 +157,7 @@ fun ThemeColorsScreen() {
                 // Past half the surface turns into the colour itself and the app stops looking like a background.
                 background = hsvToColor(backgroundHsv.h, sat.coerceIn(0f, 0.55f), backgroundHsv.v.coerceAtLeast(0.04f))
                 enabled = true
-                ThemePrefs.setColors(accent, background)
+                ThemePrefs.setColors(accent, background, second)
             },
             valueRange = 0f..0.55f
         )
@@ -167,10 +168,53 @@ fun ThemeColorsScreen() {
                 // The whole range is allowed: a light background flips the palette to dark text by itself.
                 background = hsvToColor(backgroundHsv.h, backgroundHsv.s.coerceIn(0f, 0.55f), value.coerceIn(0.02f, 1f))
                 enabled = true
-                ThemePrefs.setColors(accent, background)
+                ThemePrefs.setColors(accent, background, second)
             },
             valueRange = 0.02f..1f
         )
+
+        Text("Second colour", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Match the accent", fontSize = 13.sp)
+                Text(
+                    "Gradient ends, secondary buttons and the second accent. Turn this off to give them a colour of their own.",
+                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+            Switch(
+                checked = second == null,
+                onCheckedChange = { match ->
+                    second = if (match) null else (background.rotateHue(150f).mix(accent, 0.35f))
+                    enabled = true
+                    ThemePrefs.setColors(accent, background, second)
+                }
+            )
+        }
+        if (second != null) {
+            val secondHsv = remember(second) { (second ?: accent).toHsv() }
+            SliderLabel("Hue  ${secondHsv.h.toInt()}°")
+            Slider(
+                value = secondHsv.h,
+                onValueChange = {
+                    second = hsvToColor(it, secondHsv.s.coerceAtLeast(0.35f), secondHsv.v)
+                    enabled = true
+                    ThemePrefs.setColors(accent, background, second)
+                },
+                valueRange = 0f..360f
+            )
+            SliderLabel("Brightness  ${(secondHsv.v * 100).toInt()}%")
+            Slider(
+                value = secondHsv.v,
+                onValueChange = {
+                    second = hsvToColor(secondHsv.h, secondHsv.s, it.coerceIn(0.25f, 1f))
+                    enabled = true
+                    ThemePrefs.setColors(accent, background, second)
+                },
+                valueRange = 0.2f..1f
+            )
+        }
 
         Text("Preview", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
         Column(
@@ -183,8 +227,8 @@ fun ThemeColorsScreen() {
         ) {
             Text("DeepSeek Harness", color = preview.darkColors.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Text(
-                "Contrast %.1f:1 on the background".format(
-                    com.example.gemini.theme.contrastRatio(preview.accent, preview.background)
+                "Button text reads at %.1f:1".format(
+                    com.example.gemini.theme.contrastRatio(preview.accent.bestForeground(), preview.accent)
                 ),
                 color = preview.darkColors.onSurfaceVariant,
                 fontSize = 12.sp
