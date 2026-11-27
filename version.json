@@ -1,14 +1,11 @@
 {
-  "version_code": 121,
-  "version_name": "1.1.0",
+  "version_code": 122,
+  "version_name": "1.1.1",
   "min_supported_version_code": 1,
   "changelog": [
-    "DeepSeek Harness: the reply pill now shows input/output tokens, cache hits, duration and the model that answered",
-    "DeepSeek Harness: switching the model no longer leaves the chat without an answer, and chats can be renamed from the sidebar",
-    "DeepSeek Harness: chat titles use your question instead of the hidden context block",
-    "DeepSeek Harness web page starts again after the container is stopped, and keeps its composer above the keyboard",
-    "Android Development: installed parts are recognised, each one has an Uninstall button, and a Stop the container button frees the battery",
-    "Security: the bridge's WebSocket and networking dependencies were moved to their patched versions"
+    "Stop the container now stops everything the app runs in Ubuntu, including the setup script's own processes that kept a core busy at 100% and drained the battery",
+    "The bridge no longer restarts the container a second after you stopped it, and the harness page leaves it down until you open it again",
+    "Every stop is written to the log with the process ids, so a process that refuses to die is visible"
   ],
   "is_critical": false
 }
