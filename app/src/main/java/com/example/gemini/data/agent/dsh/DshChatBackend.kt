@@ -233,13 +233,17 @@ class DshChatBackend(
 
     override fun startNewChat() {
         detach()
+        val id = UUID.randomUUID().toString()
+        // Its own folder from the first message, created now: `/root/chat` (WORKSPACE) is shared, and two chats
+        // writing in the same directory is how one chat's files end up in another.
+        val workspace = com.example.gemini.data.workspace.ChatWorkspace.guestPath(id)
+        runCatching { com.example.gemini.data.workspace.ChatWorkspace.ensure(application, id) }
         val conversation = Conversation(
-            id = UUID.randomUUID().toString(),
+            id = id,
             sessionId = UUID.randomUUID().toString(),
             agent = AgentKind.DEEPSEEK_HARNESS,
             modelId = prefs.route.value.model,
-            // New chats live in the dedicated directory, not in the harness' own root.
-            workspaceUri = WORKSPACE,
+            workspaceUri = workspace,
         )
         _conversations.value = _conversations.value + conversation
         store.currentConversation.value = conversation
