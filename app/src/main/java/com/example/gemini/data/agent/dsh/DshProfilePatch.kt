@@ -17,6 +17,18 @@ internal object DshProfilePatch {
     private const val ENTRY_NAME = "@deepseek-ai/dsh-llm-pi-ai"
 
     /**
+     * The patch entry that declares a provider DSH already knows: its adapter, endpoint and model list come from the
+     * harness's own table, so only the name and the variable holding the key are needed.
+     */
+    fun presetEntry(provider: String, apiKeyEnv: String): String = buildString {
+        appendLine("- id: $ENTRY_ID")
+        appendLine("  config:")
+        appendLine("    providers:")
+        appendLine("      $provider:")
+        appendLine("        apiKeyEnv: $apiKeyEnv")
+    }.trimEnd('\n')
+
+    /**
      * [existing] with every provider in [providers] that it does not declare yet.
      *
      * Returns [existing] untouched when there is nothing to add, so the caller can

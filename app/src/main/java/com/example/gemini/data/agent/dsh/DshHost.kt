@@ -263,9 +263,26 @@ class ProotDshHost(
                 appendLine("        models:")
                 appendLine("          - id: ${yamlQuote(route.model)}")
             }
+            // A preset route (nvidia, openrouter, ...) gets its adapter and endpoint from DSH's own table, so it
+            // only needs to be declared — but it does need that: the sdk profile is created empty, and while it
+            // stays empty every turn dies with 'no adapter registered for provider "nvidia"'. The web profile is
+            // where the harness writes its own choices, so it counts as a declaration and is left alone.
+            if (custom == null && route.provider.isNotBlank() && route.provider !in declaredProviders(home)) {
+                appendLine(DshProfilePatch.presetEntry(route.provider, presetKeyEnv(route.provider)))
+            }
         }.ifBlank { "[]\n" }
         File(home, "cordis.patch.yml").writeText(patch)
     }
+
+    /** Providers the profiles in this home already declare, whichever profile DSH chose to write them into. */
+    private fun declaredProviders(home: File): Set<String> = runCatching {
+        listOf("profiles/sdk/cordis.patch.yml", "profiles/web/cordis.patch.yml", "cordis.patch.yml")
+            .map { File(home, it) }
+            .filter { it.isFile }
+            .flatMap { DshConfigParser.llmProviders(it.readText()) }
+            .map { it.id }
+            .toSet()
+    }.getOrDefault(emptySet())
 
     private fun yamlQuote(value: String): String =
         if (value.matches(Regex("[A-Za-z0-9_./:@-]+"))) value else "'${value.replace("'", "''")}'"
@@ -279,6 +296,9 @@ class ProotDshHost(
         /** Provider key variable DSH's custom route reads (see [DshModelRoute]). */
         fun keyEnvFor(name: String): String =
             name.uppercase().replace(Regex("[^A-Z0-9]"), "_") + "_API_KEY"
+
+        /** The variable a preset reads: nvidia is `NVIDIA_API_KEY`, deepseek-official is `DEEPSEEK_API_KEY`. */
+        fun presetKeyEnv(name: String): String = PRESET_KEY_ENV[name] ?: keyEnvFor(name)
 
         /**
          * Env vars DSH's own presets read, so a key can be handed to a route the
