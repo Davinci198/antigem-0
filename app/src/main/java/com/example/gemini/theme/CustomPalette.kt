@@ -97,6 +97,7 @@ fun Color.darkenedFor(against: Color, min: Float = 4.5f): Color {
 /** A palette built from the two colours the user picked: the schemes plus the scalars the app paints with. */
 data class CustomPalette(
     val accent: Color,
+    /** The second colour: gradient ends, the second accent, anything that must not be the accent itself. */
     val accentSoft: Color,
     val background: Color,
     val surface: Color,
@@ -111,8 +112,11 @@ data class CustomPalette(
  * The dark scheme walks the background toward white (toward black when the user picked a light background), the
  * light scheme walks it the other way, and the accent drives primary/secondary with contrast guaranteed on the
  * matching `on*` colour.
+ *
+ * [secondAccent] is optional: when it is null the second colour is the accent rotated 30°, which keeps a theme
+ * coherent without asking anything; when the user picked one, that exact colour is used instead.
  */
-fun customPalette(accent: Color, background: Color): CustomPalette {
+fun customPalette(accent: Color, background: Color, secondAccent: Color? = null): CustomPalette {
     val lightBackground = background.relativeLuminance() > 0.32f
     val onDark = if (lightBackground) Color(0xFF12100F) else Color(0xFFF2F4F3)
     val liftDirection = if (lightBackground) Color.Black else Color.White
@@ -123,13 +127,13 @@ fun customPalette(accent: Color, background: Color): CustomPalette {
     fun mutedOf(): Color = lift(if (lightBackground) 0.30f else 0.55f)
 
     val darkAccent = accent.darkenedFor(onDark)
-    val darkSecondary = darkAccent.rotateHue(30f).darkenedFor(onDark)
+    val darkSecondary = (secondAccent ?: darkAccent.rotateHue(30f)).darkenedFor(onDark)
     val lightAccent = accent.darkenedFor(Color.White)
-    val lightSecondary = lightAccent.rotateHue(30f).darkenedFor(Color.White)
+    val lightSecondary = (secondAccent ?: lightAccent.rotateHue(30f)).darkenedFor(Color.White)
 
     return CustomPalette(
         accent = darkAccent,
-        accentSoft = darkAccent.rotateHue(-30f),
+        accentSoft = secondAccent?.darkenedFor(onDark) ?: darkAccent.rotateHue(-30f),
         background = background,
         surface = surfaceOf(),
         surfaceVariant = variantOf(),

@@ -71,14 +71,26 @@ class CustomPaletteTest {
     }
 
     @Test
+    fun `a second colour is used as given, not derived`() {
+        val teal = Color(0xFF00BFA5)
+        val derived = customPalette(violet, dark)
+        val chosen = customPalette(violet, dark, teal)
+        val tealHue = teal.toHsv().h
+        val chosenHue = chosen.accentSoft.toHsv().h
+        val derivedHue = derived.accentSoft.toHsv().h
+        assertTrue("the picked colour wins", kotlin.math.abs(chosenHue - tealHue) < 8f)
+        assertTrue("and it is not the derived one", kotlin.math.abs(chosenHue - derivedHue) > 20f)
+        assertTrue("the secondary scheme colour follows it", chosen.darkColors.secondary.toHsv().h.let { kotlin.math.abs(it - tealHue) < 12f })
+    }
+
+    @Test
     fun `bestForeground picks the readable side`() {
         assertEquals(Color.Black, Color(0xFFFFFFFF).bestForeground())
         assertEquals(Color.White, Color(0xFF101010).bestForeground())
     }
 
     @Test
-    fun `every preset has an accent that reads on its background`() {
-        colorPresets.forEach { preset ->
+    fun `every preset has an accent that reads on its background`() {        colorPresets.forEach { preset ->
             val scheme = customPalette(preset.accent, preset.background).darkColors
             assertTrue(
                 "${preset.label}: accent reads on its background",

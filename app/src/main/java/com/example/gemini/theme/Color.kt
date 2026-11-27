@@ -55,7 +55,9 @@ val QuotaAmber: Color = Color(0xFFD97706)
 val QuotaRed: Color = Color(0xFFDC2626)
 
 val GeminiBlue: Color get() = paletteOrNull()?.accent?.rotateHue(60f) ?: DefaultBlue
-val GeminiPurple: Color get() = paletteOrNull()?.accent?.rotateHue(-60f) ?: DefaultPurple
+
+/** The second colour of the theme: gradient ends and anything painted next to the accent. */
+val GeminiPurple: Color get() = paletteOrNull()?.accentSoft ?: DefaultPurple
 
 /**
  * Colors asked for by *role* instead of by brand. A screen that means "this needs attention" should use

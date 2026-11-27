@@ -18,6 +18,7 @@ object ThemePrefs {
     private const val KEY_ENABLED = "custom_colors"
     private const val KEY_ACCENT = "accent"
     private const val KEY_BACKGROUND = "background"
+    private const val KEY_SECOND = "second_accent"
 
     /** The app's own palette: warm amber on a near-black background. */
     val defaultAccent = Color(0xFFD97706)
@@ -54,12 +55,20 @@ object ThemePrefs {
     val background: Color
         get() = Color(store()?.getInt(KEY_BACKGROUND, defaultBackground.toArgb()) ?: defaultBackground.toArgb())
 
-    fun setColors(accent: Color, background: Color) {
-        store()?.edit()
+    /** The second colour the user set, or null when it should follow the accent (rotated by 30°). */
+    val secondAccent: Color?
+        get() = store()?.let { prefs ->
+            val stored = prefs.getInt(KEY_SECOND, Int.MIN_VALUE)
+            if (stored == Int.MIN_VALUE) null else Color(stored)
+        }
+
+    fun setColors(accent: Color, background: Color, secondAccent: Color? = null) {
+        val edit = store()?.edit()
             ?.putInt(KEY_ACCENT, accent.toArgb())
             ?.putInt(KEY_BACKGROUND, background.toArgb())
             ?.putBoolean(KEY_ENABLED, true)
-            ?.apply()
+        if (secondAccent == null) edit?.remove(KEY_SECOND) else edit?.putInt(KEY_SECOND, secondAccent.toArgb())
+        edit?.apply()
         bump()
     }
 
@@ -68,6 +77,7 @@ object ThemePrefs {
         store()?.edit()
             ?.remove(KEY_ACCENT)
             ?.remove(KEY_BACKGROUND)
+            ?.remove(KEY_SECOND)
             ?.putBoolean(KEY_ENABLED, false)
             ?.apply()
         bump()
@@ -75,7 +85,7 @@ object ThemePrefs {
 
     /** The palette currently in force; null while the built-in theme should be used. */
     fun palette(): CustomPalette? =
-        if (enabled) customPalette(accent, background) else null
+        if (enabled) customPalette(accent, background, secondAccent) else null
 
     private fun bump() {
         version.value = System.currentTimeMillis()
