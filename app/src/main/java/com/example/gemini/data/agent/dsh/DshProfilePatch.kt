@@ -42,6 +42,26 @@ internal object DshProfilePatch {
     /** A completion budget small enough to leave a conversation in a 262k window and large enough to be useful. */
     const val DEFAULT_MAX_TOKENS = 8192
 
+    /**
+     * [existing] plus the entry for a preset provider — or [existing] untouched when it already declares that
+     * provider. Never returns a blank string for a non-blank input: blanking this file is how the declaration the
+     * previous turn wrote gets lost again.
+     */
+    fun ensurePreset(
+        existing: String,
+        provider: String,
+        apiKeyEnv: String,
+        model: String? = null,
+        maxTokens: Int = DEFAULT_MAX_TOKENS,
+    ): String {
+        if (provider.isBlank()) return existing
+        val declared = DshConfigParser.llmProviders(existing).map { it.id }.toSet()
+        if (provider in declared) return existing
+        val entry = presetEntry(provider, apiKeyEnv, model, maxTokens)
+        val body = existing.trim()
+        return if (body.isBlank() || body == "[]") entry else body + "\n" + entry
+    }
+
     private fun yamlQuote(value: String): String =
         if (value.matches(Regex("[A-Za-z0-9_./:@-]+"))) value else "'${value.replace("'", "''")}'"
 

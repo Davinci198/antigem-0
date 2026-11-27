@@ -251,6 +251,8 @@ class ProotDshHost(
         // A release that reads nothing else from this file still requires a
         // top-level array: an empty file parses as null and dsh aborts at boot
         // with "must be a top-level YAML array of loader patch entries".
+        val patchFile = File(home, "cordis.patch.yml")
+        val current = if (patchFile.isFile) patchFile.readText() else ""
         val patch = buildString {
             custom?.let {
                 appendLine("- id: llm-pi-ai")
@@ -263,21 +265,33 @@ class ProotDshHost(
                 appendLine("        models:")
                 appendLine("          - id: ${yamlQuote(route.model)}")
             }
-            // A preset route (nvidia, openrouter, ...) gets its adapter and endpoint from DSH's own table, so it
-            // only needs to be declared — but it does need that: the sdk profile is created empty, and while it
-            // stays empty every turn dies with 'no adapter registered for provider "nvidia"'. The web profile is
-            // where the harness writes its own choices, so it counts as a declaration and is left alone.
-            if (custom == null && route.provider.isNotBlank() && route.provider !in declaredProviders(home)) {
-                appendLine(
-                    DshProfilePatch.presetEntry(
-                        provider = route.provider,
-                        apiKeyEnv = presetKeyEnv(route.provider),
-                        model = route.model,
-                    )
+        }
+        // A preset route (nvidia, openrouter, ...) gets its adapter and endpoint from DSH's own table but still has to
+        // be declared: the sdk profile is created empty, and while it stays empty every turn dies with 'no adapter
+        // registered for provider "nvidia"'. The web profile is where the harness writes its own choices, and a
+        // session booted with --profile sdk never reads it, so it is not consulted here.
+        val next = when {
+            custom != null -> patch
+            route.provider.isBlank() -> patch
+            route.provider in declaredProviders(home) -> current
+            else -> {
+                val declaration = DshProfilePatch.ensurePreset(
+                    existing = current,
+                    provider = route.provider,
+                    apiKeyEnv = presetKeyEnv(route.provider),
+                    model = route.model,
                 )
+                if (declaration.isBlank()) current else declaration
             }
-        }.ifBlank { "[]\n" }
-        File(home, "cordis.patch.yml").writeText(patch)
+        }
+        when {
+            // Nothing changed and the file already says what it must: leave it alone.
+            next == current && current.isNotBlank() -> Unit
+            next.isBlank() -> {
+                if (!patchFile.exists() || current.isBlank()) patchFile.writeText("[]\n")
+            }
+            else -> patchFile.writeText(if (next.endsWith("\n")) next else next + "\n")
+        }
     }
 
     /**

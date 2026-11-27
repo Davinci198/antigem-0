@@ -102,4 +102,22 @@ class DshProfilePatchTest {
         // Without a completion budget the harness reserves the whole context window and compaction fails.
         assertTrue(entry.contains("maxTokens: ${DshProfilePatch.DEFAULT_MAX_TOKENS}"))
     }
+
+    @Test
+    fun `an empty patch gains the preset entry, and a declared one is left alone`() {
+        val empty = DshProfilePatch.ensurePreset("[]\n", "nvidia", "NVIDIA_API_KEY", "minimaxai/minimax-m3.1-flash")
+        assertEquals(listOf("nvidia"), DshConfigParser.llmProviders(empty).map { it.id })
+        assertTrue(empty.contains("maxTokens: 8192"))
+
+        val onDisk = """
+            - id: llm-pi-ai
+              config:
+                providers:
+                  nvidia:
+                    apiKeyEnv: NVIDIA_API_KEY
+        """.trimIndent()
+        // Second start: the entry is already there, so the file must come back byte for byte.
+        assertEquals(onDisk, DshProfilePatch.ensurePreset(onDisk, "nvidia", "NVIDIA_API_KEY", "minimaxai/minimax-m3.1-flash"))
+        assertEquals("", DshProfilePatch.ensurePreset("", "", "NVIDIA_API_KEY"))
+    }
 }
