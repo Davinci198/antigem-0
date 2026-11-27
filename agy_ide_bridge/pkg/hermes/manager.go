@@ -163,6 +163,10 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.handleGatewayStatus(w)
 	case strings.HasPrefix(path, "auth/nous/") || path == "auth/nous":
 		m.handleNousAuth(w, r, strings.TrimPrefix(path, "auth/nous/"))
+	case strings.HasPrefix(path, "plugins/"):
+		m.handlePlugins(w, r, strings.TrimPrefix(path, "plugins/"))
+	case strings.HasPrefix(path, "skills/"):
+		m.handleSkills(w, r, strings.TrimPrefix(path, "skills/"))
 
 	default:
 		// /sessions/{id}/…
