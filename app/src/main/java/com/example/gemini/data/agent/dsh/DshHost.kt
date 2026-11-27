@@ -274,9 +274,14 @@ class ProotDshHost(
         File(home, "cordis.patch.yml").writeText(patch)
     }
 
-    /** Providers the profiles in this home already declare, whichever profile DSH chose to write them into. */
+    /**
+     * Providers declared to the profile the chat actually boots (sdk), plus the home-level patch it inherits.
+     *
+     * The web profile is deliberately not consulted: the harness writes its own settings there, and a provider that
+     * exists only in `profiles/web` is invisible to a session started with `--profile sdk`.
+     */
     private fun declaredProviders(home: File): Set<String> = runCatching {
-        listOf("profiles/sdk/cordis.patch.yml", "profiles/web/cordis.patch.yml", "cordis.patch.yml")
+        listOf("cordis.patch.yml", "profiles/sdk/cordis.patch.yml")
             .map { File(home, it) }
             .filter { it.isFile }
             .flatMap { DshConfigParser.llmProviders(it.readText()) }
