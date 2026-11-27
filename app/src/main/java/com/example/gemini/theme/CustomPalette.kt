@@ -175,7 +175,8 @@ fun customPalette(
     val surface = overrides[ThemeToken.SURFACE] ?: lift(if (lightBackground) 0.06f else 0.04f)
     val surfaceVariant = overrides[ThemeToken.SURFACE_VARIANT] ?: lift(if (lightBackground) 0.10f else 0.08f)
     val outline = overrides[ThemeToken.OUTLINE] ?: lift(0.16f)
-    val muted = overrides[ThemeToken.MUTED] ?: lift(if (lightBackground) 0.30f else 0.55f)
+    // On a light background 30% toward black is still too pale for secondary text (2.1:1); 45% clears 3:1.
+    val muted = overrides[ThemeToken.MUTED] ?: lift(if (lightBackground) 0.45f else 0.55f)
     val codeBg = overrides[ThemeToken.CODE_BG] ?: surface.mix(Color.Black, 0.15f)
 
     return CustomPalette(

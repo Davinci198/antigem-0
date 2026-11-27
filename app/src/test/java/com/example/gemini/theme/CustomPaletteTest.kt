@@ -90,12 +90,22 @@ class CustomPaletteTest {
     }
 
     @Test
-    fun `every preset has an accent that reads on its background`() {
+    fun `every preset has button text that reads on its accent`() {
+        // The accent is used as a surface (buttons, chips), so what has to clear WCAG AA is the text on top of it,
+        // not the accent against the background (which is a link colour and may be lighter on purpose).
         colorPresets.forEach { preset ->
-            val scheme = customPalette(preset.accent, preset.background).darkColors
+            val palette = customPalette(preset.accent, preset.background, preset.second)
             assertTrue(
-                "${preset.label}: accent reads on its background",
-                contrastRatio(scheme.primary, scheme.background) >= 4.5f
+                "${preset.label}: text on the accent",
+                contrastRatio(palette.accent.bestForeground(), palette.accent) >= 4.5f
+            )
+            assertTrue(
+                "${preset.label}: body text on the background",
+                contrastRatio(palette.darkColors.onSurface, palette.background) >= 4.5f
+            )
+            assertTrue(
+                "${preset.label}: secondary text on the background",
+                contrastRatio(palette.muted, palette.background) >= 3f
             )
         }
     }
