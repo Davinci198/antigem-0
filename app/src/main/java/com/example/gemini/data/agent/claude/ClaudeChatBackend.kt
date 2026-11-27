@@ -245,12 +245,19 @@ class ClaudeChatBackend(
 
     override fun startNewChat() {
         val id = UUID.randomUUID().toString()
+        // A chat that is not working inside a project the user opened gets a folder of its own, created before the
+        // first turn, so two chats never write in the same place.
+        val project = defaultWorkspaceUri()
+        val workspaceUri = project.ifBlank {
+            runCatching { com.example.gemini.data.workspace.ChatWorkspace.ensure(application, id) }
+            com.example.gemini.data.workspace.ChatWorkspace.uri(id)
+        }
         val conv = Conversation(
             id = id,
             title = "New Chat",
             modelId = _selectedModelId.value,
             sessionId = id,
-            workspaceUri = defaultWorkspaceUri(),
+            workspaceUri = workspaceUri,
             agent = AgentKind.CLAUDE
         )
         showConversation(conv, loading = false)

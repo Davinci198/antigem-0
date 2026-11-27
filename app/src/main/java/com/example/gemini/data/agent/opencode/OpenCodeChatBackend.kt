@@ -562,12 +562,19 @@ class OpenCodeChatBackend(
 
     override fun startNewChat() {
         val id = newId("ses", descending = true)
+        // Same rule as the other agents: a chat outside a project the user opened works in its own folder, made
+        // before the first turn.
+        val project = defaultWorkspaceUri()
+        val workspaceUri = project.ifBlank {
+            runCatching { com.example.gemini.data.workspace.ChatWorkspace.ensure(application, id) }
+            com.example.gemini.data.workspace.ChatWorkspace.uri(id)
+        }
         val conv = Conversation(
             id = id,
             title = "New Chat",
             modelId = _selectedModelId.value,
             sessionId = id,
-            workspaceUri = defaultWorkspaceUri(),
+            workspaceUri = workspaceUri,
             agent = AgentKind.OPENCODE
         )
         _selectedModelId.value = prefs.model.value.takeIf { p -> _availableModels.value.any { it.id == p } } ?: _selectedModelId.value
