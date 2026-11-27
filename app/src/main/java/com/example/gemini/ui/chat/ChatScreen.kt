@@ -160,11 +160,12 @@ fun ChatScreen(
     val currentConv by viewModel.currentConversation.collectAsState()
     val newChatAgent by viewModel.newChatAgent.collectAsState()
     val activeAgent by viewModel.activeAgent.collectAsState()
-    val isClaudeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
-    val isHermesChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.HERMES
-    val isOpenCodeChat = currentConv?.agent == com.example.gemini.domain.model.AgentKind.OPENCODE
+    val isClaudeChat = activeAgent == com.example.gemini.domain.model.AgentKind.CLAUDE
+    val isHermesChat = activeAgent == com.example.gemini.domain.model.AgentKind.HERMES
+    val isOpenCodeChat = activeAgent == com.example.gemini.domain.model.AgentKind.OPENCODE
+    val isDshChat = activeAgent == com.example.gemini.domain.model.AgentKind.DEEPSEEK_HARNESS
     // the Antigravity hub's connection state only speaks for Antigravity chats; each other agent has its own
-    val isAgyChat = !isClaudeChat && !isHermesChat && !isOpenCodeChat
+    val isAgyChat = activeAgent == com.example.gemini.domain.model.AgentKind.AGY
     val openCodeBackend = viewModel.openCodeBackend
     val openCodePending by openCodeBackend.pendingPermissions.collectAsState()
     val openCodeState by openCodeBackend.state.collectAsState()
@@ -1326,7 +1327,7 @@ fun ChatScreen(
                                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
                             )
                         }
-                        if (activeAgent == com.example.gemini.domain.model.AgentKind.DEEPSEEK_HARNESS) {
+                        if (isDshChat) {
                             // The free-pi bar only exists in the harness' own web GUI, so this is
                             // the one place that opens it.
                             IconButton(onClick = onNavigateToDshWeb) {
@@ -2186,8 +2187,22 @@ fun ChatScreen(
 
                 // Chat Input Bar with Bottom Model & Thinking Selector Pills (Claude Android Style)
                 ChatInputBar(
-                    isOnline = if (isOpenCodeChat) !openCodeState.isBlocking else if (isClaudeChat) !claudeState.isBlocking else if (isHermesChat) systemConnectionState.isBridgeOnline else systemConnectionState.canSend,
-                    isAuth = if (isOpenCodeChat) true else if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else if (isHermesChat) true else systemConnectionState.isAuth,
+                    isOnline = when {
+                        isOpenCodeChat -> !openCodeState.isBlocking
+                        isClaudeChat -> !claudeState.isBlocking
+                        isHermesChat -> systemConnectionState.isBridgeOnline
+                        // The harness runs in the container and reports its own failures (not installed, no provider
+                        // key) in the chat, so there is no hub state to wait for here.
+                        isDshChat -> true
+                        else -> systemConnectionState.canSend
+                    },
+                    isAuth = when {
+                        isOpenCodeChat -> true
+                        isClaudeChat -> claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN
+                        isHermesChat -> true
+                        isDshChat -> true
+                        else -> systemConnectionState.isAuth
+                    },
                     offlineMessage = if (isOpenCodeChat) when (openCodeState) {
                         com.example.gemini.data.agent.opencode.OpenCodeState.NOT_INSTALLED -> "OpenCode is not installed on the server. See Settings → OpenCode."
                         com.example.gemini.data.agent.opencode.OpenCodeState.DISABLED, com.example.gemini.data.agent.opencode.OpenCodeState.OUTDATED -> "Restart the server to use OpenCode."

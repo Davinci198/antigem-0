@@ -102,10 +102,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val dshPrefs = com.example.gemini.data.agent.dsh.DshPreferences(application)
     val dshBackend = com.example.gemini.data.agent.dsh.DshChatBackend(application, viewModelScope, store, dshPrefs)
 
-    /** Agent of the conversation on screen; chat actions go to that agent's backend. */
-    val activeAgent: StateFlow<AgentKind> = store.currentConversation
-        .map { it?.agent ?: AgentKind.AGY }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, AgentKind.AGY)
+    /**
+     * Agent of the conversation on screen; chat actions go to that agent's backend.
+     *
+     * With no conversation open it answers the agent picked on the start screen rather than Antigravity: the composer
+     * reads this to decide whether it can send, and it used to look at the hub — so picking DeepSeek on the start
+     * screen left a composer that refused to type until a chat had been created first.
+     */
+    val activeAgent: StateFlow<AgentKind> = combine(store.currentConversation, claudePrefs.newChatAgent) { conv, picked ->
+        conv?.agent ?: picked
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, AgentKind.AGY)
 
     private val isClaudeActive get() = store.currentConversation.value?.agent == AgentKind.CLAUDE
     private val isHermesActive get() = store.currentConversation.value?.agent == AgentKind.HERMES
@@ -234,8 +240,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun setNewChatAgent(agent: AgentKind) {
         claudePrefs.setNewChatAgent(agent)
         val cur = store.currentConversation.value ?: return
-        val isFreshChat = cur.title == "New Chat" && messages.value.isEmpty()
-        if (isFreshChat && cur.agent != agent) startNewChat()
+        // A conversation with nothing in it is the start screen with a chat attached, whatever its title ended up
+        // being; picking another agent there has to switch the chat, not just the default for the next one.
+        if (messages.value.isEmpty() && cur.agent != agent) startNewChat(agent)
     }
 
     // ==================== ANTIGRAVITY (AGY) — delegated to data/agent/agy ====================
