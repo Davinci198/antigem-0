@@ -269,19 +269,24 @@ class ProotDshHost(
             homePatch.writeText(homeNext + "\n")
         }
 
-        if (custom == null && route.provider.isNotBlank() && route.provider !in declaredProviders(home)) {
-            val sdkPatch = File(home, "profiles/sdk/cordis.patch.yml")
-            sdkPatch.parentFile?.mkdirs()
-            val sdkRaw = if (sdkPatch.isFile) sdkPatch.readText() else ""
-            val sdkCurrent = DshProfilePatch.normalizePatch(sdkRaw)
-            val next = DshProfilePatch.ensurePreset(
+        // A preset route (nvidia, openrouter, ...) gets its adapter and endpoint from DSH's own table but still has to
+        // be declared: the sdk profile is created empty, and while it stays empty every turn dies with 'no adapter
+        // registered for provider "nvidia"'. The file is normalised even when the provider is already declared, so a
+        // patch an earlier build left as '[]' followed by an entry stops breaking the harness boot.
+        val sdkPatch = File(home, "profiles/sdk/cordis.patch.yml")
+        sdkPatch.parentFile?.mkdirs()
+        val sdkRaw = if (sdkPatch.isFile) sdkPatch.readText() else ""
+        val sdkCurrent = DshProfilePatch.normalizePatch(sdkRaw)
+        val next = when {
+            route.provider.isBlank() || route.provider in declaredProviders(home) -> sdkCurrent
+            else -> DshProfilePatch.ensurePreset(
                 existing = sdkCurrent,
                 provider = route.provider,
                 apiKeyEnv = presetKeyEnv(route.provider),
                 model = route.model,
             )
-            if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
         }
+        if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
     }
 
     /** Home-patch entry for a custom OpenAI-compatible endpoint; a preset route needs none (see above). */
