@@ -43,7 +43,7 @@ val ClaudeDarkSurface: Color get() = paletteOrNull()?.surface ?: DefaultDarkSurf
 val ClaudeUserBubbleDark: Color get() = paletteOrNull()?.surfaceVariant ?: DefaultUserBubbleDark
 val ClaudeThinkingDark: Color get() = paletteOrNull()?.surface?.mix(Color.White, 0.03f) ?: DefaultThinkingDark
 
-val CodeBlockBgDark: Color get() = paletteOrNull()?.surface?.mix(Color.Black, 0.15f) ?: DefaultCodeBlockBgDark
+val CodeBlockBgDark: Color get() = paletteOrNull()?.codeBg ?: DefaultCodeBlockBgDark
 val TextPrimaryLight: Color = Color(0xFF1C1917)
 val TextSecondaryLight: Color = Color(0xFF78716C)
 val TextPrimaryDark: Color get() = paletteOrNull()?.darkColors?.onSurface ?: Color(0xFFF5F5F4)

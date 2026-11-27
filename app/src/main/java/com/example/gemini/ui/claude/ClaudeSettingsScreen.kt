@@ -554,6 +554,7 @@ private fun McpPage(deps: ClaudeSettingsDeps) {
         ClaudeMcpPreset("Terminal", "Run commands in the terminal", Icons.Outlined.Terminal, QuotaGreen, local("terminal_mcp", "/terminal")),
         ClaudeMcpPreset("Android", "Tap, type & read this phone", Icons.Outlined.PhoneAndroid, Color(0xFF14B8A6), local(bridge.ANDROID_AUTOMATION_MCP_NAME, "/android")),
         ClaudeMcpPreset("Notes & To-dos", "Read & edit your notes", Icons.Outlined.EditNote, Color(0xFFF59E0B), local(bridge.NOTES_MCP_NAME, "/notes")),
+        ClaudeMcpPreset("Themes", "Change the app's colours", Icons.Outlined.Palette, Color(0xFF7C3AED), local(bridge.THEME_MCP_NAME, "/theme")),
         ClaudeMcpPreset("Stitch", "Google Stitch UI design · API key", Icons.Outlined.Palette, Color(0xFFEC4899),
             ClaudeMcpAddRequest(name = "stitch", transport = "http", url = "https://stitch.googleapis.com/mcp", headers = mapOf("X-Goog-Api-Key" to "")))
     )

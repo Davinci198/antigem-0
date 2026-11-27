@@ -34,7 +34,8 @@ class AndroidLocalBridgeServer private constructor() {
         GOOGLE_FLOW("google_flow_mcp"),
         EXTENSION_DEVELOPER("custom_plugin_developer_mcp"),
         ANDROID("android_automation_mcp"),
-        NOTES("notes_mcp")
+        NOTES("notes_mcp"),
+        THEME("theme_mcp")
     }
 
     companion object {
@@ -43,6 +44,7 @@ class AndroidLocalBridgeServer private constructor() {
         const val LEGACY_DEVELOPER_MCP_NAME = "webview_extension_developer_mcp"
         const val ANDROID_AUTOMATION_MCP_NAME = "android_automation_mcp"
         const val NOTES_MCP_NAME = "notes_mcp"
+        const val THEME_MCP_NAME = "theme_mcp"
         fun isDeveloperMcpName(name: String) = name == DEVELOPER_MCP_NAME || name == LEGACY_DEVELOPER_MCP_NAME
         private const val TAG = "AndroidBridgeServer"
         private const val MAX_HEADER_BYTES = 64 * 1024
@@ -256,6 +258,7 @@ class AndroidLocalBridgeServer private constructor() {
                     path == "/google_flow" -> handleMcpHttp(McpEndpoint.GOOGLE_FLOW, method, body, out)
                     path == "/android" -> handleMcpHttp(McpEndpoint.ANDROID, method, body, out)
                     path == "/notes" -> handleMcpHttp(McpEndpoint.NOTES, method, body, out)
+                    path == "/theme" -> handleMcpHttp(McpEndpoint.THEME, method, body, out)
                     path == "/api/health" -> {
                         val res = JSONObject().apply {
                             put("status", "ok")
@@ -284,7 +287,7 @@ class AndroidLocalBridgeServer private constructor() {
             if (out != null && req != null && !out.used) {
                 runCatching {
                     val path = req.rawPath.substringBefore("?")
-                    if (path == "/browser" || path == "/terminal" || path == "/google_flow" || path == "/extension_developer" || path == "/android" || path == "/notes") {
+                    if (path == "/browser" || path == "/terminal" || path == "/google_flow" || path == "/extension_developer" || path == "/android" || path == "/notes" || path == "/theme") {
                         val id = runCatching { JSONObject(req.body).opt("id") }.getOrNull()
                         sendResponse(out, 200, "application/json", jsonRpcError(id, -32603, "Internal error: ${t.message ?: t.javaClass.simpleName}").toString())
                     } else {
@@ -417,6 +420,7 @@ class AndroidLocalBridgeServer private constructor() {
                     put("protocolVersion", "2024-11-05")
                     if (endpoint == McpEndpoint.ANDROID) put("instructions", com.example.gemini.data.automation.AndroidAutomation.INSTRUCTIONS)
                     if (endpoint == McpEndpoint.NOTES) put("instructions", com.example.gemini.data.notes.NotesMcp.INSTRUCTIONS)
+                    if (endpoint == McpEndpoint.THEME) put("instructions", com.example.gemini.theme.ThemeMcp.INSTRUCTIONS)
                     if (endpoint == McpEndpoint.EXTENSION_DEVELOPER) put("instructions", "Start with webview_extension_docs. Read developer-mcp.md and the required API references, create a draft, write files, install or update, discover tools with webview_extension_test, and inspect logs to fix failures. No app source or manual ZIP handling is needed.")
                     put("capabilities", JSONObject().apply {
                         put("tools", JSONObject())
@@ -467,6 +471,7 @@ class AndroidLocalBridgeServer private constructor() {
         if (endpoint == McpEndpoint.EXTENSION_DEVELOPER) return com.example.gemini.ui.browser.WebViewExtensionDeveloper.tools(appContext!!)
         if (endpoint == McpEndpoint.ANDROID) return com.example.gemini.data.automation.AndroidAutomation.tools()
         if (endpoint == McpEndpoint.NOTES) return com.example.gemini.data.notes.NotesMcp.tools()
+        if (endpoint == McpEndpoint.THEME) return com.example.gemini.theme.ThemeMcp.tools()
         val tools = JSONArray()
         val browserEnabled = endpoint == McpEndpoint.BROWSER
         val terminalEnabled = endpoint == McpEndpoint.TERMINAL
@@ -795,6 +800,7 @@ class AndroidLocalBridgeServer private constructor() {
         if (toolName.startsWith("webview_extension_")) return com.example.gemini.ui.browser.WebViewExtensionDeveloper.call(appContext!!, toolName, args)
         if (toolName.startsWith("android_")) return com.example.gemini.data.automation.AndroidAutomation.call(appContext!!, toolName, args)
         if (toolName.startsWith("notes_")) return com.example.gemini.data.notes.NotesMcp.call(appContext!!, toolName, args)
+        if (toolName.startsWith("theme_")) return com.example.gemini.theme.ThemeMcp.call(appContext!!, toolName, args)
 
         if (toolName.startsWith("flow_")) {
             return com.example.gemini.ui.browser.BrowserExtensionManager.instance.callTool("google-flow", toolName, args)

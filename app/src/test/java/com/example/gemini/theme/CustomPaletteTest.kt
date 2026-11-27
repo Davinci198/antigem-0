@@ -90,12 +90,51 @@ class CustomPaletteTest {
     }
 
     @Test
-    fun `every preset has an accent that reads on its background`() {        colorPresets.forEach { preset ->
+    fun `every preset has an accent that reads on its background`() {
+        colorPresets.forEach { preset ->
             val scheme = customPalette(preset.accent, preset.background).darkColors
             assertTrue(
                 "${preset.label}: accent reads on its background",
                 contrastRatio(scheme.primary, scheme.background) >= 4.5f
             )
         }
+    }
+
+    @Test
+    fun `a token override wins over the derived colour and leaves the rest alone`() {
+        val accent = Color(0xFFD97706)
+        val background = Color(0xFF181816)
+        val border = Color(0xFF334455)
+        val plain = customPalette(accent, background)
+        val edited = customPalette(accent, background, overrides = mapOf(ThemeToken.OUTLINE to border))
+        assertEquals(border, edited.outline)
+        assertEquals(plain.surface, edited.surface)
+        assertTrue("the derived border was different", plain.outline != border)
+    }
+
+    @Test
+    fun `code blocks get their own surface, derived from the card unless set`() {
+        val plain = customPalette(Color(0xFFD97706), Color(0xFF181816))
+        assertTrue("derived code background is darker than the card", plain.codeBg.relativeLuminance() < plain.surface.relativeLuminance())
+        val chosen = Color(0xFF101010)
+        val edited = customPalette(Color(0xFFD97706), Color(0xFF181816), overrides = mapOf(ThemeToken.CODE_BG to chosen))
+        assertEquals(chosen, edited.codeBg)
+    }
+
+    @Test
+    fun `the shipped list is twenty-six themes, eight of them light`() {
+        assertEquals(26, colorPresets.size)
+        assertEquals(8, lightPresets.size)
+        assertEquals(18, darkPresets.size)
+        assertEquals(lightPresets.size + darkPresets.size, colorPresets.size)
+        assertEquals("Amber Night", defaultPreset.label)
+        assertTrue("labels are unique", colorPresets.map { it.label }.toSet().size == colorPresets.size)
+    }
+
+    @Test
+    fun `a preset can be found by name, in any case`() {
+        assertEquals("Nord", presetNamed("nord")?.label)
+        assertEquals("Solarized Light", presetNamed("  solarized light ")?.label)
+        assertEquals(null, presetNamed("No Such Theme"))
     }
 }
