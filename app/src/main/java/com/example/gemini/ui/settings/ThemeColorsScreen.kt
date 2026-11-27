@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -85,8 +86,11 @@ fun ThemeColorsScreen() {
         }
 
         Text("Presets", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            colorPresets.take(6).forEach { preset ->
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            colorPresets.forEach { preset ->
                 val selected = preset.accent == accent && preset.background == background
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
@@ -111,6 +115,7 @@ fun ThemeColorsScreen() {
         }
 
         Text("Accent", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+        SliderLabel("Hue  ${accentHsv.h.toInt()}°")
         Slider(
             value = accentHsv.h,
             onValueChange = {
@@ -120,6 +125,7 @@ fun ThemeColorsScreen() {
             },
             valueRange = 0f..360f
         )
+        SliderLabel("Brightness  ${(accentHsv.v * 100).toInt()}%")
         Slider(
             value = accentHsv.v,
             onValueChange = {
@@ -131,24 +137,39 @@ fun ThemeColorsScreen() {
         )
 
         Text("Background", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+        SliderLabel("Hue  ${backgroundHsv.h.toInt()}°")
         Slider(
             value = backgroundHsv.h,
-            onValueChange = {
-                background = hsvToColor(it, 0.08f, backgroundHsv.v.coerceIn(0.03f, 0.20f))
+            onValueChange = { hue ->
+                // A grey background has no hue to move: keep a little colour so the slider does something visible.
+                val sat = backgroundHsv.s.coerceAtLeast(0.10f)
+                background = hsvToColor(hue, sat, backgroundHsv.v.coerceAtLeast(0.04f))
                 enabled = true
                 ThemePrefs.setColors(accent, background)
             },
             valueRange = 0f..360f
         )
+        SliderLabel("Tint  ${(backgroundHsv.s * 100).toInt()}%")
         Slider(
-            value = backgroundHsv.v,
-            onValueChange = {
-                // A background that is too bright makes every other colour unreadable, so the range is narrow.
-                background = hsvToColor(backgroundHsv.h, 0.08f, it.coerceIn(0.03f, 0.20f))
+            value = backgroundHsv.s,
+            onValueChange = { sat ->
+                // Past half the surface turns into the colour itself and the app stops looking like a background.
+                background = hsvToColor(backgroundHsv.h, sat.coerceIn(0f, 0.55f), backgroundHsv.v.coerceAtLeast(0.04f))
                 enabled = true
                 ThemePrefs.setColors(accent, background)
             },
-            valueRange = 0.03f..0.20f
+            valueRange = 0f..0.55f
+        )
+        SliderLabel("Brightness  ${(backgroundHsv.v * 100).toInt()}%")
+        Slider(
+            value = backgroundHsv.v,
+            onValueChange = { value ->
+                // The whole range is allowed: a light background flips the palette to dark text by itself.
+                background = hsvToColor(backgroundHsv.h, backgroundHsv.s.coerceIn(0f, 0.55f), value.coerceIn(0.02f, 1f))
+                enabled = true
+                ThemePrefs.setColors(accent, background)
+            },
+            valueRange = 0.02f..1f
         )
 
         Text("Preview", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
@@ -197,4 +218,14 @@ fun ThemeColorsScreen() {
 
         Spacer(Modifier.height(8.dp))
     }
+}
+
+/** A caption above a slider, so the numbers are readable instead of guessed from the thumb position. */
+@Composable
+private fun SliderLabel(text: String) {
+    Text(
+        text = text,
+        fontSize = 11.5.sp,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+    )
 }
