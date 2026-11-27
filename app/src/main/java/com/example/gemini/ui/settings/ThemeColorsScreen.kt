@@ -41,6 +41,8 @@ import com.example.gemini.theme.bestForeground
 import com.example.gemini.theme.colorPresets
 import com.example.gemini.theme.customPalette
 import com.example.gemini.theme.hsvToColor
+import com.example.gemini.theme.mix
+import com.example.gemini.theme.rotateHue
 import com.example.gemini.theme.toHsv
 
 /**
