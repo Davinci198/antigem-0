@@ -17,6 +17,55 @@ internal object DshProfilePatch {
     private const val ENTRY_NAME = "@deepseek-ai/dsh-llm-pi-ai"
 
     /**
+     * The patch entry that declares a provider DSH already knows: its adapter and endpoint come from the harness's own
+     * table, so the entry only needs the name, the variable holding the key and — for the model in use — a completion
+     * budget.
+     *
+     * [maxTokens] is not cosmetic: with it unset the harness reserves the model's whole context window for the
+     * completion (262144 of 262144 for `minimaxai/minimax-m3.1-flash`), which leaves no room for the conversation and
+     * makes compaction fail with "reserves ... leaving no message budget".
+     */
+    fun presetEntry(provider: String, apiKeyEnv: String, model: String? = null, maxTokens: Int = DEFAULT_MAX_TOKENS): String =
+        buildString {
+            appendLine("- id: $ENTRY_ID")
+            appendLine("  config:")
+            appendLine("    providers:")
+            appendLine("      $provider:")
+            appendLine("        apiKeyEnv: $apiKeyEnv")
+            if (!model.isNullOrBlank()) {
+                appendLine("        models:")
+                appendLine("          - id: ${yamlQuote(model)}")
+                appendLine("            maxTokens: $maxTokens")
+            }
+        }.trimEnd('\n')
+
+    /** A completion budget small enough to leave a conversation in a 262k window and large enough to be useful. */
+    const val DEFAULT_MAX_TOKENS = 8192
+
+    /**
+     * [existing] plus the entry for a preset provider — or [existing] untouched when it already declares that
+     * provider. Never returns a blank string for a non-blank input: blanking this file is how the declaration the
+     * previous turn wrote gets lost again.
+     */
+    fun ensurePreset(
+        existing: String,
+        provider: String,
+        apiKeyEnv: String,
+        model: String? = null,
+        maxTokens: Int = DEFAULT_MAX_TOKENS,
+    ): String {
+        if (provider.isBlank()) return existing
+        val declared = DshConfigParser.llmProviders(existing).map { it.id }.toSet()
+        if (provider in declared) return existing
+        val entry = presetEntry(provider, apiKeyEnv, model, maxTokens)
+        val body = existing.trim()
+        return if (body.isBlank() || body == "[]") entry else body + "\n" + entry
+    }
+
+    private fun yamlQuote(value: String): String =
+        if (value.matches(Regex("[A-Za-z0-9_./:@-]+"))) value else "'${value.replace("'", "''")}'"
+
+    /**
      * [existing] with every provider in [providers] that it does not declare yet.
      *
      * Returns [existing] untouched when there is nothing to add, so the caller can

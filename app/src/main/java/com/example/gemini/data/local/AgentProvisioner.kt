@@ -150,7 +150,9 @@ object AgentProvisioner {
         if (LocalEnvironmentManager.isTermuxPackage(appContext)) return
         if (!LocalEnvironmentManager.isUbuntuInstalled(appContext)) return
         if (!force && missingAgents(appContext).isEmpty()) return
-        if (autoAttempts >= MAX_AUTO_ATTEMPTS) return
+        // A forced run is the user (or a screen the user opened) asking for it: it must not be swallowed by the
+        // per-process cap, which exists only to stop a dead network from retrying on its own.
+        if (!force && autoAttempts >= MAX_AUTO_ATTEMPTS) return
         autoAttempts += 1
         scope.launch {
             try {
@@ -160,6 +162,40 @@ object AgentProvisioner {
             }
         }
     }
+
+    /**
+     * Installs only what the DeepSeek Harness needs: container libraries, Node and the harness itself.
+     *
+     * The full [provisionAll] also installs Hermes, which pulls apt and pip for several minutes — someone who just
+     * wants the harness back should not have to wait for that, and that long step is exactly where an interrupted
+     * install stopped last time.
+     */
+    fun installDshNow(context: Context, log: (String) -> Unit = {}) {
+        val appContext = context.applicationContext
+        if (LocalEnvironmentManager.isTermuxPackage(appContext)) return
+        if (!LocalEnvironmentManager.isUbuntuInstalled(appContext)) return
+        scope.launch {
+            runCatching {
+                provisionMutex.withLock {
+                    val downloads = guestFile(appContext, GUEST_DOWNLOAD_DIR).apply { ensureDirectory() }
+                    guestFile(appContext, GUEST_TMP_DIR).apply { ensureDirectory() }
+                    val result = installDsh(appContext, downloads, log)
+                    installDshFreePi(appContext, log)
+                    ensureMtop(appContext, log)
+                    log(
+                        "Agent tools: dsh " + if (result.installed) {
+                            "${result.version} ready (${result.detail})"
+                        } else {
+                            "NOT installed (${result.detail})"
+                        }
+                    )
+                }
+            }.onFailure { Log.w(TAG, "Requested DSH install failed: ${it.message}") }
+        }
+    }
+
+    /** True while [provisionAll] holds the lock, so a caller can avoid starting a second run. */
+    val isProvisioning: Boolean get() = provisionMutex.isLocked
 
     /**
      * Installs every missing agent. Blocking: call it from a coroutine work scope, never from the

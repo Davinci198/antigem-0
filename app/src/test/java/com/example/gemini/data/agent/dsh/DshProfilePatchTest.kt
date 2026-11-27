@@ -90,4 +90,34 @@ class DshProfilePatchTest {
         assertEquals("openai-responses", parsed.api)
         assertEquals(listOf("acme/chat-1"), parsed.models)
     }
+
+    @Test
+    fun `a preset provider is declared so the harness finds its adapter`() {
+        // The sdk profile starts empty; without this entry every turn dies with
+        // 'no adapter registered for provider "nvidia"'.
+        val entry = DshProfilePatch.presetEntry("nvidia", "NVIDIA_API_KEY", model = "minimaxai/minimax-m3.1-flash")
+        val declared = DshConfigParser.llmProviders("- id: llm-pi-ai\n  config:\n    providers:\n      nvidia:\n        apiKeyEnv: NVIDIA_API_KEY")
+        assertEquals(listOf("nvidia"), declared.map { it.id })
+        assertEquals("NVIDIA_API_KEY", declared.single().apiKeyEnv)
+        // Without a completion budget the harness reserves the whole context window and compaction fails.
+        assertTrue(entry.contains("maxTokens: ${DshProfilePatch.DEFAULT_MAX_TOKENS}"))
+    }
+
+    @Test
+    fun `an empty patch gains the preset entry, and a declared one is left alone`() {
+        val empty = DshProfilePatch.ensurePreset("[]\n", "nvidia", "NVIDIA_API_KEY", "minimaxai/minimax-m3.1-flash")
+        assertEquals(listOf("nvidia"), DshConfigParser.llmProviders(empty).map { it.id })
+        assertTrue(empty.contains("maxTokens: 8192"))
+
+        val onDisk = """
+            - id: llm-pi-ai
+              config:
+                providers:
+                  nvidia:
+                    apiKeyEnv: NVIDIA_API_KEY
+        """.trimIndent()
+        // Second start: the entry is already there, so the file must come back byte for byte.
+        assertEquals(onDisk, DshProfilePatch.ensurePreset(onDisk, "nvidia", "NVIDIA_API_KEY", "minimaxai/minimax-m3.1-flash"))
+        assertEquals("", DshProfilePatch.ensurePreset("", "", "NVIDIA_API_KEY"))
+    }
 }

@@ -159,6 +159,9 @@ object DshWebServer {
     private fun startLocked(context: Context, log: (String) -> Unit): DshWebServerInstance? {
         if (!available(context)) {
             log("[dsh-web] DSH payload or Node runtime is missing; web profile not started")
+            // The web page is the other way into the harness: opening it should also try to put the payload back
+            // instead of leaving the screen on "not installed" until the user finds the installer.
+            com.example.gemini.data.local.AgentProvisioner.installDshNow(context) { line -> log("[dsh-web] provision: $line") }
             return null
         }
         if (repairPatchFile(LocalEnvironmentManager.getUbuntuRootDir(context))) {

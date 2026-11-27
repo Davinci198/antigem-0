@@ -480,7 +480,23 @@ class DshChatBackend(
         var promote = false
         try {
             if (!host.available()) {
-                failTurn("DeepSeek Harness is not installed in the container yet. Open Settings → Agents to install it.")
+                // A data reset leaves the container in place but the payload gone, and the automatic provisioning
+                // cap stops it from retrying on its own. Start the install here, so opening the harness is enough
+                // to get it back instead of sending the user hunting for a button that does not exist.
+                val alreadyRunning = com.example.gemini.data.local.AgentProvisioner.isProvisioning
+                com.example.gemini.data.local.AgentProvisioner.installDshNow(application) { line ->
+                    android.util.Log.i("DshChatBackend", "provision: $line")
+                }
+                failTurn(
+                    if (alreadyRunning) {
+                        "DeepSeek Harness is still being installed in the container. Send your message again once it " +
+                            "finishes — a few minutes."
+                    } else {
+                        "DeepSeek Harness is not installed in the container yet, so I started installing it (Node plus " +
+                            "the harness, a few minutes). Send your message again when it finishes. The progress is in the " +
+                            "install log under Settings → Local tools."
+                    }
+                )
                 return
             }
             // A live process answers immediately; booting one under PRoot costs ~25 s of plugin load
@@ -713,9 +729,22 @@ class DshChatBackend(
 
     private fun failTurn(message: String) {
         Log.i(TAG, "failTurn: $message")
-        _conversationError.value = message
+        _conversationError.value = friendlyError(message)
         setMessages(_messages.value.map { if (it.isStreaming) it.copy(isStreaming = false) else it })
         saveMessages()
+    }
+
+    /**
+     * The harness reports failures from inside its own provider layer — "no API key for provider route
+     * 'deepseek-official'" after a data reset is the common one — and that sentence tells a user nothing they can
+     * act on. Anything recognisable gets a line that says what to do, with the original kept below it for bug reports.
+     */
+    private fun friendlyError(message: String): String = when {
+        message.contains("no API key", ignoreCase = true) ||
+            message.contains("credentials service", ignoreCase = true) ->
+            "DeepSeek Harness has no key for this model's provider. Add one in Settings → Providers (or pick another " +
+                "model from the pill above) and send the message again.\n\n$message"
+        else -> message
     }
 
     // ── message mutation ────────────────────────────────────────────────────

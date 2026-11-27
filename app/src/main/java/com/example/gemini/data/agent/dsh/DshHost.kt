@@ -251,6 +251,8 @@ class ProotDshHost(
         // A release that reads nothing else from this file still requires a
         // top-level array: an empty file parses as null and dsh aborts at boot
         // with "must be a top-level YAML array of loader patch entries".
+        val patchFile = File(home, "cordis.patch.yml")
+        val current = if (patchFile.isFile) patchFile.readText() else ""
         val patch = buildString {
             custom?.let {
                 appendLine("- id: llm-pi-ai")
@@ -263,9 +265,49 @@ class ProotDshHost(
                 appendLine("        models:")
                 appendLine("          - id: ${yamlQuote(route.model)}")
             }
-        }.ifBlank { "[]\n" }
-        File(home, "cordis.patch.yml").writeText(patch)
+        }
+        // A preset route (nvidia, openrouter, ...) gets its adapter and endpoint from DSH's own table but still has to
+        // be declared: the sdk profile is created empty, and while it stays empty every turn dies with 'no adapter
+        // registered for provider "nvidia"'. The web profile is where the harness writes its own choices, and a
+        // session booted with --profile sdk never reads it, so it is not consulted here.
+        val next = when {
+            custom != null -> patch
+            route.provider.isBlank() -> patch
+            route.provider in declaredProviders(home) -> current
+            else -> {
+                val declaration = DshProfilePatch.ensurePreset(
+                    existing = current,
+                    provider = route.provider,
+                    apiKeyEnv = presetKeyEnv(route.provider),
+                    model = route.model,
+                )
+                if (declaration.isBlank()) current else declaration
+            }
+        }
+        when {
+            // Nothing changed and the file already says what it must: leave it alone.
+            next == current && current.isNotBlank() -> Unit
+            next.isBlank() -> {
+                if (!patchFile.exists() || current.isBlank()) patchFile.writeText("[]\n")
+            }
+            else -> patchFile.writeText(if (next.endsWith("\n")) next else next + "\n")
+        }
     }
+
+    /**
+     * Providers declared to the profile the chat actually boots (sdk), plus the home-level patch it inherits.
+     *
+     * The web profile is deliberately not consulted: the harness writes its own settings there, and a provider that
+     * exists only in `profiles/web` is invisible to a session started with `--profile sdk`.
+     */
+    private fun declaredProviders(home: File): Set<String> = runCatching {
+        listOf("cordis.patch.yml", "profiles/sdk/cordis.patch.yml")
+            .map { File(home, it) }
+            .filter { it.isFile }
+            .flatMap { DshConfigParser.llmProviders(it.readText()) }
+            .map { it.id }
+            .toSet()
+    }.getOrDefault(emptySet())
 
     private fun yamlQuote(value: String): String =
         if (value.matches(Regex("[A-Za-z0-9_./:@-]+"))) value else "'${value.replace("'", "''")}'"
@@ -279,6 +321,9 @@ class ProotDshHost(
         /** Provider key variable DSH's custom route reads (see [DshModelRoute]). */
         fun keyEnvFor(name: String): String =
             name.uppercase().replace(Regex("[^A-Z0-9]"), "_") + "_API_KEY"
+
+        /** The variable a preset reads: nvidia is `NVIDIA_API_KEY`, deepseek-official is `DEEPSEEK_API_KEY`. */
+        fun presetKeyEnv(name: String): String = PRESET_KEY_ENV[name] ?: keyEnvFor(name)
 
         /**
          * Env vars DSH's own presets read, so a key can be handed to a route the
