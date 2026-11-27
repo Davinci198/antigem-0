@@ -148,6 +148,7 @@ fun OpenCodeMcpPage(backend: OpenCodeChatBackend) {
         OpenCodeMcpPreset("Terminal", "Run commands in the terminal", Icons.Outlined.Terminal, QuotaGreen, local("terminal_mcp", "/terminal")),
         OpenCodeMcpPreset("Android", "Tap, type & read this phone", Icons.Outlined.PhoneAndroid, com.example.gemini.theme.AppColors.accentTeal, local(bridge.ANDROID_AUTOMATION_MCP_NAME, "/android")),
         OpenCodeMcpPreset("Notes & To-dos", "Read & edit your notes", Icons.Outlined.EditNote, com.example.gemini.theme.AppColors.warning, local(bridge.NOTES_MCP_NAME, "/notes")),
+        OpenCodeMcpPreset("Themes", "Change the app's colours", Icons.Outlined.Palette, Color(0xFF7C3AED), local(bridge.THEME_MCP_NAME, "/theme")),
         OpenCodeMcpPreset("Stitch", "Google Stitch UI design · API key", Icons.Outlined.Palette, com.example.gemini.theme.AppColors.accentPink,
             McpDraft(name = "stitch", url = "https://stitch.googleapis.com/mcp", headers = "X-Goog-Api-Key: ")),
         OpenCodeMcpPreset("Custom server", "Any remote (HTTP) or local (command) server", Icons.Outlined.Add, OpenCodeAccent, McpDraft())

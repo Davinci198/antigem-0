@@ -94,7 +94,7 @@ fun Color.darkenedFor(against: Color, min: Float = 4.5f): Color {
     return candidate
 }
 
-/** A palette built from the two colours the user picked: the schemes plus the scalars the app paints with. */
+/** A palette built from the colours the user picked: the schemes plus the scalars the app paints with. */
 data class CustomPalette(
     val accent: Color,
     /** The second colour: gradient ends, the second accent, anything that must not be the accent itself. */
@@ -104,9 +104,44 @@ data class CustomPalette(
     val surfaceVariant: Color,
     val outline: Color,
     val muted: Color,
+    /** Code blocks and the terminal-ish surfaces. */
+    val codeBg: Color,
     val darkColors: ColorScheme,
     val lightColors: ColorScheme,
 )
+
+/**
+ * The colours a user (or a model through theme_mcp) can set on their own, over the derived palette.
+ *
+ * Keys are stable: they are also what `theme_tokens` exposes, so a choice saved by one build keeps working in the
+ * next one. Anything not present is derived as usual.
+ */
+object ThemeToken {
+    const val ACCENT = "accent"
+    const val SECOND = "second"
+    const val BACKGROUND = "background"
+    const val SURFACE = "surface"
+    const val SURFACE_VARIANT = "surface_variant"
+    const val OUTLINE = "outline"
+    const val MUTED = "muted"
+    const val CODE_BG = "code_bg"
+
+    /** Every overridable token, in the order the editor shows them. */
+    val keys = listOf(ACCENT, SECOND, BACKGROUND, SURFACE, SURFACE_VARIANT, OUTLINE, MUTED, CODE_BG)
+
+    /** What each token paints, for the editor and for `theme_tokens`. */
+    fun about(key: String): String = when (key) {
+        ACCENT -> "Buttons, selected tabs, links, the send button"
+        SECOND -> "Gradient ends and the second accent"
+        BACKGROUND -> "The screen behind everything"
+        SURFACE -> "Cards, sheets, the composer, top bars"
+        SURFACE_VARIANT -> "Chips, inputs, the user's chat bubble"
+        OUTLINE -> "Borders, dividers, input outlines"
+        MUTED -> "Secondary text: captions, hints, timestamps"
+        CODE_BG -> "Code blocks and monospace surfaces"
+        else -> ""
+    }
+}
 
 /**
  * The dark scheme walks the background toward white (toward black when the user picked a light background), the
@@ -115,30 +150,44 @@ data class CustomPalette(
  *
  * [secondAccent] is optional: when it is null the second colour is the accent rotated 30°, which keeps a theme
  * coherent without asking anything; when the user picked one, that exact colour is used instead.
+ *
+ * [overrides] can replace any single token ([ThemeToken]) after the derivation, so a user who wants this exact
+ * border colour gets it without having to bend the two colour inputs to reach it by accident.
  */
-fun customPalette(accent: Color, background: Color, secondAccent: Color? = null): CustomPalette {
+fun customPalette(
+    accent: Color,
+    background: Color,
+    secondAccent: Color? = null,
+    overrides: Map<String, Color> = emptyMap(),
+): CustomPalette {
     val lightBackground = background.relativeLuminance() > 0.32f
     val onDark = if (lightBackground) Color(0xFF12100F) else Color(0xFFF2F4F3)
     val liftDirection = if (lightBackground) Color.Black else Color.White
 
     fun lift(amount: Float): Color = background.mix(liftDirection, amount)
-    fun surfaceOf(): Color = lift(if (lightBackground) 0.06f else 0.04f)
-    fun variantOf(): Color = lift(if (lightBackground) 0.10f else 0.08f)
-    fun mutedOf(): Color = lift(if (lightBackground) 0.30f else 0.55f)
 
-    val darkAccent = accent.darkenedFor(onDark)
-    val darkSecondary = (secondAccent ?: darkAccent.rotateHue(30f)).darkenedFor(onDark)
-    val lightAccent = accent.darkenedFor(Color.White)
-    val lightSecondary = (secondAccent ?: lightAccent.rotateHue(30f)).darkenedFor(Color.White)
+    val darkAccent = (overrides[ThemeToken.ACCENT] ?: accent).darkenedFor(onDark)
+    val secondSource = overrides[ThemeToken.SECOND] ?: secondAccent
+    val darkSecondary = (secondSource ?: darkAccent.rotateHue(30f)).darkenedFor(onDark)
+    val lightAccent = (overrides[ThemeToken.ACCENT] ?: accent).darkenedFor(Color.White)
+    val lightSecondary = (secondSource ?: lightAccent.rotateHue(30f)).darkenedFor(Color.White)
+
+    val surface = overrides[ThemeToken.SURFACE] ?: lift(if (lightBackground) 0.06f else 0.04f)
+    val surfaceVariant = overrides[ThemeToken.SURFACE_VARIANT] ?: lift(if (lightBackground) 0.10f else 0.08f)
+    val outline = overrides[ThemeToken.OUTLINE] ?: lift(0.16f)
+    // On a light background 30% toward black is still too pale for secondary text (2.1:1); 45% clears 3:1.
+    val muted = overrides[ThemeToken.MUTED] ?: lift(if (lightBackground) 0.45f else 0.55f)
+    val codeBg = overrides[ThemeToken.CODE_BG] ?: surface.mix(Color.Black, 0.15f)
 
     return CustomPalette(
         accent = darkAccent,
-        accentSoft = secondAccent?.darkenedFor(onDark) ?: darkAccent.rotateHue(-30f),
-        background = background,
-        surface = surfaceOf(),
-        surfaceVariant = variantOf(),
-        outline = lift(0.16f),
-        muted = mutedOf(),
+        accentSoft = darkSecondary,
+        background = overrides[ThemeToken.BACKGROUND] ?: background,
+        surface = surface,
+        surfaceVariant = surfaceVariant,
+        outline = outline,
+        muted = muted,
+        codeBg = codeBg,
         darkColors = darkColorScheme(
             primary = darkAccent,
             onPrimary = darkAccent.bestForeground(),
@@ -148,14 +197,14 @@ fun customPalette(accent: Color, background: Color, secondAccent: Color? = null)
             onSecondary = darkSecondary.bestForeground(),
             secondaryContainer = darkSecondary.mix(background, 0.80f),
             onSecondaryContainer = darkSecondary.mix(onDark, 0.55f),
-            background = background,
+            background = overrides[ThemeToken.BACKGROUND] ?: background,
             onBackground = onDark,
-            surface = surfaceOf(),
+            surface = surface,
             onSurface = onDark,
-            surfaceVariant = variantOf(),
-            onSurfaceVariant = mutedOf(),
-            outline = lift(0.16f),
-            outlineVariant = lift(0.12f),
+            surfaceVariant = surfaceVariant,
+            onSurfaceVariant = muted,
+            outline = outline,
+            outlineVariant = outline.mix(background, 0.35f),
             surfaceTint = Color.Transparent,
         ),
         lightColors = lightColorScheme(
@@ -169,26 +218,14 @@ fun customPalette(accent: Color, background: Color, secondAccent: Color? = null)
             onSecondaryContainer = lightSecondary.mix(Color.Black, 0.55f),
             background = background.mix(Color.White, 0.92f),
             onBackground = background.mix(Color.Black, 0.80f),
-            surface = Color.White,
+            surface = surface.mix(Color.White, 0.06f),
             onSurface = background.mix(Color.Black, 0.80f),
-            surfaceVariant = background.mix(Color.White, 0.85f),
-            onSurfaceVariant = background.mix(Color.Black, 0.45f),
-            outline = background.mix(Color.White, 0.55f),
-            outlineVariant = background.mix(Color.White, 0.75f),
+            surfaceVariant = surfaceVariant.mix(Color.White, 0.55f),
+            onSurfaceVariant = muted.mix(Color.Black, 0.35f),
+            outline = outline.mix(Color.White, 0.30f),
+            outlineVariant = outline.mix(Color.White, 0.60f),
             surfaceTint = Color.Transparent,
         ),
     )
 }
 
-/** Starting points offered as swatches, so nobody has to drag a slider to get a usable theme. */
-data class ColorPreset(val label: String, val accent: Color, val background: Color)
-
-val colorPresets: List<ColorPreset> = listOf(
-    ColorPreset("Amber", Color(0xFFD97706), Color(0xFF181816)),
-    ColorPreset("Violet", Color(0xFF7C5CFC), Color(0xFF0F0F10)),
-    ColorPreset("Teal", Color(0xFF14B8A6), Color(0xFF0D1414)),
-    ColorPreset("Rose", Color(0xFFF43F5E), Color(0xFF16100F)),
-    ColorPreset("Green", Color(0xFF22C55E), Color(0xFF0E1311)),
-    ColorPreset("Blue", Color(0xFF3B82F6), Color(0xFF0F1116)),
-    ColorPreset("Paper", Color(0xFF7C3AED), Color(0xFFFAF7F2)),
-)

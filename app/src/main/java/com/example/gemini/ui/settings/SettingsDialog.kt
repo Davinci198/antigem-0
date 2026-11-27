@@ -2954,6 +2954,7 @@ private fun McpSubScreen(
                 McpPreset("Android", "Tap, type & read this phone", Icons.Outlined.PhoneAndroid, Color(0xFF14B8A6),
                     localSpec(bridge.ANDROID_AUTOMATION_MCP_NAME, "/android")),
                 McpPreset("Notes & To-dos", "Read & edit your notes", Icons.Outlined.EditNote, Color(0xFFF59E0B), localSpec(bridge.NOTES_MCP_NAME, "/notes")),
+                McpPreset("Themes", "Change the app\u0027s colours", Icons.Outlined.Palette, Color(0xFF7C3AED), localSpec(bridge.THEME_MCP_NAME, "/theme")),
                 McpPreset("Stitch", "Google Stitch UI design · API key", Icons.Outlined.Palette, Color(0xFFEC4899),
                     com.example.gemini.domain.model.McpServerSpec(serverName = "stitch", serverUrl = "https://stitch.googleapis.com/mcp", headers = mapOf("X-Goog-Api-Key" to "")))
             )
