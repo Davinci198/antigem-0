@@ -1,11 +1,15 @@
 {
-  "version_code": 123,
-  "version_name": "1.1.2",
+  "version_code": 124,
+  "version_name": "1.2.0",
   "min_supported_version_code": 1,
   "changelog": [
-    "Every release now ships the standard com.antigem APK next to the two com.termux builds; it used to be attached by hand",
-    "Stop the container stops everything the app runs in Ubuntu, including the setup script's own processes that kept a core busy at 100%",
-    "The bridge no longer restarts the container a second after you stopped it, and the harness page leaves it down until you open it again"
+    "Themes: 26 of them (Amber Night, Discord, Nord, Dracula, Solarized, Midnight OLED, Sakura, Mint and more), eight of them light, each one applied in a tap",
+    "Settings → Appearance → Accent & background is a real editor: a colour picker with a saturation square, a hue strip and a hex field for the accent, the background and a second colour of your own",
+    "Fine tuning: any single surface (cards, chips, borders, secondary text, code blocks) can be set by hand, with a plain warning when the contrast drops below what text needs",
+    "The agents can style the app too: a new theme_mcp lets a model list, apply or build a theme and read back the readability of what it made",
+    "Every chat now starts in its own workspace under /root/chats/<id>, so one conversation's scratch files no longer land in the next one's",
+    "Hermes gains a plugin and skill marketplace: browse, install and remove plugins from Settings → Hermes → Plugins",
+    "Secondary text on a light background went from 2.1:1 to a readable 4.5:1 across all the light themes"
   ],
   "is_critical": false
 }
