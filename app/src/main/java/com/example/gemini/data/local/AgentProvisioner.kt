@@ -164,20 +164,33 @@ object AgentProvisioner {
     }
 
     /**
-     * Installs whatever is missing, on demand, ignoring the automatic-attempt cap.
+     * Installs only what the DeepSeek Harness needs: container libraries, Node and the harness itself.
      *
-     * This is what a screen calls when it finds an agent's payload absent — after a data reset, or because an
-     * earlier run was interrupted half way. The cap only ever applied to unattended retries.
+     * The full [provisionAll] also installs Hermes, which pulls apt and pip for several minutes — someone who just
+     * wants the harness back should not have to wait for that, and that long step is exactly where an interrupted
+     * install stopped last time.
      */
-    fun installNow(context: Context, log: (String) -> Unit = {}) {
+    fun installDshNow(context: Context, log: (String) -> Unit = {}) {
         val appContext = context.applicationContext
         if (LocalEnvironmentManager.isTermuxPackage(appContext)) return
         if (!LocalEnvironmentManager.isUbuntuInstalled(appContext)) return
-        if (missingAgents(appContext).isEmpty()) return
         scope.launch {
-            autoAttempts = 0
-            runCatching { provisionAll(appContext, log) }
-                .onFailure { Log.w(TAG, "Requested agent provisioning failed: ${it.message}") }
+            runCatching {
+                provisionMutex.withLock {
+                    val downloads = guestFile(appContext, GUEST_DOWNLOAD_DIR).apply { ensureDirectory() }
+                    guestFile(appContext, GUEST_TMP_DIR).apply { ensureDirectory() }
+                    val result = installDsh(appContext, downloads, log)
+                    installDshFreePi(appContext, log)
+                    ensureMtop(appContext, log)
+                    log(
+                        "Agent tools: dsh " + if (result.installed) {
+                            "${result.version} ready (${result.detail})"
+                        } else {
+                            "NOT installed (${result.detail})"
+                        }
+                    )
+                }
+            }.onFailure { Log.w(TAG, "Requested DSH install failed: ${it.message}") }
         }
     }
 

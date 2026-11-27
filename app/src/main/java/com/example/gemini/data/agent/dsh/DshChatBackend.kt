@@ -484,7 +484,7 @@ class DshChatBackend(
                 // cap stops it from retrying on its own. Start the install here, so opening the harness is enough
                 // to get it back instead of sending the user hunting for a button that does not exist.
                 val alreadyRunning = com.example.gemini.data.local.AgentProvisioner.isProvisioning
-                com.example.gemini.data.local.AgentProvisioner.installNow(application) { line ->
+                com.example.gemini.data.local.AgentProvisioner.installDshNow(application) { line ->
                     android.util.Log.i("DshChatBackend", "provision: $line")
                 }
                 failTurn(
