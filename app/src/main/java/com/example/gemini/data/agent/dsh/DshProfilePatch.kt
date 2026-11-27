@@ -58,8 +58,26 @@ internal object DshProfilePatch {
         val declared = DshConfigParser.llmProviders(existing).map { it.id }.toSet()
         if (provider in declared) return existing
         val entry = presetEntry(provider, apiKeyEnv, model, maxTokens)
-        val body = existing.trim()
-        return if (body.isBlank() || body == "[]") entry else body + "\n" + entry
+        val cleaned = normalizePatch(existing)
+        // The file DSH writes carries a comment header and an empty `[]` until something is added; appending below
+        // that `[]` would produce a file with a flow array and a block item, which is not YAML at all.
+        val body = cleaned.lines().filterNot { it.trimStart().startsWith("#") }.joinToString("\n").trim()
+        val header = cleaned.lines().filter { it.trimStart().startsWith("#") }.joinToString("\n")
+        return when {
+            body.isBlank() || body == "[]" -> listOf(header, entry).filter { it.isNotBlank() }.joinToString("\n")
+            else -> cleaned.trimEnd() + "\n" + entry
+        }
+    }
+
+    /**
+     * Drops a lone `[]` placeholder that sits above real entries.
+     *
+     * An earlier build wrote the placeholder and then appended the entry under it, and `[]` followed by a block
+     * sequence item does not parse. A file whose only content is the placeholder is left alone.
+     */
+    fun normalizePatch(existing: String): String {
+        if (existing.lines().none { it.trimStart().startsWith("- id:") }) return existing
+        return existing.lines().filterNot { it.trim() == "[]" }.joinToString("\n")
     }
 
     private fun yamlQuote(value: String): String =
