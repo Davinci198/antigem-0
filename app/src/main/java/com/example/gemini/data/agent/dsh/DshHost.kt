@@ -272,14 +272,15 @@ class ProotDshHost(
         if (custom == null && route.provider.isNotBlank() && route.provider !in declaredProviders(home)) {
             val sdkPatch = File(home, "profiles/sdk/cordis.patch.yml")
             sdkPatch.parentFile?.mkdirs()
-            val sdkCurrent = if (sdkPatch.isFile) sdkPatch.readText() else ""
+            val sdkRaw = if (sdkPatch.isFile) sdkPatch.readText() else ""
+            val sdkCurrent = DshProfilePatch.normalizePatch(sdkRaw)
             val next = DshProfilePatch.ensurePreset(
                 existing = sdkCurrent,
                 provider = route.provider,
                 apiKeyEnv = presetKeyEnv(route.provider),
                 model = route.model,
             )
-            if (next != sdkCurrent) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
+            if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
         }
     }
 
