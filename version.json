@@ -1,15 +1,14 @@
 {
-  "version_code": 124,
-  "version_name": "1.2.0",
+  "version_code": 125,
+  "version_name": "1.2.1",
   "min_supported_version_code": 1,
   "changelog": [
-    "Themes: 26 of them (Amber Night, Discord, Nord, Dracula, Solarized, Midnight OLED, Sakura, Mint and more), eight of them light, each one applied in a tap",
-    "Settings → Appearance → Accent & background is a real editor: a colour picker with a saturation square, a hue strip and a hex field for the accent, the background and a second colour of your own",
-    "Fine tuning: any single surface (cards, chips, borders, secondary text, code blocks) can be set by hand, with a plain warning when the contrast drops below what text needs",
-    "The agents can style the app too: a new theme_mcp lets a model list, apply or build a theme and read back the readability of what it made",
-    "Every chat now starts in its own workspace under /root/chats/<id>, so one conversation's scratch files no longer land in the next one's",
-    "Hermes gains a plugin and skill marketplace: browse, install and remove plugins from Settings → Hermes → Plugins",
-    "Secondary text on a light background went from 2.1:1 to a readable 4.5:1 across all the light themes"
+    "DeepSeek Harness works again after clearing the app's data: opening the harness, or sending a message to it, starts the missing install instead of asking you to find a button that does not exist",
+    "The harness chat now declares the provider you picked in the app. After a reset the profile it boots was left empty, so every message died with 'no adapter registered for provider nvidia'",
+    "Adding a provider in the app is picked up on the next message, without restarting anything",
+    "The patch that declares the provider survives the next start instead of being wiped by it",
+    "A provider route with a very large context window (minimax through NVIDIA) no longer reserves the whole window for the completion and refuses to compact the conversation",
+    "A missing provider key now says to add one in Settings, with the harness's own message kept underneath"
   ],
   "is_critical": false
 }
