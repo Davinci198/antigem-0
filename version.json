@@ -1,11 +1,11 @@
 {
-  "version_code": 122,
-  "version_name": "1.1.1",
+  "version_code": 123,
+  "version_name": "1.1.2",
   "min_supported_version_code": 1,
   "changelog": [
-    "Stop the container now stops everything the app runs in Ubuntu, including the setup script's own processes that kept a core busy at 100% and drained the battery",
-    "The bridge no longer restarts the container a second after you stopped it, and the harness page leaves it down until you open it again",
-    "Every stop is written to the log with the process ids, so a process that refuses to die is visible"
+    "Every release now ships the standard com.antigem APK next to the two com.termux builds; it used to be attached by hand",
+    "Stop the container stops everything the app runs in Ubuntu, including the setup script's own processes that kept a core busy at 100%",
+    "The bridge no longer restarts the container a second after you stopped it, and the harness page leaves it down until you open it again"
   ],
   "is_critical": false
 }
