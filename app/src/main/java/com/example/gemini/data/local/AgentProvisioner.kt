@@ -150,7 +150,9 @@ object AgentProvisioner {
         if (LocalEnvironmentManager.isTermuxPackage(appContext)) return
         if (!LocalEnvironmentManager.isUbuntuInstalled(appContext)) return
         if (!force && missingAgents(appContext).isEmpty()) return
-        if (autoAttempts >= MAX_AUTO_ATTEMPTS) return
+        // A forced run is the user (or a screen the user opened) asking for it: it must not be swallowed by the
+        // per-process cap, which exists only to stop a dead network from retrying on its own.
+        if (!force && autoAttempts >= MAX_AUTO_ATTEMPTS) return
         autoAttempts += 1
         scope.launch {
             try {
@@ -160,6 +162,27 @@ object AgentProvisioner {
             }
         }
     }
+
+    /**
+     * Installs whatever is missing, on demand, ignoring the automatic-attempt cap.
+     *
+     * This is what a screen calls when it finds an agent's payload absent — after a data reset, or because an
+     * earlier run was interrupted half way. The cap only ever applied to unattended retries.
+     */
+    fun installNow(context: Context, log: (String) -> Unit = {}) {
+        val appContext = context.applicationContext
+        if (LocalEnvironmentManager.isTermuxPackage(appContext)) return
+        if (!LocalEnvironmentManager.isUbuntuInstalled(appContext)) return
+        if (missingAgents(appContext).isEmpty()) return
+        scope.launch {
+            autoAttempts = 0
+            runCatching { provisionAll(appContext, log) }
+                .onFailure { Log.w(TAG, "Requested agent provisioning failed: ${it.message}") }
+        }
+    }
+
+    /** True while [provisionAll] holds the lock, so a caller can avoid starting a second run. */
+    val isProvisioning: Boolean get() = provisionMutex.isLocked
 
     /**
      * Installs every missing agent. Blocking: call it from a coroutine work scope, never from the

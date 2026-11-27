@@ -21,4 +21,5 @@
     <string name="dsh_web_starting">Starting DeepSeek Harness…</string>
     <string name="dsh_web_stopped_message">DeepSeek Harness stopped before its page could load. If this keeps happening, allow unrestricted battery use for this app: Android suspends it in the background, which takes the harness down with it.</string>
     <string name="dsh_web_retry">Start it again</string>
+    <string name="dsh_web_missing_message">DeepSeek Harness is not installed in the container yet, so it cannot start. It is being installed now — that takes a few minutes; press Start it again when it finishes.</string>
 </resources>

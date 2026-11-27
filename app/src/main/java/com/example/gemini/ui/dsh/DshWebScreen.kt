@@ -331,13 +331,21 @@ fun DshWebScreen(
                 }
             }
             startFailed -> {
+                // Checked once per failure rather than per frame: it hits the filesystem.
+                val payloadMissing = remember(startFailed, restartRequested) {
+                    !DshWebServer.available(context)
+                }
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = stringResource(R.string.dsh_web_stopped_message),
+                            text = stringResource(
+                                // A missing payload is a different story from a harness that died: it needs an
+                                // install, not a restart, and the install is already running.
+                                if (payloadMissing) R.string.dsh_web_missing_message else R.string.dsh_web_stopped_message
+                            ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
