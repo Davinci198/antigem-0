@@ -1128,7 +1128,7 @@ PYEOF
         return agents.map { agent ->
             val target = guestFile(appContext, agent.guestPath)
             val marker = markerFile(appContext, agent)
-            val version = marker.readTextOrNull().takeIf { it.isNotBlank() }
+            val version = marker.readTextOrNull()?.takeIf { it.isNotBlank() }
             val installed = version != null && (target.isFile || target.canExecute())
             AgentStatus(agent.label, version, installed)
         }

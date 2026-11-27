@@ -18,7 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -177,7 +177,7 @@ fun AgentToolsEntryRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
                 Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
-            ) { Icon(Build, null, tint = MaterialTheme.colorScheme.primary) }
+            ) { Icon(Icons.Outlined.Build, null, tint = MaterialTheme.colorScheme.primary) }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text("Agent tools", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -187,7 +187,7 @@ fun AgentToolsEntryRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Icon(KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
