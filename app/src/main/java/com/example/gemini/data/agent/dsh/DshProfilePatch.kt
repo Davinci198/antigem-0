@@ -17,16 +17,33 @@ internal object DshProfilePatch {
     private const val ENTRY_NAME = "@deepseek-ai/dsh-llm-pi-ai"
 
     /**
-     * The patch entry that declares a provider DSH already knows: its adapter, endpoint and model list come from the
-     * harness's own table, so only the name and the variable holding the key are needed.
+     * The patch entry that declares a provider DSH already knows: its adapter and endpoint come from the harness's own
+     * table, so the entry only needs the name, the variable holding the key and — for the model in use — a completion
+     * budget.
+     *
+     * [maxTokens] is not cosmetic: with it unset the harness reserves the model's whole context window for the
+     * completion (262144 of 262144 for `minimaxai/minimax-m3.1-flash`), which leaves no room for the conversation and
+     * makes compaction fail with "reserves ... leaving no message budget".
      */
-    fun presetEntry(provider: String, apiKeyEnv: String): String = buildString {
-        appendLine("- id: $ENTRY_ID")
-        appendLine("  config:")
-        appendLine("    providers:")
-        appendLine("      $provider:")
-        appendLine("        apiKeyEnv: $apiKeyEnv")
-    }.trimEnd('\n')
+    fun presetEntry(provider: String, apiKeyEnv: String, model: String? = null, maxTokens: Int = DEFAULT_MAX_TOKENS): String =
+        buildString {
+            appendLine("- id: $ENTRY_ID")
+            appendLine("  config:")
+            appendLine("    providers:")
+            appendLine("      $provider:")
+            appendLine("        apiKeyEnv: $apiKeyEnv")
+            if (!model.isNullOrBlank()) {
+                appendLine("        models:")
+                appendLine("          - id: ${yamlQuote(model)}")
+                appendLine("            maxTokens: $maxTokens")
+            }
+        }.trimEnd('\n')
+
+    /** A completion budget small enough to leave a conversation in a 262k window and large enough to be useful. */
+    const val DEFAULT_MAX_TOKENS = 8192
+
+    private fun yamlQuote(value: String): String =
+        if (value.matches(Regex("[A-Za-z0-9_./:@-]+"))) value else "'${value.replace("'", "''")}'"
 
     /**
      * [existing] with every provider in [providers] that it does not declare yet.

@@ -268,7 +268,13 @@ class ProotDshHost(
             // stays empty every turn dies with 'no adapter registered for provider "nvidia"'. The web profile is
             // where the harness writes its own choices, so it counts as a declaration and is left alone.
             if (custom == null && route.provider.isNotBlank() && route.provider !in declaredProviders(home)) {
-                appendLine(DshProfilePatch.presetEntry(route.provider, presetKeyEnv(route.provider)))
+                appendLine(
+                    DshProfilePatch.presetEntry(
+                        provider = route.provider,
+                        apiKeyEnv = presetKeyEnv(route.provider),
+                        model = route.model,
+                    )
+                )
             }
         }.ifBlank { "[]\n" }
         File(home, "cordis.patch.yml").writeText(patch)

@@ -95,10 +95,11 @@ class DshProfilePatchTest {
     fun `a preset provider is declared so the harness finds its adapter`() {
         // The sdk profile starts empty; without this entry every turn dies with
         // 'no adapter registered for provider "nvidia"'.
-        val entry = DshProfilePatch.presetEntry("nvidia", "NVIDIA_API_KEY")
+        val entry = DshProfilePatch.presetEntry("nvidia", "NVIDIA_API_KEY", model = "minimaxai/minimax-m3.1-flash")
         val declared = DshConfigParser.llmProviders("- id: llm-pi-ai\n  config:\n    providers:\n      nvidia:\n        apiKeyEnv: NVIDIA_API_KEY")
         assertEquals(listOf("nvidia"), declared.map { it.id })
         assertEquals("NVIDIA_API_KEY", declared.single().apiKeyEnv)
-        assertEquals(false, entry.isBlank())
+        // Without a completion budget the harness reserves the whole context window and compaction fails.
+        assertTrue(entry.contains("maxTokens: ${DshProfilePatch.DEFAULT_MAX_TOKENS}"))
     }
 }
