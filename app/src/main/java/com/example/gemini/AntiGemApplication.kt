@@ -27,6 +27,8 @@ class AntiGemApplication : Application() {
         CoroutineScope(Dispatchers.IO).launch { AuthPreferences(this@AntiGemApplication).purgeLegacyOAuthState() }
         // Reconnects adb when Wireless debugging turns back on (it gets a new port every time)
         AdbConnectManager.init(this)
+        // The palette the user picked, read by every screen.
+        com.example.gemini.theme.ThemePrefs.init(this)
         // Fork builds are signed with a different key, so analytics stays off for them.
         // Return silently: the old toast nagged on every cold start and looked like a
         // system notification.

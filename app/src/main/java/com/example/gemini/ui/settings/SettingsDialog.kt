@@ -86,6 +86,7 @@ import com.example.gemini.data.daemon.IdeApiClient
 enum class SettingsSection(val title: String, val subtitle: String) {
     MAIN("Settings & Preferences", "Configure your AntiGem experience"),
     APPEARANCE("Appearance & Theme", "Theme, dark mode, and chat font scaling"),
+    THEME_COLORS("Accent & background", "The colour the whole app is painted with"),
     SERVERS("Servers & Connectivity", "Configure AGY Hub and IDE Bridge endpoints"),
     WEBVIEW_EXTENSIONS("Custom AntiGem Plugins", "Install and manage plugins: MCP tools and skills"),
     SLASH_COMMANDS("Slash Commands", "Your own / commands and what they expand to"),
@@ -423,8 +424,11 @@ fun SettingsDialog(
                         onSetFloatingSwitcherOrientation = onSetFloatingSwitcherOrientation,
                         onSetFloatingSwitcherItems = onSetFloatingSwitcherItems,
                         onSetFloatingSwitcherAutoCollapseSec = onSetFloatingSwitcherAutoCollapseSec,
-                        onResetFloatingSwitcherPosition = onResetFloatingSwitcherPosition
+                        onResetFloatingSwitcherPosition = onResetFloatingSwitcherPosition,
+                        onOpenColors = { currentSection = SettingsSection.THEME_COLORS }
                     )
+
+                    SettingsSection.THEME_COLORS -> ThemeColorsScreen()
 
                     SettingsSection.SERVERS -> ServersSubScreen(
                         currentHubUrl = agyHubUrl,
@@ -1094,7 +1098,8 @@ private fun AppearanceSubScreen(
     onSetFloatingSwitcherOrientation: (String) -> Unit,
     onSetFloatingSwitcherItems: (List<String>) -> Unit,
     onSetFloatingSwitcherAutoCollapseSec: (Int) -> Unit,
-    onResetFloatingSwitcherPosition: () -> Unit
+    onResetFloatingSwitcherPosition: () -> Unit,
+    onOpenColors: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1160,6 +1165,50 @@ private fun AppearanceSubScreen(
         }
 
         Spacer(modifier = Modifier.height(6.dp))
+
+        // Accent + background: everything else is derived from the two colours picked here.
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onOpenColors() },
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = cardBorder
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .background(ClaudeTerracotta, RoundedCornerShape(8.dp))
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "Accent & background",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (com.example.gemini.theme.ThemePrefs.enabled) {
+                            "Your colours are in use — tap to adjust or go back to the app palette"
+                        } else {
+                            "Pick the colour the app is painted with"
+                        },
+                        fontSize = 11.5.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Outlined.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+            }
+        }
 
         // Font Scaling Section
         Row(
