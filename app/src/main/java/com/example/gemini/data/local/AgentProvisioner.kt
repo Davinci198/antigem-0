@@ -11,6 +11,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -1110,6 +1113,75 @@ PYEOF
             writeText(text)
         } catch (e: Exception) {
             Log.w(TAG, "could not write marker ${absolutePath}: ${e.message}")
+        }
+    }
+
+    /** What Settings → Agents shows for one agent. */
+    data class AgentStatus(val label: String, val version: String?, val installed: Boolean)
+
+    /** Marker version and payload presence for every agent, read with file stats only. */
+    fun statuses(context: Context): List<AgentStatus> {
+        val appContext = context.applicationContext
+        if (LocalEnvironmentManager.isTermuxPackage(appContext)) return emptyList()
+        val ubuntuDir = LocalEnvironmentManager.getUbuntuRootDir(appContext)
+        if (!ubuntuDir.isDirectory) return emptyList()
+        return agents.map { agent ->
+            val target = guestFile(appContext, agent.guestPath)
+            val marker = markerFile(appContext, agent)
+            val version = marker.readTextOrNull().takeIf { it.isNotBlank() }
+            val installed = version != null && (target.isFile || target.canExecute())
+            AgentStatus(agent.label, version, installed)
+        }
+    }
+
+    /** The agent currently being installed, or null. Compose state so the screen can follow it. */
+    private val _busy = MutableStateFlow<String?>(null)
+    val busy: StateFlow<String?> get() = _busy.asStateFlow()
+
+    /**
+     * Installs or updates one agent on demand: clears its marker first so "update" really re-runs,
+     * then calls the matching private install*. Runs on [scope] under [provisionMutex].
+     */
+    fun installAgent(context: Context, label: String, log: (String) -> Unit = {}) {
+        val appContext = context.applicationContext
+        if (LocalEnvironmentManager.isTermuxPackage(appContext)) return
+        if (!LocalEnvironmentManager.isUbuntuInstalled(appContext)) return
+        val agent = agents.firstOrNull { it.label == label } ?: run {
+            log("Agent tools: unknown agent '$label'; nothing to install")
+            return
+        }
+        scope.launch {
+            try {
+                _busy.value = label
+                provisionMutex.withLock {
+                    val downloads = guestFile(appContext, GUEST_DOWNLOAD_DIR).apply { ensureDirectory() }
+                    guestFile(appContext, GUEST_TMP_DIR).apply { ensureDirectory() }
+                    // "Update" has to mean it: every install* returns early while the marker is there, so the marker
+                    // is what stood between the user and a real re-install.
+                    markerFile(appContext, agent).delete()
+                    val result = when (label) {
+                        "agy" -> installAgy(appContext, downloads, log)
+                        "claude" -> installClaude(appContext, downloads, log)
+                        "opencode" -> installOpencode(appContext, downloads, log)
+                        "hermes" -> installHermes(appContext, log)
+                        "dsh" -> {
+                            val r = installDsh(appContext, downloads, log)
+                            installDshFreePi(appContext, log)
+                            r
+                        }
+                        else -> return@withLock
+                    }
+                    log(
+                        if (result.installed) {
+                            "Agent tools: ${result.agent} ${result.version} ready (${result.detail})"
+                        } else {
+                            "Agent tools: ${result.agent} NOT installed (${result.detail})"
+                        }
+                    )
+                }
+            } finally {
+                _busy.value = null
+            }
         }
     }
 

@@ -101,6 +101,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     HERMES("Hermes Agent", "Binary path, account, model & custom providers"),
     HERMES_PLUGINS("Hermes Marketplace", "Plugins and skills for the Hermes Agent"),
     AGENTS("Agents", "Run Antigravity, Claude Code, Hermes or OpenCode"),
+    AGENT_TOOLS("Agent tools", "Install or update the agents inside the container"),
     GLOBAL_CONTEXT("Global context", "What every chat is told about this app, and your own instructions"),
     AGENT_MEMORY("Agent memory", "The files each agent reads between chats"),
     GITHUB("GitHub", "Sign in with the GitHub CLI, your repositories and git credentials"),
@@ -114,7 +115,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     /** Where Back goes from this section. */
     val parent: SettingsSection
         get() = when (this) {
-            ADB_CONNECT, ANDROID_AUTOMATION, GLOBAL_CONTEXT, AGENT_MEMORY -> AGENTS
+            ADB_CONNECT, ANDROID_AUTOMATION, GLOBAL_CONTEXT, AGENT_MEMORY, AGENT_TOOLS -> AGENTS
             HERMES_PLUGINS -> HERMES
             else -> MAIN
         }
@@ -576,8 +577,10 @@ fun SettingsDialog(
                         isApplying = isApplyingAgents,
                         onApply = onApplyAgents,
                         onOpenGlobalContext = { currentSection = SettingsSection.GLOBAL_CONTEXT },
-                        onOpenAgentMemory = { currentSection = SettingsSection.AGENT_MEMORY }
+                        onOpenAgentMemory = { currentSection = SettingsSection.AGENT_MEMORY },
+                        onOpenAgentTools = { currentSection = SettingsSection.AGENT_TOOLS }
                     )
+                    SettingsSection.AGENT_TOOLS -> AgentsInstallScreen()
                     SettingsSection.GLOBAL_CONTEXT -> GlobalContextScreen()
                     SettingsSection.AGENT_MEMORY -> AgentMemoryScreen()
                     SettingsSection.GITHUB -> GitHubScreen(
