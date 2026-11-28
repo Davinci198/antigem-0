@@ -603,6 +603,8 @@ class DshChatBackend(
                 // A lambda, not a local `fun`: `send` suspends and a plain local function cannot call it.
                 var promptsSent = 0
                 var recoveries = 0
+                // Once per turn: the page is reloaded at most once, or a failing session would make it flash.
+                var pageReleased = false
                 val promptOnce: suspend () -> Unit = {
                     if (promptsSent == 0) {
                         promptsSent = 1
@@ -710,26 +712,32 @@ class DshChatBackend(
                                         completeTool(assistantId, event.callId, event.name, event.summary)
                                     DshEvent.TurnCompleted -> throw TurnFinished()
                                     is DshEvent.Failed -> {
-                                        // The harness refuses to create a session whose id it still holds, which
-                                        // happens after a route change: the id came from the chat, and the process
-                                        // that owned it was replaced. Loading it and asking again is the answer, and
-                                        // it is tried twice before the turn is reported as failed.
-                                        if (event.message.contains("already exists", ignoreCase = true) && recoveries < 2) {
+                                        // Two ways the harness says "not yours": the process holds the id and refuses to
+                                        // create it again (`already exists`), or another client holds it outright. Both
+                                        // are answered by resuming, but only after the other side has let go — and the
+                                        // other side here is the page's own harness, which is asked to release the
+                                        // conversation by reloading it, once per turn.
+                                        val holdsIt = event.message.contains("already exists", ignoreCase = true) ||
+                                            event.message.contains("owned by another", ignoreCase = true)
+                                        if (holdsIt && recoveries < 3) {
                                             recoveries++
+                                            if (!pageReleased && DshWebServer.isRunning()) {
+                                                pageReleased = true
+                                                if (DshSessionOwner.pageVisible) {
+                                                    Log.i(TAG, "the page owns the session: asking it to release it")
+                                                    DshSessionOwner.releasePage()
+                                                    delay(2_500)
+                                                } else {
+                                                    // Nobody is looking at the page, so its harness has no claim worth
+                                                    // protecting: it is what holds the session, and stopping it is the
+                                                    // one action that frees the conversation without touching the user.
+                                                    Log.i(TAG, "an unseen page holds the session: stopping its harness")
+                                                    DshWebServer.stopNow()
+                                                    delay(1_500)
+                                                }
+                                            }
                                             Log.i(TAG, "the harness still holds the session: resuming it and asking again")
                                             loaded.add(conversation.sessionId)
-                                            promptsSent = 0
-                                            opened.send(
-                                                DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),
-                                            )
-                                        } else if (event.message.contains("owned by another", ignoreCase = true) && recoveries < 2) {
-                                            // The page is sitting on this conversation. Ask it to let go — a reload, not
-                                            // a shutdown — and give the harness a moment to drop the claim before the
-                                            // prompt is sent again on the same process.
-                                            recoveries++
-                                            Log.i(TAG, "the page owns the session: asking it to release and retrying")
-                                            DshSessionOwner.releasePage()
-                                            delay(2_000)
                                             promptsSent = 0
                                             opened.send(
                                                 DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),
