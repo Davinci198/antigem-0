@@ -24,6 +24,30 @@ class DshPreferences(context: Context) {
     private val _route = MutableStateFlow(readRoute())
     val route: StateFlow<DshModelRoute> = _route.asStateFlow()
 
+    /**
+     * Whether a DSH session this app starts may leave the workspace.
+     *
+     * Off by default and persisted, so the wider sandbox is a standing choice the user made rather
+     * than something a turn inherits by accident. It only ever raises the sandbox mode: approvals
+     * keep the profile's own policy either way.
+     */
+    private val _fullAccess = MutableStateFlow(prefs.getBoolean(KEY_FULL_ACCESS, false))
+    val fullAccess: StateFlow<Boolean> = _fullAccess.asStateFlow()
+
+    fun setFullAccess(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_FULL_ACCESS, enabled).apply()
+        _fullAccess.value = enabled
+    }
+
+    /**
+     * The persisted value, read straight from storage.
+     *
+     * The switch lives on the harness web screen and the environment is built by the chat backend,
+     * so each holds its own instance of this class and only the one that toggled sees its own
+     * `StateFlow` change. Reading the file keeps the second instance from reporting a stale answer.
+     */
+    fun fullAccessNow(): Boolean = prefs.getBoolean(KEY_FULL_ACCESS, false)
+
     fun setHost(kind: DshHostKind) {
         prefs.edit().putString(KEY_HOST, kind.name).apply()
         _host.value = kind
@@ -79,6 +103,7 @@ class DshPreferences(context: Context) {
         private const val KEY_CUSTOM_NAME = "custom_name"
         private const val KEY_CUSTOM_API = "custom_api"
         private const val KEY_CUSTOM_BASE_URL = "custom_base_url"
+        private const val KEY_FULL_ACCESS = "full_access"
 
         /** DSH's own provider; its credentials service picks the key out of the environment. */
         const val DEFAULT_PROVIDER = "deepseek-official"

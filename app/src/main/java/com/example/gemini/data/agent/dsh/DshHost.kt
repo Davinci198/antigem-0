@@ -3,6 +3,7 @@ package com.example.gemini.data.agent.dsh
 import android.content.Context
 import android.util.Log
 import com.example.gemini.data.local.LocalEnvironmentManager
+import com.example.gemini.data.remote.AndroidLocalBridgeServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -125,6 +126,10 @@ interface DshHost {
  * points at the harness home, `NARB_DISABLE_NATIVE_CACHE` keeps a PRoot-poisoned
  * native cache from being loaded, and `DSH_PERMISSION_MODE=workspace-write` keeps
  * in-workspace work silent while anything wider has to ask.
+ *
+ * The caller's own entries — the bridge port, the device id and the full-access
+ * switch — are laid over this base, so the anti-Gem plugin can reach the app and
+ * a user who turned full access on gets it on the next boot.
  */
 class ProotDshHost(
     private val context: Context,
@@ -604,6 +609,35 @@ object DshGuestPaths {
 
     /** `node` is on the guest PATH, unlike the versioned path above. */
     const val NODE_BIN_ADDRESSED = "node"
+
+    /**
+     * The one directory every DSH chat in this app runs in, so the harness files all of them
+     * together and each is visible — and resumable — from either side. Chats saved under another
+     * directory keep it and resume there.
+     */
+    const val SHARED_WORKSPACE = "/root/workspace-dsh"
+}
+
+/**
+ * What the anti-Gem bundle reads out of the guest's environment on every boot.
+ *
+ * The port the local bridge actually bound is not a constant — it walks forward when the default
+ * is taken, and falls back to an OS-assigned one — so it has to be read from the running server
+ * each time rather than assumed. The device id is the same value the bridge compares, and the
+ * access flag is always written, `0` included: the bundle treats a missing variable as "leave the
+ * profile alone", so writing it keeps a turned-off switch from being mistaken for an absent one.
+ *
+ * Both surfaces that boot a harness — the native SDK session and the web page — use this, so the
+ * tools and the sandbox mode are the same whichever one the user opens.
+ */
+object DshGuestEnvironment {
+    fun of(context: Context, fullAccess: Boolean): Map<String, String> = mapOf(
+        "ANTIGEM_MCP_PORT" to AndroidLocalBridgeServer.instance.boundPort.toString(),
+        "ANTIGEM_DEVICE_ID" to android.provider.Settings.Secure
+            .getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+            .orEmpty(),
+        "ANTIGEM_FULL_ACCESS" to if (fullAccess) "1" else "0",
+    )
 }
 
 /**

@@ -169,6 +169,13 @@ object DshWebServer {
         }
         return try {
             killStrayWebProfiles(context, log)
+            // proot refuses to start in a working directory that does not exist inside the rootfs,
+            // and the shared workspace is created on first use rather than shipped in the image.
+            runCatching {
+                val rootfs = LocalEnvironmentManager.getUbuntuRootDir(context)
+                File(rootfs, DshGuestPaths.SHARED_WORKSPACE.trimStart('/'))
+                    .let { if (!it.isDirectory) it.mkdirs() }
+            }
             val process = LocalEnvironmentManager.startGuestProcess(
                 context = context,
                 guestArgv = listOf(
@@ -176,11 +183,11 @@ object DshWebServer {
                     "-c",
                     "exec ${DshGuestPaths.DSH_BIN} web --no-open --port 0",
                 ),
-                guestCwd = "/root",
+                guestCwd = DshGuestPaths.SHARED_WORKSPACE,
                 environment = mapOf(
                     "NARB_DISABLE_NATIVE_CACHE" to "1",
                     "DSH_HOME" to DshGuestPaths.DSH_HOME,
-                ),
+                ) + DshGuestEnvironment.of(context, DshPreferences(context).fullAccessNow()),
             )
             log("[dsh-web] dsh web spawned; waiting for its URL...")
             DshWebServerInstance(process, CoroutineScope(SupervisorJob() + Dispatchers.IO))

@@ -7,12 +7,15 @@ import android.os.Message
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.*
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.gemini.R
+import com.example.gemini.data.agent.dsh.DshPreferences
 import com.example.gemini.data.agent.dsh.DshUiInjector
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
@@ -247,6 +251,21 @@ fun DshWebScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
+        // The harness reads this at boot, so the toggle takes effect on the next start: the top
+        // bar's restart action is right there, and this bar never claims otherwise.
+        val dshPrefs = remember(context) { DshPreferences(context) }
+        val fullAccess = dshPrefs.fullAccess.collectAsState().value
+        val toggleFullAccess = {
+            val enabled = !fullAccess
+            dshPrefs.setFullAccess(enabled)
+            Toast.makeText(
+                context,
+                context.getString(
+                    if (enabled) R.string.dsh_full_access_on else R.string.dsh_full_access_off
+                ),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
         // Slim top bar: the only chrome on this screen.
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -272,6 +291,17 @@ fun DshWebScreen(
                         .weight(1f)
                         .padding(start = 12.dp)
                 )
+                IconButton(onClick = toggleFullAccess) {
+                    // Filled means the wider sandbox is on; outlined means the workspace bounds it.
+                    Icon(
+                        imageVector = if (fullAccess) Icons.Filled.Lock else Icons.Outlined.LockOpen,
+                        contentDescription = stringResource(
+                            if (fullAccess) R.string.dsh_full_access_disable else R.string.dsh_full_access_enable
+                        ),
+                        tint = if (fullAccess) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 IconButton(onClick = onMinimize) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,

@@ -274,6 +274,43 @@ class DshProtocolTest {
         assertNull(parser.takeUsage())
     }
 
+    @Test
+    fun `query frame names the session and carries one text block`() {
+        val frame = DshProtocol.queryFrame(sessionId, "/compact")
+
+        assertTrue(frame.contains("\"id\":5"))
+        assertTrue(frame.contains("\"method\":\"session/query\""))
+        assertTrue(frame.contains("\"sessionId\":\"$sessionId\""))
+        assertTrue(frame.contains("\"contentBlocks\":[{\"type\":\"text\",\"text\":\"/compact\"}]"))
+    }
+
+    @Test
+    fun `a command receipt is an admission and settles on its completion`() {
+        // The receipt says which path the harness took; the work arrives as events either way.
+        val command = parser.parse(
+            """{"jsonrpc":"2.0","id":5,"result":{"kind":"command","commandId":"cmd-1"}}""",
+        )
+        assertEquals(DshEvent.CommandAccepted, command)
+        val prompt = parser.parse("""{"jsonrpc":"2.0","id":5,"result":{"kind":"prompt"}}""")
+        assertEquals(DshEvent.PromptAccepted, prompt)
+
+        // A command never opens a turn, so `turn/end` never comes: this notification is the end.
+        val done = parser.parse(
+            """{"jsonrpc":"2.0","method":"session.query.completed","params":{"sessionId":"$sessionId",
+               "commandId":"cmd-1","finishReason":"completed","finalResponse":"Compacted"}}""",
+        )
+        assertEquals(DshEvent.CommandCompleted("completed", "Compacted"), done)
+    }
+
+    @Test
+    fun `a failed command is reported with its own reason and text`() {
+        val failed = parser.parse(
+            """{"jsonrpc":"2.0","method":"session.query.completed","params":{"sessionId":"$sessionId",
+               "commandId":"cmd-2","finishReason":"error","finalResponse":"no active plan"}}""",
+        )
+        assertEquals(DshEvent.CommandCompleted("error", "no active plan"), failed)
+    }
+
     private fun parseTurnEnd(reason: String): DshEvent = parser.parse(
         """{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"$sessionId",
            "event":{"type":"turn/end","data":{"reason":$reason}}}}""",

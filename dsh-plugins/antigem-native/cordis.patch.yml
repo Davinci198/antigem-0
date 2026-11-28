@@ -1,0 +1,141 @@
+# AntiGem native bridge: exposes the app's seven local MCP servers to DSH.
+#
+# No value here is hardcoded. The Android app injects both secrets into the
+# guest process environment before booting `dsh --profile sdk`:
+#
+#   ANTIGEM_MCP_PORT   the port AndroidLocalBridgeServer actually bound
+#                      (it falls back to the next free port, so it is not a constant)
+#   ANTIGEM_DEVICE_ID  Settings.Secure.ANDROID_ID, the value the bridge's
+#                      X-Device-Id check compares against
+#
+# When the app does not inject them the rows stay disabled instead of failing
+# startup, so a DSH session started outside the app still boots cleanly.
+#
+# Full workspace access is opt-in per launch. AntigemFullAccess raises the
+# sandbox mode to `danger-full-access` only when ANTIGEM_FULL_ACCESS is "1";
+# otherwise the profile's own mode wins, so a DSH session the app did not
+# launch keeps the confinement it was configured with.
+#
+# `config` is replaced as a whole, never merged, so both overrides below
+# restate every key they own.
+- id: sandbox-policy
+  config:
+    mode: !!js >-
+      process.env.ANTIGEM_FULL_ACCESS === '1'
+        ? 'danger-full-access'
+        : (process.env.DSH_PERMISSION_MODE ?? 'workspace-write')
+    workspaceRoot: !!js process.cwd()
+
+# `permission-presets` derives the preset from the sandbox/approval pair and
+# refuses to boot when the pair matches no entry. Unrestricted filesystem with
+# approval still on is a real combination this bundle creates, so it needs an
+# entry; the three shipped presets stay exactly as they were.
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+      danger-full-access-ask:
+        sandbox: danger-full-access
+        approval: ask
+        name: danger-full-access-ask
+        description: Full file access; wider operations still ask before running.
+
+- insert:
+    - id: antigem-mcp-browser
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.ANTIGEM_MCP_PORT == null
+      config:
+        serverName: browser
+        transport: streamable-http
+        url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/browser`"
+        headers:
+          X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+        toolCallTimeoutMs: 120000
+        startupTimeoutMs: 15000
+        failOnStartupError: false
+
+    - id: antigem-mcp-terminal
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.ANTIGEM_MCP_PORT == null
+      config:
+        serverName: terminal
+        transport: streamable-http
+        url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/terminal`"
+        headers:
+          X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+        toolCallTimeoutMs: 120000
+        startupTimeoutMs: 15000
+        failOnStartupError: false
+
+    - id: antigem-mcp-google-flow
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.ANTIGEM_MCP_PORT == null
+      config:
+        serverName: google_flow
+        transport: streamable-http
+        url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/google_flow`"
+        headers:
+          X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+        toolCallTimeoutMs: 180000
+        startupTimeoutMs: 15000
+        failOnStartupError: false
+
+    - id: antigem-mcp-custom-plugin-developer
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.ANTIGEM_MCP_PORT == null
+      config:
+        serverName: custom_plugin_developer
+        transport: streamable-http
+        url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/extension_developer`"
+        headers:
+          X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+        toolCallTimeoutMs: 120000
+        startupTimeoutMs: 15000
+        failOnStartupError: false
+
+    - id: antigem-mcp-android-automation
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.ANTIGEM_MCP_PORT == null
+      config:
+        serverName: android_automation
+        transport: streamable-http
+        url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/android`"
+        headers:
+          X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+        toolCallTimeoutMs: 180000
+        startupTimeoutMs: 15000
+        failOnStartupError: false
+
+    - id: antigem-mcp-notes
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.ANTIGEM_MCP_PORT == null
+      config:
+        serverName: notes
+        transport: streamable-http
+        url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/notes`"
+        headers:
+          X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+        toolCallTimeoutMs: 120000
+        startupTimeoutMs: 15000
+        failOnStartupError: false
+
+    - id: antigem-mcp-theme
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.ANTIGEM_MCP_PORT == null
+      config:
+        serverName: theme
+        transport: streamable-http
+        url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/theme`"
+        headers:
+          X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+        toolCallTimeoutMs: 120000
+        startupTimeoutMs: 15000
+        failOnStartupError: false

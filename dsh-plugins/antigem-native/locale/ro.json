@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Punte nativă AntiGem",
+    "description": "Dă DeepSeek Harness acces la telefon: cele șapte servere MCP pe care aplicația AntiGem le rulează pe puntea locală (browser, terminal, Google Flow, notițe, temă, automatizare Android și dezvoltatorul de pluginuri) devin unelte mcp__*, așa că o sesiune poate deschide taburi, rula comenzi în shell, citi și scrie notițe, schimba tema aplicației sau controla dispozitivul direct din chat. Aplicația trimite portul punții, id-ul dispozitivului și comutatorul de acces complet prin environment când pornește sesiunea; dacă lipsesc, rândurile rămân oprite și sandbox-ul rămâne neatins. În plus, deschide toate conversațiile într-un singur director partajat, așa că o sesiune începută în aplicație apare și în pagina Harness, și invers. Automatizarea Android refuză apelurile până când o aprobi din Utilities, iar fiecare apel rulează cu permisiunile pe care le are deja aplicația.",
+    "detail": "docs/DETAIL.md"
+  }
+}
