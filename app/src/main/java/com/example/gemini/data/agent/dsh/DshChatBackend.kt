@@ -809,9 +809,9 @@ class DshChatBackend(
             // its own terms instead of being killed under proot.
             if (warm?.session !== finished || endedCleanly != true) dropWarmIfOurs(finished)
             if (activeSession === session) activeSession = null
-            // The page is open, so the session goes back to it as soon as the turn ends: otherwise the next message
-            // typed there is refused as "owned by another client" until the app is restarted.
-            if (DshWebServer.isRunning()) closeWarmNow()
+            // Only while the user is actually on the page: the page's harness outlives the visit, and treating "it is
+            // running" as "it is in front" dropped the warm session after every turn, so each message paid a boot.
+            if (DshSessionOwner.pageVisible) closeWarmNow()
             finishStreaming()
         }
     }

@@ -17,6 +17,16 @@ object DshSessionOwner {
     private val refresh = AtomicReference<() -> Unit>({})
     private val pageRelease = AtomicReference<() -> Unit>({})
 
+    /**
+     * Whether the user is looking at the DSH page right now.
+     *
+     * The page's harness stays up once it has been opened, so "the page is running" is not the same question as "the
+     * page is in front of the user" — and only the second one justifies giving up the warm session after a chat turn.
+     * Deciding on the first cost a full harness boot on every message once the page had ever been opened.
+     */
+    @Volatile
+    var pageVisible: Boolean = false
+
     /** Called by the chat backend when it is created, so the web page can ask it to let go. */
     fun register(action: () -> Unit) {
         release.set(action)

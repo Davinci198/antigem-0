@@ -157,6 +157,13 @@ fun DshWebScreen(
         onDispose { DshSessionOwner.registerPageRelease {} }
     }
 
+    LaunchedEffect(isVisible) {
+        DshSessionOwner.pageVisible = isVisible
+    }
+    DisposableEffect(Unit) {
+        onDispose { DshSessionOwner.pageVisible = false }
+    }
+
     LaunchedEffect(isVisible, restartRequested) {
         // Leaving the page rebuilds the chat list: whatever the page started or renamed is already on disk, and half of
         // a shared session that never appears in the other surface is the complaint that started this.
