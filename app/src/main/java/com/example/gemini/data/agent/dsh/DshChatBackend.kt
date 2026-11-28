@@ -557,9 +557,9 @@ class DshChatBackend(
             val kept = warm?.takeIf {
                 it.conversationId == conversation.id && it.route == route && it.workspace == workspace
             }
-            // Taking the session means the web page has to let go of it: the harness keeps one owner per session and
-            // answers "owned by another client" otherwise, which is what a continuation from the page used to hit.
-            if (kept == null) DshWebServer.stopNow()
+            // Taking the session means the page has to let go of it, and the harness enforces that itself. The page is
+            // deliberately left running: killing its harness to win the race closed the user's page under them, which
+            // is worse than an honest message (see friendlyError).
             val opened = kept?.session ?: host.open(
                 DshSessionRequest(
                     setupId = conversation.sessionId,
@@ -775,6 +775,9 @@ class DshChatBackend(
             // its own terms instead of being killed under proot.
             if (warm?.session !== finished || endedCleanly != true) dropWarmIfOurs(finished)
             if (activeSession === session) activeSession = null
+            // The page is open, so the session goes back to it as soon as the turn ends: otherwise the next message
+            // typed there is refused as "owned by another client" until the app is restarted.
+            if (DshWebServer.running()) dropWarm()
             finishStreaming()
         }
     }
@@ -819,6 +822,11 @@ class DshChatBackend(
             message.contains("credentials service", ignoreCase = true) ->
             "DeepSeek Harness has no key for this model's provider. Add one in Settings → Providers (or pick another " +
                 "model from the pill above) and send the message again.\n\n$message"
+        // One harness client per session: the page is open and has it. Said plainly, because the raw line reads like a
+        // crash and the remedy is a tap.
+        message.contains("owned by another", ignoreCase = true) ->
+            "This conversation is open in the DSH page. Go back to the page's chat list (or tap refresh there) and " +
+                "send again — the harness gives a session to one client at a time.\n\n$message"
         else -> message
     }
 

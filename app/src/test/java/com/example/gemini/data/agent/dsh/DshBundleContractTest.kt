@@ -28,7 +28,7 @@ class DshBundleContractTest {
 
     /** id → (route, timeout) for one of the two descriptions of the same table. */
     private fun rows(text: String): Map<String, Pair<String, Int>> {
-        val path = Regex("""/([a-z_]+)\s*['"`]?\s*$""")
+        val path = Regex("""/([a-z_]+)['"`]*\s*$""")
         val rows = linkedMapOf<String, Pair<String, Int>>()
         var id: String? = null
         var route: String? = null
