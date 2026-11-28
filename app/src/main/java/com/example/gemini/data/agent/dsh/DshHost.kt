@@ -269,19 +269,37 @@ class ProotDshHost(
             homePatch.writeText(homeNext + "\n")
         }
 
-        if (custom == null && route.provider.isNotBlank() && route.provider !in declaredProviders(home)) {
-            val sdkPatch = File(home, "profiles/sdk/cordis.patch.yml")
-            sdkPatch.parentFile?.mkdirs()
-            val sdkRaw = if (sdkPatch.isFile) sdkPatch.readText() else ""
-            val sdkCurrent = DshProfilePatch.normalizePatch(sdkRaw)
-            val next = DshProfilePatch.ensurePreset(
+        // A preset route (nvidia, openrouter, ...) gets its adapter and endpoint from DSH's own table but still has to
+        // be declared: the sdk profile is created empty, and while it stays empty every turn dies with 'no adapter
+        // registered for provider "nvidia"'. The file is normalised even when the provider is already declared, so a
+        // patch an earlier build left as '[]' followed by an entry stops breaking the harness boot.
+        val sdkPatch = File(home, "profiles/sdk/cordis.patch.yml")
+        sdkPatch.parentFile?.mkdirs()
+        val sdkRaw = if (sdkPatch.isFile) sdkPatch.readText() else ""
+        val sdkCurrent = DshProfilePatch.normalizePatch(sdkRaw)
+        // What the provider needs to be declared at all: a harness preset brings its own adapter and endpoint, while
+        // anything the user added through the harness' Models page only exists in the web profile — copy its api and
+        // endpoint over, or the sdk route answers "needs an api; the installed catalog does not describe it".
+        val elsewhere = declaredProvider(home, route.provider)
+        val known = DshConfigParser.preset(route.provider)
+        val api = elsewhere?.api ?: if (known == null) DshConfigParser.DEFAULT_API else null
+        val baseUrl = elsewhere?.baseUrl ?: known?.baseUrl
+        val envVar = elsewhere?.apiKeyEnv ?: presetKeyEnv(route.provider)
+        // One route at a time in the profile the chat boots, so the file is rewritten rather than appended to: an entry
+        // an older build left behind (a key variable and no api) would otherwise keep failing every turn.
+        val next = if (route.provider.isBlank()) {
+            sdkCurrent
+        } else {
+            DshProfilePatch.rewriteFor(
                 existing = sdkCurrent,
                 provider = route.provider,
-                apiKeyEnv = presetKeyEnv(route.provider),
+                apiKeyEnv = envVar,
                 model = route.model,
+                api = api,
+                baseUrl = baseUrl,
             )
-            if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
         }
+        if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
     }
 
     /** Home-patch entry for a custom OpenAI-compatible endpoint; a preset route needs none (see above). */
@@ -303,6 +321,15 @@ class ProotDshHost(
      * The web profile is deliberately not consulted: the harness writes its own settings there, and a provider that
      * exists only in `profiles/web` is invisible to a session started with `--profile sdk`.
      */
+    /** The full declaration of [provider] in the profiles the harness UI writes, or null when none of them has it. */
+    private fun declaredProvider(home: File, provider: String): DshConfigParser.DeclaredProvider? = runCatching {
+        listOf("profiles/web/cordis.patch.yml", "cordis.patch.yml")
+            .map { File(home, it) }
+            .filter { it.isFile }
+            .flatMap { DshConfigParser.llmProviders(it.readText()) }
+            .firstOrNull { it.id == provider }
+    }.getOrNull()
+
     private fun declaredProviders(home: File): Set<String> = runCatching {
         listOf("cordis.patch.yml", "profiles/sdk/cordis.patch.yml")
             .map { File(home, it) }
