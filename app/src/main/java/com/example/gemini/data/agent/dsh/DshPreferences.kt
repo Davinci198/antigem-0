@@ -54,8 +54,6 @@ class DshPreferences(context: Context) {
         _host.value = kind
     }
 
-    private val _fullAccess = MutableStateFlow(prefs.getBoolean(KEY_FULL_ACCESS, false))
-
     /** Saves a route. The key is never logged and never leaves the device except as a guest env var. */
     fun setRoute(route: DshModelRoute) {
         prefs.edit()
