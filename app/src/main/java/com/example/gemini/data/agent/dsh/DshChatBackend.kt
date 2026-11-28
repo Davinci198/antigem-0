@@ -518,6 +518,8 @@ class DshChatBackend(
             withTimeoutOrNull(8_000) { runCatching { kept.session.close() } }
         }
     }
+
+    /**
      * Shuts down the process of a turn that must not be kept: a dead one, or one that belongs to a
      * conversation this backend no longer serves. The harness is asked to shut down before the pipe
      * closes, so the guest exits on its own terms instead of being killed under proot.
