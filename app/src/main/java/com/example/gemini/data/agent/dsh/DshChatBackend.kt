@@ -227,7 +227,7 @@ class DshChatBackend(
         // written to the same store this app reads, but `start()` is the only other place that
         // looks: without this, coming back to the app left it invisible until the next launch.
         // Guarded so a foreground that changed nothing costs one directory listing.
-        if (!importing) importSessionsFromDisk()
+        if (!importing.get()) importSessionsFromDisk()
     }
 
     fun detach() {
