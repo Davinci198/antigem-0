@@ -208,6 +208,9 @@ fun DshWebScreen(
         } else {
             page?.onPause()
             page?.pauseTimers()
+            // A WebView keeps input focus after it is hidden: the keyboard stays bound to it, so every keystroke goes to
+            // the harness page instead of the chat's field and the composer looks like it only accepts voice notes.
+            page?.clearFocus()
         }
         onDispose {
             startFailed = false
