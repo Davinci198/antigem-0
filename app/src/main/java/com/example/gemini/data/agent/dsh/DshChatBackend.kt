@@ -21,9 +21,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
@@ -58,8 +59,10 @@ class DshChatBackend(
 
     init {
         // The web page boots a second harness on the same sessions and can only take one over once this side has let
-        // go; the screen asks through the holder instead of reaching into the backend.
-        DshSessionOwner.register { dropWarm() }
+        // go; the screen asks through the holder instead of reaching into the backend. It has to be the blocking close:
+        // the page's first message arrives within a second or two of the page loading, and a close that only starts in
+        // a coroutine leaves the claim in place long enough for the harness to refuse that message.
+        DshSessionOwner.register { closeWarmNow() }
         DshSessionOwner.registerRefresh { importSessionsFromDisk() }
     }
 
@@ -499,6 +502,22 @@ class DshChatBackend(
     }
 
     /**
+     * The same shut-down, but finished before it returns.
+     *
+     * The harness hands out one claim per session across processes, and the claim is released by the close itself — not
+     * by dropping our reference to it. The page's first message arrives a second or two after it loads, so the close has
+     * to have happened by then.
+     */
+    fun closeWarmNow() {
+        val kept = warm ?: return
+        Log.i(TAG, "dropWarm: closing the kept session (waiting for it)")
+        warm = null
+        loaded.clear()
+        if (activeSession === kept.session) activeSession = null
+        runBlocking {
+            withTimeoutOrNull(8_000) { runCatching { kept.session.close() } }
+        }
+    }
      * Shuts down the process of a turn that must not be kept: a dead one, or one that belongs to a
      * conversation this backend no longer serves. The harness is asked to shut down before the pipe
      * closes, so the guest exits on its own terms instead of being killed under proot.
@@ -790,7 +809,7 @@ class DshChatBackend(
             if (activeSession === session) activeSession = null
             // The page is open, so the session goes back to it as soon as the turn ends: otherwise the next message
             // typed there is refused as "owned by another client" until the app is restarted.
-            if (DshWebServer.isRunning()) dropWarm()
+            if (DshWebServer.isRunning()) closeWarmNow()
             finishStreaming()
         }
     }
