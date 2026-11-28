@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "AntiGem native bridge",
+    "title": "dsh_antigen",
     "description": "Gives DeepSeek Harness the phone itself: the seven MCP servers the AntiGem app runs on its loopback bridge (browser, terminal, Google Flow, notes, theme, Android automation and the plugin developer) become mcp__* tools, so a session can open tabs, run shell commands, read and write notes, retheme the app or drive the device without leaving the chat. The app supplies the bridge port, the device id and the full-access switch from the environment when it boots the session; when they are missing the rows stay off and the sandbox is untouched. It also opens every chat in one shared directory, so a session started in the app shows up in the harness page and the other way round. Android automation still refuses calls until you grant it in Utilities, and every tool call runs with the permissions the app already has.",
     "detail": "docs/DETAIL.md"
   }

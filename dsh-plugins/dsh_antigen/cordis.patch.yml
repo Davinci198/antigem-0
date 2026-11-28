@@ -1,4 +1,4 @@
-# AntiGem native bridge: exposes the app's seven local MCP servers to DSH.
+# dsh_antigen: exposes the app's seven local MCP servers to DSH.
 #
 # No value here is hardcoded. The Android app injects both secrets into the
 # guest process environment before booting `dsh --profile sdk`:

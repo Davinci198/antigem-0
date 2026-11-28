@@ -1,4 +1,4 @@
-# AntiGem native bridge
+# dsh_antigen — the AntiGem bridge for DeepSeek Harness
 
 A DSH bundle that connects DeepSeek Harness to the seven MCP servers the AntiGem Android app serves on its local bridge, so a session controls the app and the phone with `mcp__*` tools.
 
