@@ -1,4 +1,4 @@
-# dsh_antigen — the AntiGem bridge for DeepSeek Harness
+# dsh-antigem — the AntiGem bridge for DeepSeek Harness
 
 Exposes the seven MCP servers that the AntiGem Android app runs on its loopback bridge to DeepSeek Harness, so a session can control the app and the phone directly instead of being limited to files and shell.
 

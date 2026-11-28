@@ -86,7 +86,7 @@ internal object DshProfilePatch {
     /**
      * The app's own MCP servers, handed to the harness session.
      *
-     * Same rows the `dsh-plugins/dsh_antigen` bundle declares, written out here with the port and the device id the
+     * Same rows the `dsh-plugins/dsh-antigem` bundle declares, written out here with the port and the device id the
      * app actually has: the bridge binds whatever port is free, and its `X-Device-Id` check compares against the value
      * only the app can read. Without a port the rows are skipped entirely, so a session started without the bridge
      * still boots.
