@@ -149,6 +149,10 @@ class ProotDshHost(
 
     override suspend fun open(request: DshSessionRequest): DshSession = withContext(Dispatchers.IO) {
         writeHomeConfig(request)
+        // The plugin's own files, so the harness lists it instead of only carrying its rows. Idempotent: a matching
+        // version marker makes this a file check.
+        runCatching { DshPluginInstaller.install(context) }
+            .onFailure { Log.w("DshHost", "dsh-antigem plugin not installed: ${it.message}") }
         val environment = linkedMapOf(
             "NARB_DISABLE_NATIVE_CACHE" to "1",
             "DSH_HOME" to DshGuestPaths.DSH_HOME,

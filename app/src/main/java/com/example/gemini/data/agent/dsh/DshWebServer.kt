@@ -166,6 +166,8 @@ object DshWebServer {
             com.example.gemini.data.local.AgentProvisioner.installDshNow(context) { line -> log("[dsh-web] provision: $line") }
             return null
         }
+        runCatching { DshPluginInstaller.install(context) }
+            .onFailure { Log.w("DshWebServer", "dsh-antigem plugin not installed: ${it.message}") }
         if (repairPatchFile(LocalEnvironmentManager.getUbuntuRootDir(context))) {
             log("[dsh-web] rewrote an empty cordis.patch.yml as [] before booting")
         }

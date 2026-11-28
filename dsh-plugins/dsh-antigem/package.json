@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-antigem",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Exposes the AntiGem Android bridge MCP servers (browser, terminal, notes, theme, android automation, plugin developer, Google Flow) to DeepSeek Harness as mcp__* tools.",
