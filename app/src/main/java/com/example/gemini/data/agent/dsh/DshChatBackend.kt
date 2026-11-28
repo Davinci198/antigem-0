@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -696,6 +697,18 @@ class DshChatBackend(
                                             recoveries++
                                             Log.i(TAG, "the harness still holds the session: resuming it and asking again")
                                             loaded.add(conversation.sessionId)
+                                            promptsSent = 0
+                                            opened.send(
+                                                DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),
+                                            )
+                                        } else if (event.message.contains("owned by another", ignoreCase = true) && recoveries < 2) {
+                                            // The page is sitting on this conversation. Ask it to let go — a reload, not
+                                            // a shutdown — and give the harness a moment to drop the claim before the
+                                            // prompt is sent again on the same process.
+                                            recoveries++
+                                            Log.i(TAG, "the page owns the session: asking it to release and retrying")
+                                            DshSessionOwner.releasePage()
+                                            delay(2_000)
                                             promptsSent = 0
                                             opened.send(
                                                 DshProtocol.resumeFrame(sessionId = parser.sessionIdInUse),

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.gemini.R
 import com.example.gemini.data.agent.dsh.DshPreferences
+import com.example.gemini.data.agent.dsh.DshSessionOwner
 import com.example.gemini.data.agent.dsh.DshUiInjector
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
@@ -95,6 +96,18 @@ private object DshWebRetained {
         webView = null
         webKey = null
     }
+
+    /**
+     * Lets go of the conversation the page has open, without closing the page.
+     *
+     * The harness gives a session to one client, so a message typed in the chat while the page sits on that session is
+     * refused. Reloading the page leaves the conversation there — the harness releases it — while the page, its token
+     * and the running process survive, so coming back costs a redraw and not a boot.
+     */
+    fun releasePageSession() {
+        val page = webView ?: return
+        runCatching { page.evaluateJavascript("window.location.replace(window.location.pathname + window.location.search)", null) }
+    }
 }
 
 /**
@@ -138,6 +151,12 @@ fun DshWebScreen(
     // effect only attaches to it, so reopening the screen is instant and does not
     // spawn another `dsh web`. Restarting is the user's decision (the refresh
     // action in the top bar), never a side effect of closing the overlay.
+    // The chat asks the page to let go of a conversation by reloading it, so the page keeps its process and its token.
+    DisposableEffect(instance) {
+        DshSessionOwner.registerPageRelease { DshWebRetained.releasePageSession() }
+        onDispose { DshSessionOwner.registerPageRelease {} }
+    }
+
     LaunchedEffect(isVisible, restartRequested) {
         // Leaving the page rebuilds the chat list: whatever the page started or renamed is already on disk, and half of
         // a shared session that never appears in the other surface is the complaint that started this.

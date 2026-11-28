@@ -15,6 +15,7 @@ object DshSessionOwner {
 
     private val release = AtomicReference<() -> Unit>({})
     private val refresh = AtomicReference<() -> Unit>({})
+    private val pageRelease = AtomicReference<() -> Unit>({})
 
     /** Called by the chat backend when it is created, so the web page can ask it to let go. */
     fun register(action: () -> Unit) {
@@ -37,5 +38,19 @@ object DshSessionOwner {
 
     fun refreshNow() {
         runCatching { refresh.get().invoke() }
+    }
+
+    /**
+     * The third direction: the page is sitting on a conversation the chat wants.
+     *
+     * Nothing is closed. The page is reloaded onto the same URL, which makes the harness release the session it had
+     * open, so the chat can take it and the page is still there when the user looks back.
+     */
+    fun registerPageRelease(action: () -> Unit) {
+        pageRelease.set(action)
+    }
+
+    fun releasePage() {
+        runCatching { pageRelease.get().invoke() }
     }
 }
