@@ -122,7 +122,6 @@ object DshWebServer {
     }
 
     /** True while the page's own harness is up, so the chat knows the session is shared. */
-    fun running(): Boolean = synchronized(lock) { current?.isAlive == true }
 
     /** Stops the background web profile (the screen's refresh action, or the user asking). */
     fun stopNow() {

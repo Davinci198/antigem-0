@@ -777,7 +777,7 @@ class DshChatBackend(
             if (activeSession === session) activeSession = null
             // The page is open, so the session goes back to it as soon as the turn ends: otherwise the next message
             // typed there is refused as "owned by another client" until the app is restarted.
-            if (DshWebServer.running()) dropWarm()
+            if (DshWebServer.isRunning()) dropWarm()
             finishStreaming()
         }
     }
