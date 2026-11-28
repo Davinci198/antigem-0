@@ -737,6 +737,16 @@ class DshChatBackend(
                                                 }
                                             }
                                             Log.i(TAG, "the harness still holds the session: resuming it and asking again")
+                                            // A killed harness leaves its lock behind, and a stale lock is what keeps
+                                            // answering "already exists" long after the process is gone.
+                                            if (DshMaintenance.clearStaleSessionLock(
+                                                    application,
+                                                    conversation.sessionId,
+                                                )
+                                            ) {
+                                                Log.i(TAG, "cleared a session lock nobody holds")
+                                                delay(500)
+                                            }
                                             loaded.add(conversation.sessionId)
                                             promptsSent = 0
                                             opened.send(

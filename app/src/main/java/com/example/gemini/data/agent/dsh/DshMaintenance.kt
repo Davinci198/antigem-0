@@ -41,6 +41,37 @@ object DshMaintenance {
     }
 
     /**
+     * Removes a `session.lock` that no live harness holds.
+     *
+     * The store marks a session as in use with this empty file, and a harness that is killed — or stopped by the app
+     * while nobody is looking at the page — leaves it behind. A stale lock is why a conversation then answers "already
+     * exists" for ever and the only way past it was to start a new chat. The test is the lock itself: if it can be taken
+     * exclusively, nobody owns it.
+     */
+    fun clearStaleSessionLock(context: Context, sessionId: String): Boolean {
+        if (sessionId.isBlank()) return false
+        val root = File(rootfs(context), DshGuestPaths.DSH_HOME.trimStart('/') + "/sessions")
+        if (!root.isDirectory) return false
+        var cleared = false
+        root.listFiles().orEmpty().filter { it.isDirectory }.forEach { workspace ->
+            val lock = File(File(workspace, sessionId), "session.lock")
+            if (!lock.isFile) return@forEach
+            val free = runCatching {
+                java.io.RandomAccessFile(lock, "rw").use { raf ->
+                    val held = raf.channel.tryLock()
+                    try {
+                        held != null
+                    } finally {
+                        runCatching { held?.release() }
+                    }
+                }
+            }.getOrDefault(false)
+            if (free && runCatching { lock.delete() }.getOrDefault(false)) cleared = true
+        }
+        return cleared
+    }
+
+    /**
      * Deletes session folders the harness created and never used.
      *
      * A folder with no messages is not a conversation: it appears when a session is opened and closed again, and it is
