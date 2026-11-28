@@ -120,4 +120,76 @@ class DshProfilePatchTest {
         assertEquals(onDisk, DshProfilePatch.ensurePreset(onDisk, "nvidia", "NVIDIA_API_KEY", "minimaxai/minimax-m3.1-flash"))
         assertEquals("", DshProfilePatch.ensurePreset("", "", "NVIDIA_API_KEY"))
     }
+
+    @Test
+    fun `the placeholder above an entry is dropped, not left to break the yaml`() {
+        // What the previous build wrote: DSH's comment header, the empty array, then the entry below it.
+        val broken = """
+            # Your patch layer for this dsh profile, applied after every bundle layer:
+            []
+            - id: llm-pi-ai
+              config:
+                providers:
+                  nvidia:
+                    apiKeyEnv: NVIDIA_API_KEY
+        """.trimIndent()
+        val fixed = DshProfilePatch.normalizePatch(broken)
+        assertTrue("no bare [] left", fixed.lines().none { it.trim() == "[]" })
+        assertEquals(listOf("nvidia"), DshConfigParser.llmProviders(fixed).map { it.id })
+        // A file that is only the placeholder keeps it: dsh needs a top-level array to boot.
+        assertEquals("[]\n", DshProfilePatch.normalizePatch("[]\n"))
+    }
+
+    @Test
+    fun `an entry appended to the comment header does not leave the empty array behind`() {
+        val header = "# Your patch layer for this dsh profile\n# a top-level YAML array\n[]\n"
+        val next = DshProfilePatch.ensurePreset(header, "nvidia", "NVIDIA_API_KEY", "x/y")
+        assertTrue(next.lines().none { it.trim() == "[]" })
+        assertEquals(2, next.lines().count { it.trimStart().startsWith("#") })
+        assertEquals(listOf("nvidia"), DshConfigParser.llmProviders(next).map { it.id })
+    }
+
+    @Test
+    fun `a provider the harness does not know carries its api and endpoint`() {
+        // Anything added through the harness' own Models page (a free-pi route, say) is invisible to the installed
+        // catalogue, so the entry has to spell out the wire protocol.
+        val entry = DshProfilePatch.presetEntry(
+            provider = "inception",
+            apiKeyEnv = "INCEPTION_API_KEY",
+            model = "mercury-3",
+            api = "openai-completions",
+            baseUrl = "https://api.example.test/v1",
+        )
+        assertTrue(entry.contains("api: openai-completions"))
+        assertTrue(entry.contains("baseURL: https://api.example.test/v1"))
+        val parsed = DshConfigParser.llmProviders(entry).single()
+        assertEquals("inception", parsed.id)
+        assertEquals("openai-completions", parsed.api)
+    }
+
+    @Test
+    fun `rewriting the sdk patch replaces a stale entry instead of stacking on it`() {
+        // What an earlier build left: a key variable and a model, but no api — which failed every turn.
+        val stale = """
+            # Your patch layer for this dsh profile, applied after every bundle layer:
+            - id: llm-pi-ai
+              config:
+                providers:
+                  inception:
+                    apiKeyEnv: INCEPTION_API_KEY
+                    models:
+                      - id: mercury-3
+                        maxTokens: 8192
+        """.trimIndent()
+        val fixed = DshProfilePatch.rewriteFor(
+            existing = stale,
+            provider = "inception",
+            apiKeyEnv = "INCEPTION_API_KEY",
+            model = "mercury-3",
+            api = "openai-completions",
+        )
+        assertEquals(1, DshConfigParser.llmProviders(fixed).size)
+        assertEquals("openai-completions", DshConfigParser.llmProviders(fixed).single().api)
+        assertEquals(1, fixed.lines().count { it.trimStart().startsWith("#") })
+    }
 }
