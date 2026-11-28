@@ -72,7 +72,8 @@ class DshBundleContractTest {
     fun `the plugin's own tools are the first row`() {
         val generated = rows(DshProfilePatch.mcpClients(8767, "device-id", "bridge-key", null))
         assertEquals("antigem", generated.keys.first())
-        assertEquals("/antigem", generated["antigem"]!!.first)
+        // The parser keeps the route without its slash, which is what the two descriptions are compared on.
+        assertEquals("antigem", generated["antigem"]!!.first)
     }
 
     @Test
