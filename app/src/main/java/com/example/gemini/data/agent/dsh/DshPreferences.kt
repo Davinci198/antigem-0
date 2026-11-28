@@ -105,7 +105,6 @@ class DshPreferences(context: Context) {
         private const val KEY_CUSTOM_NAME = "custom_name"
         private const val KEY_CUSTOM_API = "custom_api"
         private const val KEY_CUSTOM_BASE_URL = "custom_base_url"
-        private const val KEY_FULL_ACCESS = "full_access"
 
         /** DSH's own provider; its credentials service picks the key out of the environment. */
         const val DEFAULT_PROVIDER = "deepseek-official"
