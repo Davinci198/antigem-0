@@ -180,7 +180,7 @@ object DshWebServer {
                 environment = mapOf(
                     "NARB_DISABLE_NATIVE_CACHE" to "1",
                     "DSH_HOME" to DshGuestPaths.DSH_HOME,
-                ),
+                ) + DshPreferences(context).bridgeEnvironment(),
             )
             log("[dsh-web] dsh web spawned; waiting for its URL...")
             DshWebServerInstance(process, CoroutineScope(SupervisorJob() + Dispatchers.IO))

@@ -192,4 +192,24 @@ class DshProfilePatchTest {
         assertEquals("openai-completions", DshConfigParser.llmProviders(fixed).single().api)
         assertEquals(1, fixed.lines().count { it.trimStart().startsWith("#") })
     }
+
+    @Test
+    fun `the app's MCP servers ride along with the route`() {
+        val patch = DshProfilePatch.rewriteFor(
+            existing = "",
+            provider = "nvidia",
+            apiKeyEnv = "NVIDIA_API_KEY",
+            model = "nvidia/x",
+            mcpPort = 8767,
+            deviceId = "abc123",
+        )
+        assertTrue(patch.contains("name: '@deepseek-ai/dsh-mcp-client'"))
+        assertTrue(patch.contains("url: 'http://127.0.0.1:8767/browser'"))
+        assertTrue(patch.contains("X-Device-Id: 'abc123'"))
+        assertTrue(patch.contains("/extension_developer"))
+        assertEquals(7, patch.lines().count { it.trimStart().startsWith("- id: antigem-mcp-") })
+        // Without a bridge there are no rows at all: a session started outside the app must still boot.
+        val bare = DshProfilePatch.rewriteFor("", "nvidia", "NVIDIA_API_KEY", "x")
+        assertTrue(!bare.contains("dsh-mcp-client"))
+    }
 }

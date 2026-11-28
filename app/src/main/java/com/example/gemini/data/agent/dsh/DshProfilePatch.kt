@@ -74,10 +74,52 @@ internal object DshProfilePatch {
         maxTokens: Int = DEFAULT_MAX_TOKENS,
         api: String? = null,
         baseUrl: String? = null,
+        mcpPort: Int? = null,
+        deviceId: String? = null,
     ): String {
         val header = existing.lines().filter { it.trimStart().startsWith("#") }.joinToString("\n")
         val entry = presetEntry(provider, apiKeyEnv, model, maxTokens, api, baseUrl)
-        return listOf(header, entry).filter { it.isNotBlank() }.joinToString("\n") + "\n"
+        val mcp = mcpClients(mcpPort, deviceId)
+        return listOf(header, entry, mcp).filter { it.isNotBlank() }.joinToString("\n") + "\n"
+    }
+
+    /**
+     * The app's own MCP servers, handed to the harness session.
+     *
+     * Same rows the `dsh-plugins/antigem-native` bundle declares, written out here with the port and the device id the
+     * app actually has: the bridge binds whatever port is free, and its `X-Device-Id` check compares against the value
+     * only the app can read. Without a port the rows are skipped entirely, so a session started without the bridge
+     * still boots.
+     */
+    fun mcpClients(port: Int?, deviceId: String?): String {
+        if (port == null || port <= 0) return ""
+        val id = deviceId.orEmpty()
+        val servers = listOf(
+            Triple("browser", "/browser", 120_000),
+            Triple("terminal", "/terminal", 120_000),
+            Triple("google_flow", "/google_flow", 180_000),
+            Triple("custom_plugin_developer", "/extension_developer", 120_000),
+            Triple("android_automation", "/android", 180_000),
+            Triple("notes", "/notes", 120_000),
+            Triple("theme", "/theme", 120_000),
+        )
+        return buildString {
+            appendLine("- insert:")
+            servers.forEach { (name, path, timeout) ->
+                appendLine("    - id: antigem-mcp-${name.replace('_', '-')}")
+                appendLine("      name: '@deepseek-ai/dsh-mcp-client'")
+                appendLine("      config:")
+                appendLine("        serverName: $name")
+                appendLine("        transport: streamable-http")
+                appendLine("        url: 'http://127.0.0.1:$port$path'")
+                appendLine("        headers:")
+                appendLine("          X-Device-Id: '$id'")
+                appendLine("        toolCallTimeoutMs: $timeout")
+                appendLine("        startupTimeoutMs: 15000")
+                // One server failing to start must not take the session down with it.
+                appendLine("        failOnStartupError: false")
+            }
+        }.trimEnd('\n')
     }
 
     fun ensurePreset(

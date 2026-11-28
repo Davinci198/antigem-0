@@ -13,6 +13,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -272,6 +274,27 @@ fun DshWebScreen(
                         .weight(1f)
                         .padding(start = 12.dp)
                 )
+                val prefs = remember { com.example.gemini.data.agent.dsh.DshPreferences(context) }
+                val fullAccess by prefs.fullAccess.collectAsState()
+                IconButton(onClick = {
+                    // A running harness keeps the mode it booted with, so this is a setting for the next start rather
+                    // than a live change; the restart button sits one icon away.
+                    prefs.setFullAccess(!fullAccess)
+                    com.example.gemini.ui.components.AppToastHelper.showToast(
+                        if (fullAccess) {
+                            "Workspace-only again. Restart the harness for it to apply."
+                        } else {
+                            "Full access on. Restart the harness for it to apply."
+                        },
+                        com.example.gemini.ui.components.ChatToastType.INFO
+                    )
+                }) {
+                    Icon(
+                        imageVector = if (fullAccess) Icons.Outlined.LockOpen else Icons.Outlined.Lock,
+                        contentDescription = if (fullAccess) "Full access on" else "Workspace only",
+                        tint = if (fullAccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 IconButton(onClick = onMinimize) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,

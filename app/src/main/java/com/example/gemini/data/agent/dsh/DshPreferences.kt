@@ -15,7 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class DshPreferences(context: Context) {
 
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private val _host = MutableStateFlow(readHost())
     /** Which host runs the session: PROOT (in-app) or BRIDGE (bridge-owned). */
@@ -28,6 +29,39 @@ class DshPreferences(context: Context) {
         prefs.edit().putString(KEY_HOST, kind.name).apply()
         _host.value = kind
     }
+
+    private val _fullAccess = MutableStateFlow(prefs.getBoolean(KEY_FULL_ACCESS, false))
+
+    /**
+     * Whether a launch may step outside the workspace (`danger-full-access`) or must stay inside it.
+     *
+     * Off by default: everything the harness needs for this app happens inside the chat's own folder, and full access
+     * is the kind of switch that should be a deliberate choice rather than an inheritance from a previous install.
+     */
+    val fullAccess: StateFlow<Boolean> = _fullAccess.asStateFlow()
+
+    fun setFullAccess(on: Boolean) {
+        prefs.edit().putBoolean(KEY_FULL_ACCESS, on).apply()
+        _fullAccess.value = on
+    }
+
+    /**
+     * What the harness bundle (`dsh-plugins/antigem-native`) reads to reach the app's own MCP bridge.
+     *
+     * The port is whatever the bridge actually bound (it falls back to the next free one), and the id is the same
+     * value its `X-Device-Id` check compares against, so neither can be written down ahead of time.
+     */
+    fun bridgeEnvironment(): Map<String, String> = buildMap {
+        val port = com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.boundPort
+        if (port > 0) put("ANTIGEM_MCP_PORT", port.toString())
+        val deviceId = runCatching {
+            android.provider.Settings.Secure.getString(appContext.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        }.getOrNull().orEmpty()
+        if (deviceId.isNotBlank()) put("ANTIGEM_DEVICE_ID", deviceId)
+        if (fullAccess.value) put("ANTIGEM_FULL_ACCESS", "1")
+        put("DSH_PERMISSION_MODE", if (fullAccess.value) "danger-full-access" else "workspace-write")
+    }
+
 
     /** Saves a route. The key is never logged and never leaves the device except as a guest env var. */
     fun setRoute(route: DshModelRoute) {
@@ -73,6 +107,7 @@ class DshPreferences(context: Context) {
     companion object {
         private const val PREFS = "dsh_prefs"
         private const val KEY_HOST = "host"
+        private const val KEY_FULL_ACCESS = "full_access"
         private const val KEY_PROVIDER = "provider"
         private const val KEY_MODEL = "model"
         private const val KEY_API_KEY = "api_key"

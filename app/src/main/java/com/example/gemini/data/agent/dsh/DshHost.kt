@@ -147,8 +147,10 @@ class ProotDshHost(
         val environment = linkedMapOf(
             "NARB_DISABLE_NATIVE_CACHE" to "1",
             "DSH_HOME" to DshGuestPaths.DSH_HOME,
-            "DSH_PERMISSION_MODE" to "workspace-write",
         )
+        // The bridge port, the device id and the access switch the bundle in `dsh-plugins/antigem-native` reads; without
+        // them the bundle's MCP rows stay disabled and the session keeps the workspace-only sandbox.
+        environment.putAll(DshPreferences(context).bridgeEnvironment())
         environment.putAll(request.environment)
         // DSH guests refuse an empty key variable even when the endpoint behind the
         // route wants no Authorization header at all (Kilo's free pool, a local
@@ -280,6 +282,8 @@ class ProotDshHost(
         // What the provider needs to be declared at all: a harness preset brings its own adapter and endpoint, while
         // anything the user added through the harness' Models page only exists in the web profile — copy its api and
         // endpoint over, or the sdk route answers "needs an api; the installed catalog does not describe it".
+        // The bridge port and the device id, so the session gets the app's own MCP servers (see mcpClients).
+        val bridgeEnv = runCatching { DshPreferences(context).bridgeEnvironment() }.getOrDefault(emptyMap())
         val elsewhere = declaredProvider(home, route.provider)
         val known = DshConfigParser.preset(route.provider)
         val api = elsewhere?.api ?: if (known == null) DshConfigParser.DEFAULT_API else null
@@ -297,6 +301,8 @@ class ProotDshHost(
                 model = route.model,
                 api = api,
                 baseUrl = baseUrl,
+                mcpPort = bridgeEnv["ANTIGEM_MCP_PORT"]?.toIntOrNull(),
+                deviceId = bridgeEnv["ANTIGEM_DEVICE_ID"],
             )
         }
         if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
