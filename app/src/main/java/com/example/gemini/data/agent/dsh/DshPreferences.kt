@@ -15,7 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class DshPreferences(context: Context) {
 
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private val _host = MutableStateFlow(readHost())
     /** Which host runs the session: PROOT (in-app) or BRIDGE (bridge-owned). */
@@ -52,6 +53,8 @@ class DshPreferences(context: Context) {
         prefs.edit().putString(KEY_HOST, kind.name).apply()
         _host.value = kind
     }
+
+    private val _fullAccess = MutableStateFlow(prefs.getBoolean(KEY_FULL_ACCESS, false))
 
     /** Saves a route. The key is never logged and never leaves the device except as a guest env var. */
     fun setRoute(route: DshModelRoute) {
@@ -97,6 +100,7 @@ class DshPreferences(context: Context) {
     companion object {
         private const val PREFS = "dsh_prefs"
         private const val KEY_HOST = "host"
+        private const val KEY_FULL_ACCESS = "full_access"
         private const val KEY_PROVIDER = "provider"
         private const val KEY_MODEL = "model"
         private const val KEY_API_KEY = "api_key"
