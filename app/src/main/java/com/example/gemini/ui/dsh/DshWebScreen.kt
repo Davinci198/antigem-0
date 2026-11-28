@@ -139,7 +139,9 @@ fun DshWebScreen(
     // spawn another `dsh web`. Restarting is the user's decision (the refresh
     // action in the top bar), never a side effect of closing the overlay.
     LaunchedEffect(isVisible, restartRequested) {
-        if (!isVisible) return@LaunchedEffect
+        // Leaving the page rebuilds the chat list: whatever the page started or renamed is already on disk, and half of
+        // a shared session that never appears in the other surface is the complaint that started this.
+        if (!isVisible) { com.example.gemini.data.agent.dsh.DshSessionOwner.refreshNow(); return@LaunchedEffect }
         // Opening the page is a decision to run the harness, whatever the last stop said.
         com.example.gemini.data.local.ContainerHold.release()
         startFailed = false
@@ -147,6 +149,10 @@ fun DshWebScreen(
         // effect, drop the started instance, and leave a live harness nobody was attached to;
         // the page then never loaded until the next visit.
         val started = withContext(NonCancellable + Dispatchers.IO) {
+            // The chat keeps the process it booted; the harness lets one client own a session, so hand it over here
+            // before the page's own harness starts, or every continuation reads "the session is owned by another
+            // client".
+            com.example.gemini.data.agent.dsh.DshSessionOwner.releaseNow()
             DshWebServer.start(context) { line -> Log.d(TAG, line) }
         }
         if (started == null) {

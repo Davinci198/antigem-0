@@ -55,6 +55,13 @@ class DshChatBackend(
 
     override val kind = AgentKind.DEEPSEEK_HARNESS
 
+    init {
+        // The web page boots a second harness on the same sessions and can only take one over once this side has let
+        // go; the screen asks through the holder instead of reaching into the backend.
+        DshSessionOwner.register { dropWarm() }
+        DshSessionOwner.registerRefresh { importSessionsFromDisk() }
+    }
+
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     override val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
     override val currentConversation: StateFlow<Conversation?> = store.currentConversation.asStateFlow()
@@ -550,6 +557,9 @@ class DshChatBackend(
             val kept = warm?.takeIf {
                 it.conversationId == conversation.id && it.route == route && it.workspace == workspace
             }
+            // Taking the session means the web page has to let go of it: the harness keeps one owner per session and
+            // answers "owned by another client" otherwise, which is what a continuation from the page used to hit.
+            if (kept == null) DshWebServer.stopNow()
             val opened = kept?.session ?: host.open(
                 DshSessionRequest(
                     setupId = conversation.sessionId,
