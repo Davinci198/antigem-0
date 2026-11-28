@@ -22,4 +22,8 @@
     <string name="dsh_web_stopped_message">DeepSeek Harness stopped before its page could load. If this keeps happening, allow unrestricted battery use for this app: Android suspends it in the background, which takes the harness down with it.</string>
     <string name="dsh_web_retry">Start it again</string>
     <string name="dsh_web_missing_message">DeepSeek Harness is not installed in the container yet, so it cannot start. It is being installed now — that takes a few minutes; press Start it again when it finishes.</string>
+    <string name="dsh_full_access_enable">Allow full access to the container (tap to enable; takes effect after a restart)</string>
+    <string name="dsh_full_access_disable">Full access to the container is on (tap to go back to the workspace only)</string>
+    <string name="dsh_full_access_on">Full access on. Restart the harness with the refresh button to apply it.</string>
+    <string name="dsh_full_access_off">Back to workspace-only access. Restart the harness with the refresh button to apply it.</string>
 </resources>

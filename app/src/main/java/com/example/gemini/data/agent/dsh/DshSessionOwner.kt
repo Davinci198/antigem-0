@@ -1,0 +1,66 @@
+package com.example.gemini.data.agent.dsh
+
+import java.util.concurrent.atomic.AtomicReference
+
+/**
+ * One harness session has one owner at a time, and the app has two surfaces that want it.
+ *
+ * The chat holds the process it booted (that is what makes a second message fast), and the web page boots its own
+ * profile; whichever takes a conversation while the other still has it is told the session "is owned by another
+ * client". So the two take turns: a surface about to open a session first asks the other to let go, through this
+ * holder. It is a lambda rather than a reference to the backend because the backend belongs to a V
+ * [androidx.lifecycle.ViewModel] and outlives neither the screen nor the process.
+ */
+object DshSessionOwner {
+
+    private val release = AtomicReference<() -> Unit>({})
+    private val refresh = AtomicReference<() -> Unit>({})
+    private val pageRelease = AtomicReference<() -> Unit>({})
+
+    /**
+     * Whether the user is looking at the DSH page right now.
+     *
+     * The page's harness stays up once it has been opened, so "the page is running" is not the same question as "the
+     * page is in front of the user" — and only the second one justifies giving up the warm session after a chat turn.
+     * Deciding on the first cost a full harness boot on every message once the page had ever been opened.
+     */
+    @Volatile
+    var pageVisible: Boolean = false
+
+    /** Called by the chat backend when it is created, so the web page can ask it to let go. */
+    fun register(action: () -> Unit) {
+        release.set(action)
+    }
+
+    /** Asks whoever holds a session right now to close it. Safe to call when nothing is held. */
+    fun releaseNow() {
+        runCatching { release.get().invoke() }
+    }
+
+    /**
+     * The opposite direction: a session started or renamed in the page is already on disk, so the chat list is rebuilt
+     * from it. Registered separately because a page visit is not an app foreground and would otherwise stay invisible
+     * until the next launch.
+     */
+    fun registerRefresh(action: () -> Unit) {
+        refresh.set(action)
+    }
+
+    fun refreshNow() {
+        runCatching { refresh.get().invoke() }
+    }
+
+    /**
+     * The third direction: the page is sitting on a conversation the chat wants.
+     *
+     * Nothing is closed. The page is reloaded onto the same URL, which makes the harness release the session it had
+     * open, so the chat can take it and the page is still there when the user looks back.
+     */
+    fun registerPageRelease(action: () -> Unit) {
+        pageRelease.set(action)
+    }
+
+    fun releasePage() {
+        runCatching { pageRelease.get().invoke() }
+    }
+}

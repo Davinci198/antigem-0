@@ -322,3 +322,14 @@ val bundleExtensionDocs by tasks.registering(Sync::class) {
 }
 android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/extensionDocAssets").get().asFile)
 tasks.named("preBuild").configure { dependsOn(bundleExtensionDocs) }
+
+// The dsh-antigem plugin ships from its own directory, not a copy: the bundle in `dsh-plugins/` is the one a harness can
+// install by hand, and the app copies exactly those files into the profile it boots (see DshPluginInstaller).
+val bundleDshPlugin by tasks.registering(Sync::class) {
+    from(rootProject.file("dsh-plugins/dsh-antigem")) {
+        exclude("**/node_modules/**", "**/.storage/**")
+    }
+    into(layout.buildDirectory.dir("generated/dshPluginAssets/dsh-antigem"))
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/dshPluginAssets").get().asFile)
+tasks.named("preBuild").configure { dependsOn(bundleDshPlugin) }

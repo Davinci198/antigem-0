@@ -1853,7 +1853,9 @@ fun ChatScreen(
                         if (!isSlashActive) emptyList()
                         else if (slashQuery.startsWith("plu:", ignoreCase = true)) com.example.gemini.data.remote.PromptExpansion.pluginSuggestions(slashQuery.substring(4))
                         else {
-                            (com.example.gemini.data.remote.PromptExpansion.baseSlashItems() + effectiveSlashCommands).filter { item ->
+                            (com.example.gemini.data.remote.PromptExpansion.baseSlashItems() +
+                                effectiveSlashCommands +
+                                if (isDshChat) dshSlashItems else emptyList()).filter { item ->
                                 slashQuery.isBlank() ||
                                 item.name.contains(slashQuery, ignoreCase = true) ||
                                 item.command.removePrefix("/").contains(slashQuery, ignoreCase = true) ||
@@ -3162,6 +3164,39 @@ fun ChatToastBanner(
 
 enum class MessageActionType { EDIT, RETRY }
 data class PendingMessageAction(val type: MessageActionType, val message: ChatMessage)
+
+/**
+ * The commands DeepSeek Harness registers itself. Everything else that starts with `/` reaches it as prose, so the chat
+ * suggests exactly these four instead of the app's own list.
+ */
+private val dshSlashItems = listOf(
+    com.example.gemini.data.remote.SlashCommandItem(
+        name = "compact",
+        command = "/compact",
+        description = "Fold the conversation so far into a summary",
+        type = "command"
+    ),
+    com.example.gemini.data.remote.SlashCommandItem(
+        name = "permission",
+        command = "/permission",
+        description = "Change what this session may do without asking",
+        type = "command",
+        argumentHint = "[mode]"
+    ),
+    com.example.gemini.data.remote.SlashCommandItem(
+        name = "plan",
+        command = "/plan",
+        description = "Work out a plan before touching anything",
+        type = "command"
+    ),
+    com.example.gemini.data.remote.SlashCommandItem(
+        name = "goal",
+        command = "/goal",
+        description = "Say what this session is trying to achieve",
+        type = "command",
+        argumentHint = "[goal]"
+    ),
+)
 
 private fun flattenFileNodes(nodes: List<com.example.gemini.data.daemon.FileNode>): List<com.example.gemini.data.daemon.FileNode> {
     val result = mutableListOf<com.example.gemini.data.daemon.FileNode>()

@@ -11,4 +11,8 @@
     <string name="dsh_web_stopped_message">DeepSeek Harness s-a oprit înainte să-și încarce pagina. Dacă se repetă, permite consum nelimitat în fundal pentru această aplicație: Android o suspendă în background, iar harness-ul moare odată cu ea.</string>
     <string name="dsh_web_retry">Pornește-l din nou</string>
     <string name="dsh_web_missing_message">DeepSeek Harness nu este încă instalat în container, deci nu poate porni. Se instalează acum — durează câteva minute; apasă „Pornește-l din nou" când termină.</string>
+    <string name="dsh_full_access_enable">Permite acces complet la container (apasă pentru a activa; se aplică după repornire)</string>
+    <string name="dsh_full_access_disable">Accesul complet la container este pornit (apasă pentru a reveni doar la workspace)</string>
+    <string name="dsh_full_access_on">Acces complet pornit. Repornește harness-ul din butonul de refresh ca să se aplice.</string>
+    <string name="dsh_full_access_off">Înapoi la acces doar în workspace. Repornește harness-ul din butonul de refresh ca să se aplice.</string>
 </resources>

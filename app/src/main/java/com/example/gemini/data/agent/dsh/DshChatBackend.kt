@@ -21,8 +21,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
@@ -32,6 +34,7 @@ import kotlinx.serialization.json.put
 import java.io.File
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * DeepSeek Harness chats.
@@ -53,6 +56,15 @@ class DshChatBackend(
 ) : AgentChatBackend {
 
     override val kind = AgentKind.DEEPSEEK_HARNESS
+
+    init {
+        // The web page boots a second harness on the same sessions and can only take one over once this side has let
+        // go; the screen asks through the holder instead of reaching into the backend. It has to be the blocking close:
+        // the page's first message arrives within a second or two of the page loading, and a close that only starts in
+        // a coroutine leaves the claim in place long enough for the harness to refuse that message.
+        DshSessionOwner.register { closeWarmNow() }
+        DshSessionOwner.registerRefresh { importSessionsFromDisk() }
+    }
 
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     override val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
@@ -98,6 +110,12 @@ class DshChatBackend(
     /** Sessions this process already holds open, so no turn pays for a resume the harness refuses. */
     private val loaded = Collections.synchronizedSet(mutableSetOf<String>())
 
+    /**
+     * Guard for the container import. The foreground pass and the launch pass can overlap, and each
+     * one lists the same directory and rewrites the chat list, so only one may run.
+     */
+    private val importing = AtomicBoolean(false)
+
     private class WarmSession(
         val conversationId: String,
         val route: DshModelRoute,
@@ -123,35 +141,41 @@ class DshChatBackend(
      * started in the harness web page, or from before a reinstall — is listed and can be continued.
      */
     private fun importSessionsFromDisk() {
+        if (!importing.compareAndSet(false, true)) return
         backendScope.launch {
-            adoptWorkspacesFromDisk()
-            val disk = runCatching { DshDiskSessions.list(application) }.getOrDefault(emptyList())
-            if (disk.isEmpty()) return@launch
-            // A folder with neither a title nor a finished turn is an empty shell from dsh itself.
-            val usable = disk.filter { it.title != null || it.turns > 0 }
-            val known = _conversations.value.map { it.sessionId }.toSet()
-            val deleted = forgotten()
-            val imported = usable.filter { it.id !in known && it.id !in deleted }.map { session ->
-                Conversation(
-                    // Without this the chat is saved as an AGY conversation and disappears on restore.
-                    agent = AgentKind.DEEPSEEK_HARNESS,
-                    id = session.id,
-                    title = cleanTitle(session.title).ifBlank { "DeepSeek Harness chat" },
-                    modelId = session.model.orEmpty(),
-                    sessionId = session.id,
-                    createdAt = session.updatedAt,
-                    updatedAt = session.updatedAt,
-                    hasActivity = session.turns > 0,
-                    stepCount = session.turns,
-                    // Kept from the harness: a chat started in /root/workspace does not exist in
-                    // /root/chat, and prompting the wrong directory starts a new empty session.
-                    workspaceUri = session.workspace.orEmpty(),
-                )
+            try {
+                adoptWorkspacesFromDisk()
+                val disk = runCatching { DshDiskSessions.list(application) }.getOrDefault(emptyList())
+                if (disk.isEmpty()) return@launch
+                // A folder with neither a title nor a finished turn is an empty shell from dsh itself.
+                val usable = disk.filter { it.title != null || it.turns > 0 }
+                val known = _conversations.value.map { it.sessionId }.toSet()
+                val deleted = forgotten()
+                val imported = usable.filter { it.id !in known && it.id !in deleted }.map { session ->
+                    Conversation(
+                        // Without this the chat is saved as an AGY conversation and disappears on restore.
+                        agent = AgentKind.DEEPSEEK_HARNESS,
+                        id = session.id,
+                        title = cleanTitle(session.title).ifBlank { "DeepSeek Harness chat" },
+                        modelId = session.model.orEmpty(),
+                        sessionId = session.id,
+                        createdAt = session.updatedAt,
+                        updatedAt = session.updatedAt,
+                        hasActivity = session.turns > 0,
+                        stepCount = session.turns,
+                        // Kept from the harness: a session the harness filed under another directory
+                        // does not exist in the shared workspace, and prompting the wrong one starts
+                        // a new empty session instead of continuing the old one.
+                        workspaceUri = session.workspace.orEmpty(),
+                    )
+                }
+                if (imported.isEmpty()) return@launch
+                _conversations.value = (_conversations.value + imported).sortedByDescending { it.updatedAt }
+                persistConversations()
+                Log.i(TAG, "imported ${imported.size} dsh session(s) from the container")
+            } finally {
+                importing.set(false)
             }
-            if (imported.isEmpty()) return@launch
-            _conversations.value = (_conversations.value + imported).sortedByDescending { it.updatedAt }
-            persistConversations()
-            Log.i(TAG, "imported ${imported.size} dsh session(s) from the container")
         }
     }
 
@@ -210,6 +234,11 @@ class DshChatBackend(
     override fun onAppForegrounded() {
         refreshInstallState()
         refreshModels()
+        // A chat carried on in DSH's own web page — or in a terminal inside the container — is
+        // written to the same store this app reads, but `start()` is the only other place that
+        // looks: without this, coming back to the app left it invisible until the next launch.
+        // Guarded so a foreground that changed nothing costs one directory listing.
+        if (!importing.get()) importSessionsFromDisk()
     }
 
     fun detach() {
@@ -234,10 +263,13 @@ class DshChatBackend(
     override fun startNewChat() {
         detach()
         val id = UUID.randomUUID().toString()
-        // Its own folder from the first message, created now: `/root/chat` (WORKSPACE) is shared, and two chats
-        // writing in the same directory is how one chat's files end up in another.
-        val workspace = com.example.gemini.data.workspace.ChatWorkspace.guestPath(id)
-        runCatching { com.example.gemini.data.workspace.ChatWorkspace.ensure(application, id) }
+        // One directory for every DSH chat: the harness files a session under the directory it ran
+        // in, so a shared workspace is what makes all of them appear together — one folder to open
+        // in DSH's own web page, and every chat in it reachable from here. Unlike the per-chat
+        // folders the other agents use, this one is deliberately common: it is the workspace, not
+        // the chat, that the harness treats as the unit of storage.
+        val workspace = DshGuestPaths.SHARED_WORKSPACE
+        ensureSharedWorkspace()
         val conversation = Conversation(
             id = id,
             sessionId = UUID.randomUUID().toString(),
@@ -248,6 +280,26 @@ class DshChatBackend(
         _conversations.value = _conversations.value + conversation
         store.currentConversation.value = conversation
         persistConversations()
+    }
+
+    /**
+     * What the bundle reads out of the guest's environment on every boot. Shared with the web
+     * surface, so the tools and the sandbox mode do not depend on which one opened the session.
+     */
+    private fun guestEnvironment(): Map<String, String> =
+        DshGuestEnvironment.of(application, prefs.fullAccessNow())
+
+    /**
+     * Creates the shared workspace inside the container before the first turn, so the harness finds
+     * it instead of having to create it and the chat has a stable path from the moment it exists.
+     */
+    private fun ensureSharedWorkspace() {
+        runCatching {
+            // The container root holds the guest's filesystem, so a guest path maps to it directly —
+            // the same mapping `ProotDshHost` uses for the workspace it is asked to run in.
+            val rootfs = com.example.gemini.data.local.LocalEnvironmentManager.getUbuntuRootDir(application)
+            File(rootfs, DshGuestPaths.SHARED_WORKSPACE.trimStart('/')).let { if (!it.isDirectory) it.mkdirs() }
+        }
     }
 
     override fun selectConversation(id: String) {
@@ -450,6 +502,24 @@ class DshChatBackend(
     }
 
     /**
+     * The same shut-down, but finished before it returns.
+     *
+     * The harness hands out one claim per session across processes, and the claim is released by the close itself — not
+     * by dropping our reference to it. The page's first message arrives a second or two after it loads, so the close has
+     * to have happened by then.
+     */
+    fun closeWarmNow() {
+        val kept = warm ?: return
+        Log.i(TAG, "dropWarm: closing the kept session (waiting for it)")
+        warm = null
+        loaded.clear()
+        if (activeSession === kept.session) activeSession = null
+        runBlocking {
+            withTimeoutOrNull(8_000) { runCatching { kept.session.close() } }
+        }
+    }
+
+    /**
      * Shuts down the process of a turn that must not be kept: a dead one, or one that belongs to a
      * conversation this backend no longer serves. The harness is asked to shut down before the pipe
      * closes, so the guest exits on its own terms instead of being killed under proot.
@@ -503,16 +573,21 @@ class DshChatBackend(
             // and a model probe, and that price was paid on every message. The SDK accepts repeated
             // initialize/prompt frames on one process, so an existing one is kept and reused.
             // A chat carries the directory the harness ran it in: sessions are filed per workspace, so
-            // an imported chat only resumes under the directory it was created in.
-            val workspace = conversation.workspaceUri.takeIf { it.startsWith("/") } ?: WORKSPACE
+            // an imported chat only resumes under the directory it was created in. A chat with none
+            // falls back to the shared workspace, which is where this app starts every new one.
+            val workspace = conversation.workspaceUri.takeIf { it.startsWith("/") } ?: DshGuestPaths.SHARED_WORKSPACE
             val kept = warm?.takeIf {
                 it.conversationId == conversation.id && it.route == route && it.workspace == workspace
             }
+            // Taking the session means the page has to let go of it, and the harness enforces that itself. The page is
+            // deliberately left running: killing its harness to win the race closed the user's page under them, which
+            // is worse than an honest message (see friendlyError).
             val opened = kept?.session ?: host.open(
                 DshSessionRequest(
                     setupId = conversation.sessionId,
                     workspace = workspace,
                     route = route,
+                    environment = guestEnvironment(),
                 ),
             ).also { warm = WarmSession(conversation.id, route, workspace, it) }
             // Held in a `val`: the turn's lambdas capture it, so a `var` would stop
@@ -528,11 +603,22 @@ class DshChatBackend(
                 // A lambda, not a local `fun`: `send` suspends and a plain local function cannot call it.
                 var promptsSent = 0
                 var recoveries = 0
+                // Once per turn: the page is reloaded at most once, or a failing session would make it flash.
+                var pageReleased = false
                 val promptOnce: suspend () -> Unit = {
                     if (promptsSent == 0) {
                         promptsSent = 1
                         opened.send(
-                            DshProtocol.promptFrame(sessionId = parser.sessionIdInUse, text = prompt),
+                            // A `/`-line is the harness's own input syntax, not prose: `session/query`
+                            // hands it to the command table, so `/compact`, `/permission`, `/plan` and
+                            // `/goal` change the session instead of being read out to the model.
+                            // Anything else is an ordinary prompt, and the SDK's own query path falls
+                            // back to exactly the same prompt handling for it.
+                            if (isCommandLine(prompt)) {
+                                DshProtocol.queryFrame(sessionId = parser.sessionIdInUse, text = prompt)
+                            } else {
+                                DshProtocol.promptFrame(sessionId = parser.sessionIdInUse, text = prompt)
+                            },
                         )
                     }
                 }
@@ -580,6 +666,19 @@ class DshChatBackend(
                                         }
                                     }
                                     DshEvent.PromptAccepted -> promptOnce()
+                                    // A command is already running; the receipt settles on the
+                                    // completion notification instead of `turn/end`.
+                                    DshEvent.CommandAccepted -> Log.i(TAG, "command accepted")
+                                    is DshEvent.CommandCompleted -> {
+                                        // The command's own text never streams, so it is the answer.
+                                        if (event.response.isNotBlank()) appendText(assistantId, event.response)
+                                        if (event.finishReason == "error") {
+                                            throw TurnFailed(
+                                                event.response.ifBlank { "DeepSeek Harness command failed" },
+                                            )
+                                        }
+                                        throw TurnFinished()
+                                    }
                                     is DshEvent.ServerRequest -> opened.send(
                                         when (event.method) {
                                             // The harness may ask before running something it was
@@ -613,13 +712,41 @@ class DshChatBackend(
                                         completeTool(assistantId, event.callId, event.name, event.summary)
                                     DshEvent.TurnCompleted -> throw TurnFinished()
                                     is DshEvent.Failed -> {
-                                        // The harness refuses to create a session whose id it still holds, which
-                                        // happens after a route change: the id came from the chat, and the process
-                                        // that owned it was replaced. Loading it and asking again is the answer, and
-                                        // it is tried twice before the turn is reported as failed.
-                                        if (event.message.contains("already exists", ignoreCase = true) && recoveries < 2) {
+                                        // Two ways the harness says "not yours": the process holds the id and refuses to
+                                        // create it again (`already exists`), or another client holds it outright. Both
+                                        // are answered by resuming, but only after the other side has let go — and the
+                                        // other side here is the page's own harness, which is asked to release the
+                                        // conversation by reloading it, once per turn.
+                                        val holdsIt = event.message.contains("already exists", ignoreCase = true) ||
+                                            event.message.contains("owned by another", ignoreCase = true)
+                                        if (holdsIt && recoveries < 3) {
                                             recoveries++
+                                            if (!pageReleased && DshWebServer.isRunning()) {
+                                                pageReleased = true
+                                                if (DshSessionOwner.pageVisible) {
+                                                    Log.i(TAG, "the page owns the session: asking it to release it")
+                                                    DshSessionOwner.releasePage()
+                                                    delay(2_500)
+                                                } else {
+                                                    // Nobody is looking at the page, so its harness has no claim worth
+                                                    // protecting: it is what holds the session, and stopping it is the
+                                                    // one action that frees the conversation without touching the user.
+                                                    Log.i(TAG, "an unseen page holds the session: stopping its harness")
+                                                    DshWebServer.stopNow()
+                                                    delay(1_500)
+                                                }
+                                            }
                                             Log.i(TAG, "the harness still holds the session: resuming it and asking again")
+                                            // A killed harness leaves its lock behind, and a stale lock is what keeps
+                                            // answering "already exists" long after the process is gone.
+                                            if (DshMaintenance.clearStaleSessionLock(
+                                                    application,
+                                                    conversation.sessionId,
+                                                )
+                                            ) {
+                                                Log.i(TAG, "cleared a session lock nobody holds")
+                                                delay(500)
+                                            }
                                             loaded.add(conversation.sessionId)
                                             promptsSent = 0
                                             opened.send(
@@ -700,6 +827,9 @@ class DshChatBackend(
             // its own terms instead of being killed under proot.
             if (warm?.session !== finished || endedCleanly != true) dropWarmIfOurs(finished)
             if (activeSession === session) activeSession = null
+            // Only while the user is actually on the page: the page's harness outlives the visit, and treating "it is
+            // running" as "it is in front" dropped the warm session after every turn, so each message paid a boot.
+            if (DshSessionOwner.pageVisible) closeWarmNow()
             finishStreaming()
         }
     }
@@ -744,6 +874,11 @@ class DshChatBackend(
             message.contains("credentials service", ignoreCase = true) ->
             "DeepSeek Harness has no key for this model's provider. Add one in Settings → Providers (or pick another " +
                 "model from the pill above) and send the message again.\n\n$message"
+        // One harness client per session: the page is open and has it. Said plainly, because the raw line reads like a
+        // crash and the remedy is a tap.
+        message.contains("owned by another", ignoreCase = true) ->
+            "This conversation is open in the DSH page. Go back to the page's chat list (or tap refresh there) and " +
+                "send again — the harness gives a session to one client at a time.\n\n$message"
         else -> message
     }
 
@@ -892,6 +1027,16 @@ class DshChatBackend(
         // '<antigem-expansion …' in every chat.
         cleanTitle(content).trim().replace(Regex("\\s+"), " ").take(48).ifBlank { NEW_CHAT_TITLE }
 
+    /**
+     * True when the text is the harness's own command syntax: a `/` as the very first character.
+     *
+     * The harness only recognises the four commands it registers natively (`compact`, `permission`,
+     * `plan`, `goal`) and treats every other `/`-line as an ordinary prompt, so sending a plain
+     * prompt down this path would change nothing. Sending a *recognised* command down the prompt
+     * path, however, delivers it to the model as prose — which is the bug this avoids.
+     */
+    private fun isCommandLine(text: String): Boolean = text.trimStart().startsWith("/")
+
     /** A stored title without the hidden blocks, shortened the way [titleFrom] does it. */
     private fun cleanTitle(title: String?): String {
         val cleaned = com.example.gemini.data.remote.PromptExpansion.cleanTitle(title.orEmpty())
@@ -921,7 +1066,6 @@ class DshChatBackend(
     private companion object {
         const val TAG = "DshChatBackend"
         const val NEW_CHAT_TITLE = "New Chat"
-        const val WORKSPACE = "/root/chat"
         const val TURN_TIMEOUT_MS = 30 * 60 * 1000L
 
         /** Session ids the user deleted, so the container import stops offering them again. */

@@ -3,6 +3,7 @@ package com.example.gemini.data.agent.dsh
 import android.content.Context
 import android.util.Log
 import com.example.gemini.data.local.LocalEnvironmentManager
+import com.example.gemini.data.remote.AndroidLocalBridgeServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -125,6 +126,10 @@ interface DshHost {
  * points at the harness home, `NARB_DISABLE_NATIVE_CACHE` keeps a PRoot-poisoned
  * native cache from being loaded, and `DSH_PERMISSION_MODE=workspace-write` keeps
  * in-workspace work silent while anything wider has to ask.
+ *
+ * The caller's own entries — the bridge port, the device id and the full-access
+ * switch — are laid over this base, so the anti-Gem plugin can reach the app and
+ * a user who turned full access on gets it on the next boot.
  */
 class ProotDshHost(
     private val context: Context,
@@ -144,11 +149,17 @@ class ProotDshHost(
 
     override suspend fun open(request: DshSessionRequest): DshSession = withContext(Dispatchers.IO) {
         writeHomeConfig(request)
+        // The plugin's own files, so the harness lists it instead of only carrying its rows. Idempotent: a matching
+        // version marker makes this a file check.
+        runCatching { DshPluginInstaller.install(context) }
+            .onFailure { Log.w("DshHost", "dsh-antigem plugin not installed: ${it.message}") }
         val environment = linkedMapOf(
             "NARB_DISABLE_NATIVE_CACHE" to "1",
             "DSH_HOME" to DshGuestPaths.DSH_HOME,
-            "DSH_PERMISSION_MODE" to "workspace-write",
         )
+        // The bridge port, the device id and the access switch: the same map the web page gets, so a session started on
+        // either surface reaches the same tools with the same sandbox bounds.
+        environment.putAll(DshGuestEnvironment.of(context, DshPreferences(context).fullAccessNow()))
         environment.putAll(request.environment)
         // DSH guests refuse an empty key variable even when the endpoint behind the
         // route wants no Authorization header at all (Kilo's free pool, a local
@@ -280,6 +291,8 @@ class ProotDshHost(
         // What the provider needs to be declared at all: a harness preset brings its own adapter and endpoint, while
         // anything the user added through the harness' Models page only exists in the web profile — copy its api and
         // endpoint over, or the sdk route answers "needs an api; the installed catalog does not describe it".
+        // The bridge port and the device id, so the session gets the app's own MCP servers (see mcpClients).
+        val bridgeEnv = DshGuestEnvironment.of(context, DshPreferences(context).fullAccessNow())
         val elsewhere = declaredProvider(home, route.provider)
         val known = DshConfigParser.preset(route.provider)
         val api = elsewhere?.api ?: if (known == null) DshConfigParser.DEFAULT_API else null
@@ -297,6 +310,11 @@ class ProotDshHost(
                 model = route.model,
                 api = api,
                 baseUrl = baseUrl,
+                mcpPort = bridgeEnv["ANTIGEM_MCP_PORT"]?.toIntOrNull(),
+                deviceId = bridgeEnv["ANTIGEM_DEVICE_ID"],
+                bridgeKey = bridgeEnv["ANTIGEM_BRIDGE_TOKEN"],
+                // A server that is switched off would only add a client that fails at every boot.
+                enabledServers = DshGuestEnvironment.enabledServers(context),
             )
         }
         if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
@@ -634,6 +652,64 @@ object DshGuestPaths {
 
     /** `node` is on the guest PATH, unlike the versioned path above. */
     const val NODE_BIN_ADDRESSED = "node"
+
+    /**
+     * The one directory every DSH chat in this app runs in, so the harness files all of them
+     * together and each is visible — and resumable — from either side. Chats saved under another
+     * directory keep it and resume there.
+     */
+    const val SHARED_WORKSPACE = "/root/workspace-dsh"
+}
+
+/**
+ * What the anti-Gem bundle reads out of the guest's environment on every boot.
+ *
+ * The port the local bridge actually bound is not a constant — it walks forward when the default
+ * is taken, and falls back to an OS-assigned one — so it has to be read from the running server
+ * each time rather than assumed. The device id is the same value the bridge compares, and the
+ * access flag is always written, `0` included: the bundle treats a missing variable as "leave the
+ * profile alone", so writing it keeps a turned-off switch from being mistaken for an absent one.
+ *
+ * Both surfaces that boot a harness — the native SDK session and the web page — use this, so the
+ * tools and the sandbox mode are the same whichever one the user opens.
+ */
+object DshGuestEnvironment {
+    fun of(context: Context, fullAccess: Boolean): Map<String, String> = mapOf(
+        "ANTIGEM_MCP_PORT" to AndroidLocalBridgeServer.instance.boundPort.toString(),
+        "ANTIGEM_DEVICE_ID" to android.provider.Settings.Secure
+            .getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+            .orEmpty(),
+        // Per launch, so a value read out of a log stops working the moment the app restarts.
+        "ANTIGEM_BRIDGE_TOKEN" to AndroidLocalBridgeServer.instance.sessionKey(),
+        "ANTIGEM_FULL_ACCESS" to if (fullAccess) "1" else "0",
+    )
+
+    /**
+     * Which of the bridge's servers answer right now.
+     *
+     * They all live on one loopback port, so "enabled" is not a network fact: android automation refuses calls until
+     * the user grants it, and the plugin developer needs its runtime up. Declaring a row for a server that is off
+     * costs a client that fails to start on every session, and the harness reports that at boot.
+     */
+    fun enabledServers(context: Context): Set<String> {
+        val servers = mutableSetOf(
+            "antigem",
+            "browser",
+            "terminal",
+            "google_flow",
+            "custom_plugin_developer",
+            "notes",
+            "theme",
+        )
+        // The one server that can genuinely be off: it needs the accessibility service, and a row for it would fail on
+        // every boot until the user grants that in Utilities.
+        if (runCatching {
+                com.example.gemini.data.automation.AndroidAutomation.isServiceRunning() ||
+                    com.example.gemini.data.automation.AndroidAutomation.isServiceEnabledInSettings(context)
+            }.getOrDefault(false)
+        ) servers += "android_automation"
+        return servers
+    }
 }
 
 /**

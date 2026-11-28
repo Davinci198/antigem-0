@@ -121,6 +121,8 @@ object DshWebServer {
         startLocked(context, log)?.also { current = it }
     }
 
+    /** True while the page's own harness is up, so the chat knows the session is shared. */
+
     /** Stops the background web profile (the screen's refresh action, or the user asking). */
     fun stopNow() {
         val running = synchronized(lock) {
@@ -164,11 +166,20 @@ object DshWebServer {
             com.example.gemini.data.local.AgentProvisioner.installDshNow(context) { line -> log("[dsh-web] provision: $line") }
             return null
         }
+        runCatching { DshPluginInstaller.install(context) }
+            .onFailure { Log.w("DshWebServer", "dsh-antigem plugin not installed: ${it.message}") }
         if (repairPatchFile(LocalEnvironmentManager.getUbuntuRootDir(context))) {
             log("[dsh-web] rewrote an empty cordis.patch.yml as [] before booting")
         }
         return try {
             killStrayWebProfiles(context, log)
+            // proot refuses to start in a working directory that does not exist inside the rootfs,
+            // and the shared workspace is created on first use rather than shipped in the image.
+            runCatching {
+                val rootfs = LocalEnvironmentManager.getUbuntuRootDir(context)
+                File(rootfs, DshGuestPaths.SHARED_WORKSPACE.trimStart('/'))
+                    .let { if (!it.isDirectory) it.mkdirs() }
+            }
             val process = LocalEnvironmentManager.startGuestProcess(
                 context = context,
                 guestArgv = listOf(
@@ -176,11 +187,11 @@ object DshWebServer {
                     "-c",
                     "exec ${DshGuestPaths.DSH_BIN} web --no-open --port 0",
                 ),
-                guestCwd = "/root",
+                guestCwd = DshGuestPaths.SHARED_WORKSPACE,
                 environment = mapOf(
                     "NARB_DISABLE_NATIVE_CACHE" to "1",
                     "DSH_HOME" to DshGuestPaths.DSH_HOME,
-                ),
+                ) + DshGuestEnvironment.of(context, DshPreferences(context).fullAccessNow()),
             )
             log("[dsh-web] dsh web spawned; waiting for its URL...")
             DshWebServerInstance(process, CoroutineScope(SupervisorJob() + Dispatchers.IO))

@@ -74,10 +74,97 @@ internal object DshProfilePatch {
         maxTokens: Int = DEFAULT_MAX_TOKENS,
         api: String? = null,
         baseUrl: String? = null,
+        mcpPort: Int? = null,
+        deviceId: String? = null,
+        bridgeKey: String? = null,
+        enabledServers: Set<String>? = null,
     ): String {
         val header = existing.lines().filter { it.trimStart().startsWith("#") }.joinToString("\n")
         val entry = presetEntry(provider, apiKeyEnv, model, maxTokens, api, baseUrl)
-        return listOf(header, entry).filter { it.isNotBlank() }.joinToString("\n") + "\n"
+        val mcp = mcpClients(mcpPort, deviceId, bridgeKey, enabledServers)
+        return listOf(header, entry, mcp).filter { it.isNotBlank() }.joinToString("\n") + "\n"
+    }
+
+    /**
+     * The app's own MCP servers, handed to the harness session.
+     *
+     * Same rows the `dsh-plugins/dsh-antigem` bundle declares, written out here with the port and the device id the
+     * app actually has: the bridge binds whatever port is free, and its `X-Device-Id` check compares against the value
+     * only the app can read. Without a port the rows are skipped entirely, so a session started without the bridge
+     * still boots.
+     */
+    fun mcpClients(
+        port: Int?,
+        deviceId: String?,
+        bridgeKey: String? = null,
+        enabledServers: Set<String>? = null,
+    ): String {
+        if (port == null || port <= 0) return ""
+        val id = deviceId.orEmpty()
+        val key = bridgeKey.orEmpty()
+        // The plugin's own tools first: when something else fails, this is the one row that can still answer.
+        val servers = listOf(
+            Triple("antigem", "/antigem", 60_000),
+            Triple("browser", "/browser", 120_000),
+            Triple("terminal", "/terminal", 120_000),
+            Triple("google_flow", "/google_flow", 180_000),
+            Triple("custom_plugin_developer", "/extension_developer", 120_000),
+            Triple("android_automation", "/android", 180_000),
+            Triple("notes", "/notes", 120_000),
+            Triple("theme", "/theme", 120_000),
+        ).filter { enabledServers == null || it.first in enabledServers }
+        return buildString {
+            appendLine("- insert:")
+            servers.forEach { (name, path, timeout) ->
+                appendLine("    - id: antigem-mcp-${name.replace('_', '-')}")
+                appendLine("      name: '@deepseek-ai/dsh-mcp-client'")
+                appendLine("      config:")
+                appendLine("        serverName: $name")
+                appendLine("        transport: streamable-http")
+                appendLine("        url: 'http://127.0.0.1:$port$path'")
+                appendLine("        headers:")
+                appendLine("          X-Device-Id: '$id'")
+                // Dies with the process; the device id above is accepted only so older rows keep working.
+                if (key.isNotBlank()) appendLine("          X-Bridge-Token: '$key'")
+                appendLine("        toolCallTimeoutMs: $timeout")
+                appendLine("        startupTimeoutMs: 15000")
+                // One server failing to start must not take the session down with it.
+                appendLine("        failOnStartupError: false")
+            }
+        }.trimEnd('\n')
+    }
+
+    /**
+     * The same table in a patch that is already written: every `antigem-mcp-*` row is dropped and [rows] takes its place.
+     *
+     * Used by the Settings screen's rewrite action, where the provider entry above the rows must survive untouched — it
+     * holds the route the user chose, which this function knows nothing about.
+     */
+    fun replaceMcpRows(existing: String, rows: String): String {
+        val kept = mutableListOf<String>()
+        val lines = existing.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            if (line.trimStart().startsWith("- id: antigem-mcp-")) {
+                val indent = line.takeWhile { it == ' ' }.length
+                i++
+                while (i < lines.size) {
+                    val next = lines[i]
+                    if (next.isBlank()) { i++; continue }
+                    if (next.takeWhile { it == ' ' }.length <= indent) break
+                    i++
+                }
+                continue
+            }
+            kept += line
+            i++
+        }
+        // An `- insert:` with nothing under it is what is left after the rows were cut; it is not valid on its own.
+        while (kept.isNotEmpty() && kept.last().isBlank()) kept.removeAt(kept.size - 1)
+        if (kept.isNotEmpty() && kept.last().trim() == "- insert:") kept.removeAt(kept.size - 1)
+        val head = kept.joinToString("\n").trimEnd()
+        return listOf(head, rows.trimEnd()).filter { it.isNotBlank() }.joinToString("\n\n") + "\n"
     }
 
     fun ensurePreset(

@@ -53,6 +53,14 @@ object DshProtocol {
      */
     const val RESUME_ID = 4
 
+    /**
+     * Not part of the SDK's numbering either. `session/prompt` wraps its text in a user message and
+     * never looks at it, so `/compact` or `/permission` sent that way would reach the model as prose.
+     * `session/query` reads the text first and runs a command the harness recognises; for anything
+     * else it falls through to the very same prompt path, which is why every turn can use it.
+     */
+    const val QUERY_ID = 5
+
     fun initializeFrame(cwd: String, provider: String, model: String, id: Int = INITIALIZE_ID): String =
         frame(id, "initialize", buildJsonObject {
             put("cwd", cwd)
@@ -62,6 +70,22 @@ object DshProtocol {
 
     fun promptFrame(sessionId: String, text: String, id: Int = PROMPT_ID): String =
         frame(id, "session/prompt", buildJsonObject {
+            put("sessionId", sessionId)
+            put("contentBlocks", buildJsonArray {
+                add(buildJsonObject {
+                    put("type", "text")
+                    put("text", text)
+                })
+            })
+        })
+
+    /**
+     * Dispatches [text] the way the harness's own desktop input does: a `/`-line naming a registered
+     * command runs it, anything else becomes an ordinary prompt. The reply is a receipt either way
+     * (`kind: "command"` or `kind: "prompt"`), while the work arrives as `session.event`.
+     */
+    fun queryFrame(sessionId: String, text: String, id: Int = QUERY_ID): String =
+        frame(id, "session/query", buildJsonObject {
             put("sessionId", sessionId)
             put("contentBlocks", buildJsonArray {
                 add(buildJsonObject {
@@ -135,6 +159,16 @@ sealed interface DshEvent {
 
     /** `session/prompt` was accepted; work is now streaming. */
     data object PromptAccepted : DshEvent
+
+    /**
+     * `session/query` ran a harness command instead of prompting the model. The turn ends on
+     * [CommandCompleted], not on `turn/end`, because a command changes session state without
+     * opening a turn.
+     */
+    data object CommandAccepted : DshEvent
+
+    /** A command finished; [finishReason] is the harness's verdict and [response] its final text. */
+    data class CommandCompleted(val finishReason: String, val response: String) : DshEvent
 
     /** `session/resume` succeeded: the session is loaded and can be prompted. */
     data object Resumed : DshEvent
@@ -233,6 +267,12 @@ class DshSdkParser(sessionId: String) {
                 DshProtocol.INITIALIZE_ID -> DshEvent.Initialized
                 DshProtocol.RESUME_ID -> DshEvent.Resumed
                 DshProtocol.PROMPT_ID -> DshEvent.PromptAccepted
+                // `session/query` answers a receipt, not a result: `kind: "prompt"` means the text
+                // went to the model, and `kind: "command"` means a command ran. Both are admissions.
+                DshProtocol.QUERY_ID -> when ((frame["result"] as? JsonObject)?.string("kind")) {
+                    "command" -> DshEvent.CommandAccepted
+                    else -> DshEvent.PromptAccepted
+                }
                 DshProtocol.SHUTDOWN_ID -> DshEvent.ShutdownAcknowledged
                 else -> DshEvent.Ignored
             }
@@ -245,6 +285,12 @@ class DshSdkParser(sessionId: String) {
                 else DshEvent.Ignored
             }
             "session.event" -> parseSessionEvent(params)
+            // A native command settles here instead of on `turn/end`: `/compact` and `/permission`
+            // change session state and finish without ever opening a turn.
+            "session.query.completed" -> DshEvent.CommandCompleted(
+                finishReason = params.string("finishReason").ifBlank { "completed" },
+                response = params.string("finalResponse"),
+            )
             else -> DshEvent.Ignored
         }
     }

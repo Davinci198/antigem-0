@@ -35,7 +35,10 @@ class AndroidLocalBridgeServer private constructor() {
         EXTENSION_DEVELOPER("custom_plugin_developer_mcp"),
         ANDROID("android_automation_mcp"),
         NOTES("notes_mcp"),
-        THEME("theme_mcp")
+        THEME("theme_mcp"),
+
+        /** The plugin's own tools: what the bridge is doing, and how to reach the app without an MCP round trip. */
+        ANTIGEM("antigem_mcp")
     }
 
     companion object {
@@ -63,6 +66,18 @@ class AndroidLocalBridgeServer private constructor() {
     private var appContext: Context? = null
     @Volatile
     private var cachedDeviceId: String = ""
+
+    /**
+     * Minted on every start, handed only to the sessions this app launches.
+     *
+     * The device id is stable for the life of the install, so once it leaks into a log or a screenshot it keeps
+     * working forever. This one dies with the process; the device id stays accepted so anything already configured
+     * keeps working.
+     */
+    @Volatile
+    private var launchKey: String = ""
+
+    fun sessionKey(): String = launchKey
     var boundPort: Int = DEFAULT_PORT
         private set
 
@@ -72,6 +87,7 @@ class AndroidLocalBridgeServer private constructor() {
         cachedDeviceId = try {
             android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: ""
         } catch (_: Exception) { "" }
+        launchKey = java.util.UUID.randomUUID().toString().replace("-", "")
         BrowserSessionManager.instance.init(context)
         LocalTerminalBridge.instance.init(context)
         com.example.gemini.ui.browser.BrowserExtensionManager.instance.init(context)
@@ -243,7 +259,10 @@ class AndroidLocalBridgeServer private constructor() {
             }
 
             val clientDeviceId = headers["x-device-id"]
-            if (clientDeviceId.isNullOrBlank() || clientDeviceId != cachedDeviceId) {
+            val clientKey = headers["x-bridge-token"]
+            val identified = (!clientDeviceId.isNullOrBlank() && clientDeviceId == cachedDeviceId) ||
+                (!clientKey.isNullOrBlank() && launchKey.isNotEmpty() && clientKey == launchKey)
+            if (!identified) {
                 Log.w(TAG, "Blocked unauthorized request to $path (missing or invalid X-Device-Id header)")
                 sendResponse(out, 401, "application/json", "{\"error\": \"Unauthorized: Invalid or missing X-Device-Id header\"}")
                 return
@@ -259,6 +278,7 @@ class AndroidLocalBridgeServer private constructor() {
                     path == "/android" -> handleMcpHttp(McpEndpoint.ANDROID, method, body, out)
                     path == "/notes" -> handleMcpHttp(McpEndpoint.NOTES, method, body, out)
                     path == "/theme" -> handleMcpHttp(McpEndpoint.THEME, method, body, out)
+                    path == "/antigem" -> handleMcpHttp(McpEndpoint.ANTIGEM, method, body, out)
                     path == "/api/health" -> {
                         val res = JSONObject().apply {
                             put("status", "ok")
@@ -287,7 +307,7 @@ class AndroidLocalBridgeServer private constructor() {
             if (out != null && req != null && !out.used) {
                 runCatching {
                     val path = req.rawPath.substringBefore("?")
-                    if (path == "/browser" || path == "/terminal" || path == "/google_flow" || path == "/extension_developer" || path == "/android" || path == "/notes" || path == "/theme") {
+                    if (path == "/browser" || path == "/terminal" || path == "/google_flow" || path == "/extension_developer" || path == "/android" || path == "/notes" || path == "/theme" || path == "/antigem") {
                         val id = runCatching { JSONObject(req.body).opt("id") }.getOrNull()
                         sendResponse(out, 200, "application/json", jsonRpcError(id, -32603, "Internal error: ${t.message ?: t.javaClass.simpleName}").toString())
                     } else {
@@ -421,6 +441,7 @@ class AndroidLocalBridgeServer private constructor() {
                     if (endpoint == McpEndpoint.ANDROID) put("instructions", com.example.gemini.data.automation.AndroidAutomation.INSTRUCTIONS)
                     if (endpoint == McpEndpoint.NOTES) put("instructions", com.example.gemini.data.notes.NotesMcp.INSTRUCTIONS)
                     if (endpoint == McpEndpoint.THEME) put("instructions", com.example.gemini.theme.ThemeMcp.INSTRUCTIONS)
+                    if (endpoint == McpEndpoint.ANTIGEM) put("instructions", com.example.gemini.data.plugin.AntigemMcp.INSTRUCTIONS)
                     if (endpoint == McpEndpoint.EXTENSION_DEVELOPER) put("instructions", "Start with webview_extension_docs. Read developer-mcp.md and the required API references, create a draft, write files, install or update, discover tools with webview_extension_test, and inspect logs to fix failures. No app source or manual ZIP handling is needed.")
                     put("capabilities", JSONObject().apply {
                         put("tools", JSONObject())
@@ -472,6 +493,7 @@ class AndroidLocalBridgeServer private constructor() {
         if (endpoint == McpEndpoint.ANDROID) return com.example.gemini.data.automation.AndroidAutomation.tools()
         if (endpoint == McpEndpoint.NOTES) return com.example.gemini.data.notes.NotesMcp.tools()
         if (endpoint == McpEndpoint.THEME) return com.example.gemini.theme.ThemeMcp.tools()
+        if (endpoint == McpEndpoint.ANTIGEM) return com.example.gemini.data.plugin.AntigemMcp.tools()
         val tools = JSONArray()
         val browserEnabled = endpoint == McpEndpoint.BROWSER
         val terminalEnabled = endpoint == McpEndpoint.TERMINAL
@@ -801,6 +823,7 @@ class AndroidLocalBridgeServer private constructor() {
         if (toolName.startsWith("android_")) return com.example.gemini.data.automation.AndroidAutomation.call(appContext!!, toolName, args)
         if (toolName.startsWith("notes_")) return com.example.gemini.data.notes.NotesMcp.call(appContext!!, toolName, args)
         if (toolName.startsWith("theme_")) return com.example.gemini.theme.ThemeMcp.call(appContext!!, toolName, args)
+        if (toolName.startsWith("antigem_")) return com.example.gemini.data.plugin.AntigemMcp.call(appContext!!, toolName, args)
 
         if (toolName.startsWith("flow_")) {
             return com.example.gemini.ui.browser.BrowserExtensionManager.instance.callTool("google-flow", toolName, args)

@@ -7,12 +7,15 @@ import android.os.Message
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.*
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,6 +28,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.gemini.R
+import com.example.gemini.data.agent.dsh.DshPreferences
+import com.example.gemini.data.agent.dsh.DshSessionOwner
 import com.example.gemini.data.agent.dsh.DshUiInjector
 import com.example.gemini.data.agent.dsh.DshWebServer
 import com.example.gemini.data.agent.dsh.DshWebServerInstance
@@ -91,6 +96,18 @@ private object DshWebRetained {
         webView = null
         webKey = null
     }
+
+    /**
+     * Lets go of the conversation the page has open, without closing the page.
+     *
+     * The harness gives a session to one client, so a message typed in the chat while the page sits on that session is
+     * refused. Reloading the page leaves the conversation there — the harness releases it — while the page, its token
+     * and the running process survive, so coming back costs a redraw and not a boot.
+     */
+    fun releasePageSession() {
+        val page = webView ?: return
+        runCatching { page.evaluateJavascript("window.location.replace(window.location.pathname + window.location.search)", null) }
+    }
 }
 
 /**
@@ -134,8 +151,23 @@ fun DshWebScreen(
     // effect only attaches to it, so reopening the screen is instant and does not
     // spawn another `dsh web`. Restarting is the user's decision (the refresh
     // action in the top bar), never a side effect of closing the overlay.
+    // The chat asks the page to let go of a conversation by reloading it, so the page keeps its process and its token.
+    DisposableEffect(instance) {
+        DshSessionOwner.registerPageRelease { DshWebRetained.releasePageSession() }
+        onDispose { DshSessionOwner.registerPageRelease {} }
+    }
+
+    LaunchedEffect(isVisible) {
+        DshSessionOwner.pageVisible = isVisible
+    }
+    DisposableEffect(Unit) {
+        onDispose { DshSessionOwner.pageVisible = false }
+    }
+
     LaunchedEffect(isVisible, restartRequested) {
-        if (!isVisible) return@LaunchedEffect
+        // Leaving the page rebuilds the chat list: whatever the page started or renamed is already on disk, and half of
+        // a shared session that never appears in the other surface is the complaint that started this.
+        if (!isVisible) { com.example.gemini.data.agent.dsh.DshSessionOwner.refreshNow(); return@LaunchedEffect }
         // Opening the page is a decision to run the harness, whatever the last stop said.
         com.example.gemini.data.local.ContainerHold.release()
         startFailed = false
@@ -143,6 +175,10 @@ fun DshWebScreen(
         // effect, drop the started instance, and leave a live harness nobody was attached to;
         // the page then never loaded until the next visit.
         val started = withContext(NonCancellable + Dispatchers.IO) {
+            // The chat keeps the process it booted; the harness lets one client own a session, so hand it over here
+            // before the page's own harness starts, or every continuation reads "the session is owned by another
+            // client".
+            com.example.gemini.data.agent.dsh.DshSessionOwner.releaseNow()
             DshWebServer.start(context) { line -> Log.d(TAG, line) }
         }
         if (started == null) {
@@ -172,6 +208,9 @@ fun DshWebScreen(
         } else {
             page?.onPause()
             page?.pauseTimers()
+            // A WebView keeps input focus after it is hidden: the keyboard stays bound to it, so every keystroke goes to
+            // the harness page instead of the chat's field and the composer looks like it only accepts voice notes.
+            page?.clearFocus()
         }
         onDispose {
             startFailed = false
@@ -247,6 +286,21 @@ fun DshWebScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
+        // The harness reads this at boot, so the toggle takes effect on the next start: the top
+        // bar's restart action is right there, and this bar never claims otherwise.
+        val dshPrefs = remember(context) { DshPreferences(context) }
+        val fullAccess = dshPrefs.fullAccess.collectAsState().value
+        val toggleFullAccess = {
+            val enabled = !fullAccess
+            dshPrefs.setFullAccess(enabled)
+            Toast.makeText(
+                context,
+                context.getString(
+                    if (enabled) R.string.dsh_full_access_on else R.string.dsh_full_access_off
+                ),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
         // Slim top bar: the only chrome on this screen.
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -272,6 +326,17 @@ fun DshWebScreen(
                         .weight(1f)
                         .padding(start = 12.dp)
                 )
+                IconButton(onClick = toggleFullAccess) {
+                    // Filled means the wider sandbox is on; outlined means the workspace bounds it.
+                    Icon(
+                        imageVector = if (fullAccess) Icons.Filled.Lock else Icons.Outlined.LockOpen,
+                        contentDescription = stringResource(
+                            if (fullAccess) R.string.dsh_full_access_disable else R.string.dsh_full_access_enable
+                        ),
+                        tint = if (fullAccess) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 IconButton(onClick = onMinimize) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
