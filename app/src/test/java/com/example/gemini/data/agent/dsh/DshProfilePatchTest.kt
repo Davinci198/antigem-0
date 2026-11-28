@@ -166,4 +166,30 @@ class DshProfilePatchTest {
         assertEquals("inception", parsed.id)
         assertEquals("openai-completions", parsed.api)
     }
+
+    @Test
+    fun `rewriting the sdk patch replaces a stale entry instead of stacking on it`() {
+        // What an earlier build left: a key variable and a model, but no api — which failed every turn.
+        val stale = """
+            # Your patch layer for this dsh profile, applied after every bundle layer:
+            - id: llm-pi-ai
+              config:
+                providers:
+                  inception:
+                    apiKeyEnv: INCEPTION_API_KEY
+                    models:
+                      - id: mercury-3
+                        maxTokens: 8192
+        """.trimIndent()
+        val fixed = DshProfilePatch.rewriteFor(
+            existing = stale,
+            provider = "inception",
+            apiKeyEnv = "INCEPTION_API_KEY",
+            model = "mercury-3",
+            api = "openai-completions",
+        )
+        assertEquals(1, DshConfigParser.llmProviders(fixed).size)
+        assertEquals("openai-completions", DshConfigParser.llmProviders(fixed).single().api)
+        assertEquals(1, fixed.lines().count { it.trimStart().startsWith("#") })
+    }
 }

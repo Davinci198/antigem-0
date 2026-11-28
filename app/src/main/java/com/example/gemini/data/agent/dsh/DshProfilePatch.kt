@@ -59,6 +59,27 @@ internal object DshProfilePatch {
      * provider. Never returns a blank string for a non-blank input: blanking this file is how the declaration the
      * previous turn wrote gets lost again.
      */
+    /**
+     * The `sdk` profile patch for exactly one route, keeping the file's comment header.
+     *
+     * The sdk profile belongs to the app: the harness UI only ever writes the `web` one, and a chat runs one route at a
+     * time. Rewriting it instead of appending is what keeps a provider declaration from an older build (one that named
+     * a key variable but no api) from surviving and failing every turn with "needs an api".
+     */
+    fun rewriteFor(
+        existing: String,
+        provider: String,
+        apiKeyEnv: String,
+        model: String?,
+        maxTokens: Int = DEFAULT_MAX_TOKENS,
+        api: String? = null,
+        baseUrl: String? = null,
+    ): String {
+        val header = existing.lines().filter { it.trimStart().startsWith("#") }.joinToString("\n")
+        val entry = presetEntry(provider, apiKeyEnv, model, maxTokens, api, baseUrl)
+        return listOf(header, entry).filter { it.isNotBlank() }.joinToString("\n") + "\n"
+    }
+
     fun ensurePreset(
         existing: String,
         provider: String,

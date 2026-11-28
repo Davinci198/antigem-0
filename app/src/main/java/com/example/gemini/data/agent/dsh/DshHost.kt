@@ -282,12 +282,15 @@ class ProotDshHost(
         // endpoint over, or the sdk route answers "needs an api; the installed catalog does not describe it".
         val elsewhere = declaredProvider(home, route.provider)
         val known = DshConfigParser.preset(route.provider)
-        val api = elsewhere?.api ?: if (known == null && elsewhere == null) DshConfigParser.DEFAULT_API else null
+        val api = elsewhere?.api ?: if (known == null) DshConfigParser.DEFAULT_API else null
         val baseUrl = elsewhere?.baseUrl ?: known?.baseUrl
         val envVar = elsewhere?.apiKeyEnv ?: presetKeyEnv(route.provider)
-        val next = when {
-            route.provider.isBlank() || route.provider in declaredProviders(home) -> sdkCurrent
-            else -> DshProfilePatch.ensurePreset(
+        // One route at a time in the profile the chat boots, so the file is rewritten rather than appended to: an entry
+        // an older build left behind (a key variable and no api) would otherwise keep failing every turn.
+        val next = if (route.provider.isBlank()) {
+            sdkCurrent
+        } else {
+            DshProfilePatch.rewriteFor(
                 existing = sdkCurrent,
                 provider = route.provider,
                 apiKeyEnv = envVar,
