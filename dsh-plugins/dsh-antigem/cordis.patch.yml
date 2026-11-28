@@ -49,6 +49,20 @@
         description: Full file access; wider operations still ask before running.
 
 - insert:
+    - id: antigem-mcp-antigem
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.ANTIGEM_MCP_PORT == null
+      config:
+        serverName: antigem
+        transport: streamable-http
+        url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/antigem`"
+        headers:
+          X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+          X-Bridge-Token: !!js process.env.ANTIGEM_BRIDGE_TOKEN ?? ''
+        toolCallTimeoutMs: 60000
+        startupTimeoutMs: 15000
+        failOnStartupError: false
+
     - id: antigem-mcp-browser
       name: '@deepseek-ai/dsh-mcp-client'
       disabled: !!js process.env.ANTIGEM_MCP_PORT == null
@@ -58,6 +72,7 @@
         url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/browser`"
         headers:
           X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+          X-Bridge-Token: !!js process.env.ANTIGEM_BRIDGE_TOKEN ?? ''
         toolCallTimeoutMs: 120000
         startupTimeoutMs: 15000
         failOnStartupError: false
@@ -71,6 +86,7 @@
         url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/terminal`"
         headers:
           X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+          X-Bridge-Token: !!js process.env.ANTIGEM_BRIDGE_TOKEN ?? ''
         toolCallTimeoutMs: 120000
         startupTimeoutMs: 15000
         failOnStartupError: false
@@ -84,6 +100,7 @@
         url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/google_flow`"
         headers:
           X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+          X-Bridge-Token: !!js process.env.ANTIGEM_BRIDGE_TOKEN ?? ''
         toolCallTimeoutMs: 180000
         startupTimeoutMs: 15000
         failOnStartupError: false
@@ -97,6 +114,7 @@
         url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/extension_developer`"
         headers:
           X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+          X-Bridge-Token: !!js process.env.ANTIGEM_BRIDGE_TOKEN ?? ''
         toolCallTimeoutMs: 120000
         startupTimeoutMs: 15000
         failOnStartupError: false
@@ -110,6 +128,7 @@
         url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/android`"
         headers:
           X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+          X-Bridge-Token: !!js process.env.ANTIGEM_BRIDGE_TOKEN ?? ''
         toolCallTimeoutMs: 180000
         startupTimeoutMs: 15000
         failOnStartupError: false
@@ -123,6 +142,7 @@
         url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/notes`"
         headers:
           X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+          X-Bridge-Token: !!js process.env.ANTIGEM_BRIDGE_TOKEN ?? ''
         toolCallTimeoutMs: 120000
         startupTimeoutMs: 15000
         failOnStartupError: false
@@ -136,6 +156,7 @@
         url: !!js "`http://127.0.0.1:${process.env.ANTIGEM_MCP_PORT}/theme`"
         headers:
           X-Device-Id: !!js process.env.ANTIGEM_DEVICE_ID ?? ''
+          X-Bridge-Token: !!js process.env.ANTIGEM_BRIDGE_TOKEN ?? ''
         toolCallTimeoutMs: 120000
         startupTimeoutMs: 15000
         failOnStartupError: false

@@ -207,7 +207,7 @@ class DshProfilePatchTest {
         assertTrue(patch.contains("url: 'http://127.0.0.1:8767/browser'"))
         assertTrue(patch.contains("X-Device-Id: 'abc123'"))
         assertTrue(patch.contains("/extension_developer"))
-        assertEquals(7, patch.lines().count { it.trimStart().startsWith("- id: antigem-mcp-") })
+        assertEquals(8, patch.lines().count { it.trimStart().startsWith("- id: antigem-mcp-") })
         // Without a bridge there are no rows at all: a session started outside the app must still boot.
         val bare = DshProfilePatch.rewriteFor("", "nvidia", "NVIDIA_API_KEY", "x")
         assertTrue(!bare.contains("dsh-mcp-client"))

@@ -308,6 +308,9 @@ class ProotDshHost(
                 baseUrl = baseUrl,
                 mcpPort = bridgeEnv["ANTIGEM_MCP_PORT"]?.toIntOrNull(),
                 deviceId = bridgeEnv["ANTIGEM_DEVICE_ID"],
+                bridgeKey = bridgeEnv["ANTIGEM_BRIDGE_TOKEN"],
+                // A server that is switched off would only add a client that fails at every boot.
+                enabledServers = DshGuestEnvironment.enabledServers(context),
             )
         }
         if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
@@ -672,8 +675,37 @@ object DshGuestEnvironment {
         "ANTIGEM_DEVICE_ID" to android.provider.Settings.Secure
             .getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
             .orEmpty(),
+        // Per launch, so a value read out of a log stops working the moment the app restarts.
+        "ANTIGEM_BRIDGE_TOKEN" to AndroidLocalBridgeServer.instance.sessionKey(),
         "ANTIGEM_FULL_ACCESS" to if (fullAccess) "1" else "0",
     )
+
+    /**
+     * Which of the bridge's servers answer right now.
+     *
+     * They all live on one loopback port, so "enabled" is not a network fact: android automation refuses calls until
+     * the user grants it, and the plugin developer needs its runtime up. Declaring a row for a server that is off
+     * costs a client that fails to start on every session, and the harness reports that at boot.
+     */
+    fun enabledServers(context: Context): Set<String> {
+        val servers = mutableSetOf(
+            "antigem",
+            "browser",
+            "terminal",
+            "google_flow",
+            "custom_plugin_developer",
+            "notes",
+            "theme",
+        )
+        // The one server that can genuinely be off: it needs the accessibility service, and a row for it would fail on
+        // every boot until the user grants that in Utilities.
+        if (runCatching {
+                com.example.gemini.data.automation.AndroidAutomation.isServiceRunning() ||
+                    com.example.gemini.data.automation.AndroidAutomation.isServiceEnabledInSettings(context)
+            }.getOrDefault(false)
+        ) servers += "android_automation"
+        return servers
+    }
 }
 
 /**
