@@ -148,4 +148,22 @@ class DshProfilePatchTest {
         assertEquals(2, next.lines().count { it.trimStart().startsWith("#") })
         assertEquals(listOf("nvidia"), DshConfigParser.llmProviders(next).map { it.id })
     }
+
+    @Test
+    fun `a provider the harness does not know carries its api and endpoint`() {
+        // Anything added through the harness' own Models page (a free-pi route, say) is invisible to the installed
+        // catalogue, so the entry has to spell out the wire protocol.
+        val entry = DshProfilePatch.presetEntry(
+            provider = "inception",
+            apiKeyEnv = "INCEPTION_API_KEY",
+            model = "mercury-3",
+            api = "openai-completions",
+            baseUrl = "https://api.example.test/v1",
+        )
+        assertTrue(entry.contains("api: openai-completions"))
+        assertTrue(entry.contains("baseURL: https://api.example.test/v1"))
+        val parsed = DshConfigParser.llmProviders(entry).single()
+        assertEquals("inception", parsed.id)
+        assertEquals("openai-completions", parsed.api)
+    }
 }

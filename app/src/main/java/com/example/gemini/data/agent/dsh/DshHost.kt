@@ -277,13 +277,23 @@ class ProotDshHost(
         sdkPatch.parentFile?.mkdirs()
         val sdkRaw = if (sdkPatch.isFile) sdkPatch.readText() else ""
         val sdkCurrent = DshProfilePatch.normalizePatch(sdkRaw)
+        // What the provider needs to be declared at all: a harness preset brings its own adapter and endpoint, while
+        // anything the user added through the harness' Models page only exists in the web profile — copy its api and
+        // endpoint over, or the sdk route answers "needs an api; the installed catalog does not describe it".
+        val elsewhere = declaredProvider(home, route.provider)
+        val known = DshConfigParser.preset(route.provider)
+        val api = elsewhere?.api ?: if (known == null && elsewhere == null) DshConfigParser.DEFAULT_API else null
+        val baseUrl = elsewhere?.baseUrl ?: known?.baseUrl
+        val envVar = elsewhere?.apiKeyEnv ?: presetKeyEnv(route.provider)
         val next = when {
             route.provider.isBlank() || route.provider in declaredProviders(home) -> sdkCurrent
             else -> DshProfilePatch.ensurePreset(
                 existing = sdkCurrent,
                 provider = route.provider,
-                apiKeyEnv = presetKeyEnv(route.provider),
+                apiKeyEnv = envVar,
                 model = route.model,
+                api = api,
+                baseUrl = baseUrl,
             )
         }
         if (next != sdkRaw) sdkPatch.writeText(if (next.endsWith("\n")) next else next + "\n")
@@ -308,6 +318,15 @@ class ProotDshHost(
      * The web profile is deliberately not consulted: the harness writes its own settings there, and a provider that
      * exists only in `profiles/web` is invisible to a session started with `--profile sdk`.
      */
+    /** The full declaration of [provider] in the profiles the harness UI writes, or null when none of them has it. */
+    private fun declaredProvider(home: File, provider: String): DshConfigParser.DeclaredProvider? = runCatching {
+        listOf("profiles/web/cordis.patch.yml", "cordis.patch.yml")
+            .map { File(home, it) }
+            .filter { it.isFile }
+            .flatMap { DshConfigParser.llmProviders(it.readText()) }
+            .firstOrNull { it.id == provider }
+    }.getOrNull()
+
     private fun declaredProviders(home: File): Set<String> = runCatching {
         listOf("cordis.patch.yml", "profiles/sdk/cordis.patch.yml")
             .map { File(home, it) }

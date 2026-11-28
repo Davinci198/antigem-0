@@ -25,13 +25,25 @@ internal object DshProfilePatch {
      * completion (262144 of 262144 for `minimaxai/minimax-m3.1-flash`), which leaves no room for the conversation and
      * makes compaction fail with "reserves ... leaving no message budget".
      */
-    fun presetEntry(provider: String, apiKeyEnv: String, model: String? = null, maxTokens: Int = DEFAULT_MAX_TOKENS): String =
+    fun presetEntry(
+        provider: String,
+        apiKeyEnv: String,
+        model: String? = null,
+        maxTokens: Int = DEFAULT_MAX_TOKENS,
+        api: String? = null,
+        baseUrl: String? = null,
+    ): String =
         buildString {
             appendLine("- id: $ENTRY_ID")
             appendLine("  config:")
             appendLine("    providers:")
             appendLine("      $provider:")
             appendLine("        apiKeyEnv: $apiKeyEnv")
+            // A provider the installed harness catalogue does not describe (anything the user added through the
+            // harness' own Models page, e.g. a free-pi route) has to say which wire protocol it speaks, and where,
+            // or the turn dies with 'needs an api; the installed catalog does not describe it'.
+            if (!api.isNullOrBlank()) appendLine("        api: $api")
+            if (!baseUrl.isNullOrBlank()) appendLine("        baseURL: ${yamlQuote(baseUrl)}")
             if (!model.isNullOrBlank()) {
                 appendLine("        models:")
                 appendLine("          - id: ${yamlQuote(model)}")
@@ -53,11 +65,13 @@ internal object DshProfilePatch {
         apiKeyEnv: String,
         model: String? = null,
         maxTokens: Int = DEFAULT_MAX_TOKENS,
+        api: String? = null,
+        baseUrl: String? = null,
     ): String {
         if (provider.isBlank()) return existing
         val declared = DshConfigParser.llmProviders(existing).map { it.id }.toSet()
         if (provider in declared) return existing
-        val entry = presetEntry(provider, apiKeyEnv, model, maxTokens)
+        val entry = presetEntry(provider, apiKeyEnv, model, maxTokens, api, baseUrl)
         val cleaned = normalizePatch(existing)
         // The file DSH writes carries a comment header and an empty `[]` until something is added; appending below
         // that `[]` would produce a file with a flow array and a block item, which is not YAML at all.
